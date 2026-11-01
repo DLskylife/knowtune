@@ -26,8 +26,8 @@ providers:
     - id: kimi-k3
   siliconflow:
     base_url: https://api.siliconflow.cn/v1
-    model: Qwen2.5-7B-Instruct
+    model: Qwen/Qwen2.5-7B-Instruct
     kind: openai
     model_list:
-    - id: Qwen2.5-7B-Instruct
     - id: tencent/Hunyuan-MT-7B
+    - id: Qwen/Qwen2.5-7B-Instruct

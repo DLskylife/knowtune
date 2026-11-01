@@ -1162,6 +1162,11 @@ async function ask(question) {
               const pct = Math.round(obj.cite_coverage * 100);
               bits.push(`<span class="${pct >= 80 ? "ok" : "warn"}">引用覆盖 ${pct}%</span>`);
             }
+            // 引用存疑：模型嘴上说没依据、编号挂一串（或单句全引）。
+            // 覆盖率数字解释不了的事，这句话解释。
+            if (obj.cite_blanket) {
+              bits.unshift(`<span class="warn" title="${esc(obj.cite_blanket)}">引用存疑</span>`);
+            }
             // 历史占比只在超过 70% 时出现：平时挂一个"上下文 8%"纯属噪音，
             // 但它一旦逼近上限必须可见，否则模型"突然变笨"没人能解释。
             if (state.lastCtx && state.lastCtx.budget) {
@@ -5489,8 +5494,13 @@ function siteBlock(i, meta, plan, defProv) {
       <div class="sbk-label">模型角色<span class="sbk-note">实际：${used}</span></div>
       <div class="sbk-fields">
         <label class="fld"><span class="fld-k">翻译模型</span>
-          <select data-f="role_translate"
-            title="先把维吾尔语提问译成中文去检索，再把中文答案译回去">${provSelect("translate", roles.translate || "", d.providers, meta, defProv)}</select></label>
+          <span class="fld-row">
+            <select data-f="role_translate"
+              title="先把维吾尔语提问译成中文去检索，再把中文答案译回去">${provSelect("translate", roles.translate || "", d.providers, meta, defProv)}</select>
+            <button class="mini" type="button" data-trtest
+              title="发一句真实翻译，单独验证这个模型通不通、译得对不对">测试</button>
+          </span></label>
+        <div class="tr-out" data-trout hidden></div>
         <label class="fld"><span class="fld-k">推理模型</span>
           <select data-f="role_generate"
             title="读检索到的资料组织答案">${provSelect("generate", roles.generate || "", d.providers, meta, defProv)}</select></label>
@@ -5717,6 +5727,34 @@ function bindSiteActions() {
   const box = $("viewSite");
   // 启停按钮：绑在容器上，卡片每次重绘都会换掉 DOM，绑在按钮上就得每次重绑。
   box.onclick = async (e) => {
+    // 翻译模型单测：走当前下拉里选的后端（没选 = 跟随系统角色，由后端解析）。
+    // 不经过知识库，一句话进出，坏了就是它的事，跟检索/生成撇清。
+    const tr = e.target.closest("[data-trtest]");
+    if (tr) {
+      const block = tr.closest(".site-block");
+      const sel = block ? block.querySelector('[data-f="role_translate"]') : null;
+      const out = block ? block.querySelector("[data-trout]") : null;
+      if (!out) return;
+      tr.disabled = true;
+      out.hidden = false;
+      out.innerHTML = `<span class="hint">翻译中…（整段往返一次，云端可能要几秒）</span>`;
+      try {
+        const r = await jsonPost("/api/translate-test", { provider: sel ? sel.value : "" });
+        if (r.ok) {
+          out.innerHTML = `<div class="tr-ok" dir="auto">${esc(r.output)}</div>
+            <div class="hint">${esc(r.provider)} · ${r.src}→${r.dst} · ${r.latency_ms}ms</div>`;
+        } else {
+          out.innerHTML = `<div class="warn">翻译失败：${esc(r.error || "输出与原文相同或为空")}</div>
+            <div class="tr-ok" dir="auto">${esc(r.output || "（无输出）")}</div>
+            <div class="hint">${esc(r.provider)} · ${r.latency_ms}ms</div>`;
+        }
+      } catch (err) {
+        out.innerHTML = `<span class="warn">${esc(err.message)}</span>`;
+      } finally {
+        tr.disabled = false;
+      }
+      return;
+    }
     const btn = e.target.closest("[data-sact]");
     if (!btn) return;
     const act = btn.dataset.sact;

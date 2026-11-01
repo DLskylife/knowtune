@@ -2720,6 +2720,7 @@ def ask(req: AskRequest) -> Response:
             "refused": False,
             "citations": citations,
             "cite_coverage": report.coverage,
+            "cite_blanket": report.blanket,
             "invalid_ids": report.invalid_ids,
             "uncited": report.uncited_sentences,
             "degraded": result.degraded + ([f"llm_error:{error}"] if error else []),
@@ -3208,6 +3209,48 @@ def put_model_roles(req: RolesIn) -> dict:
     logbus.note("模型角色已更新：" + (", ".join(f"{k}→{v}" for k, v in picked.items()) or "（全部清空）"),
                 source="models")
     return {"ok": True, "roles": picked, "rejected": rejected, "path": result["path"]}
+
+
+class TranslateTestIn(BaseModel):
+    # 空串 = 用系统级 translate 角色当前指向的后端
+    provider: str = ""
+    text: str = ""
+    # 方向默认对齐前台主链路（中文语料 ← 维语提问；答案再译回维语）
+    src: str = "zh"
+    dst: str = "ug"
+
+
+@app.post("/api/translate-test")
+def translate_test(req: TranslateTestIn) -> dict:
+    """单独测翻译模型：不碰知识库、不碰生成，就发一句真实翻译。
+
+    前台问答 = 翻译 + 检索 + 生成 + 再翻译，四步里翻译挂了两步。对话测试页
+    只验生成，翻译模型坏了用户只看到"答案不相关"，根本想不到是它。这里把
+    翻译单独拎出来测，一次调用、直接看译文。
+    """
+    from .. import lang as lang_mod
+
+    providers = state.cfg.generation.providers
+    name = req.provider.strip() or (state.cfg.generation.roles or {}).get("translate", "")
+    if not name:
+        raise HTTPException(400, "还没指定翻译模型：先在「前台站点 → 模型角色」里选一个")
+    if name not in providers:
+        raise HTTPException(400, f"后端 {name} 不存在或已删除")
+    text = req.text.strip() or (
+        "维吾尔医学认为人体有血液、黏液、黄胆汁、黑胆汁四种体液，"
+        "体液失衡是疾病的主要原因。"
+    )
+    t0 = time.perf_counter()
+    out, err = lang_mod.translate_query(
+        state.llm, text, src=req.src, dst=req.dst, provider=name
+    )
+    ms = int((time.perf_counter() - t0) * 1000)
+    # "译了个寂寞"也算失败：原文抄回来是 translate_query 的降级返回，不是成功
+    ok = not err and bool(out.strip()) and out.strip() != text.strip()
+    return {
+        "ok": ok, "output": out, "error": err, "latency_ms": ms,
+        "provider": name, "src": req.src, "dst": req.dst,
+    }
 
 
 # ------------------------------------------------------------------ 提示词配置

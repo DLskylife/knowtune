@@ -115,6 +115,30 @@ class TestCite:
         report = verify(text, n_context=1)
         assert report.coverage >= 0.9
 
+    def test_hedging_with_citations_forces_zero(self):
+        """词库外问题的实测翻车：模型答"未找到依据"却挂满编号，覆盖率 100%
+        和低置信提醒同时出现。对冲式引用不构成证据，覆盖率必须归零。"""
+        text = ("根据现有资料，未找到与“甲信”相关的术语或上下文，"
+                "无法提供具体查询内容 [1][2][3][4][5]。")
+        report = verify(text, n_context=5)
+        assert report.coverage == 0.0
+        assert report.blanket and "未找到" in report.blanket
+
+    def test_blanket_run_flagged(self):
+        """单句连挂 3+ 个编号 = 笼统引用，标记但不改覆盖率（指向性差，
+        不等于没引用，归零会冤枉正常的"综合多来源"）。"""
+        text = ("本病在古籍中多有记载，历代医家论述各有侧重 [1][2][3]，"
+                "治疗上以清热为主，辅以调和体液 [1]。")
+        report = verify(text, n_context=3)
+        assert report.blanket and "笼统" in report.blanket
+        assert report.coverage > 0
+
+    def test_normal_answer_no_blanket(self):
+        text = "用黄连二两，醋浸一宿，加入蜡五合，煎熬成膏，涂敷患处 [1]。"
+        report = verify(text, n_context=1)
+        assert report.blanket is None
+        assert report.coverage == 1.0
+
 
 class TestLoader:
     def test_decode_gbk(self):

@@ -14,6 +14,16 @@ from dataclasses import dataclass, field
 CITE_RE = re.compile(r"\[(\d{1,2})\]")
 SENT_SPLIT = re.compile(r"(?<=[。！？!?\n])")
 
+# 假引用的两种典型形态（2026-11-01 实测抓到的：问词库外的"甲信"，模型答
+# "资料中未找到相关依据"却挂满 [1][2][3][4][5]，覆盖率照算 100%——指标被
+# "礼貌性全引"轻松绕过，界面上"低置信"和"覆盖 100%"同时出现，信号自相矛盾）：
+# 1. 对冲式引用：答案明说"没找到依据"，编号是装饰；
+# 2. 笼统引用：单句连挂 3 个以上编号，等于"我全看了"，没有指向性。
+HEDGE_RE = re.compile(
+    r"未找到|未检索到|未出现|未提及|没有相关|资料中未|无相关依据|找不到相关|未提供具体"
+)
+RUN_RE = re.compile(r"(?:\[\d{1,2}\]\s*){3,}")
+
 
 @dataclass
 class CiteReport:
@@ -22,6 +32,8 @@ class CiteReport:
     invalid_ids: list[int] = field(default_factory=list)
     uncited_sentences: list[str] = field(default_factory=list)
     coverage: float = 0.0
+    # 非空 = 引用存疑的原因，直接给界面展示，别让用户自己对 0%/100% 犯疑心
+    blanket: str | None = None
 
     @property
     def ok(self) -> bool:
@@ -50,10 +62,21 @@ def verify(answer: str, n_context: int) -> CiteReport:
     uncited = [s for s in factual if not CITE_RE.search(s)]
     coverage = (len(factual) - len(uncited)) / len(factual) if factual else (1.0 if ids else 0.0)
 
+    # 引用存疑的两种形态。对冲式直接把覆盖率归零：模型自己都说没依据了，
+    # 这些编号不构成任何证据支撑，留着 100% 只会跟"低置信"提醒打架。
+    blanket: str | None = None
+    if HEDGE_RE.search(answer) and ids:
+        blanket = "回答声称资料中未找到依据，引用编号是装饰，覆盖率按 0 计"
+        coverage = 0.0
+        uncited = factual or uncited
+    elif RUN_RE.search(answer):
+        blanket = "单句连挂 3 个以上引用编号（笼统引用），指向性存疑"
+
     return CiteReport(
         cleaned=cleaned,
         cited_ids=sorted({i for i in ids if i not in invalid}),
         invalid_ids=invalid,
         uncited_sentences=uncited[:5],
         coverage=round(coverage, 3),
+        blanket=blanket,
     )

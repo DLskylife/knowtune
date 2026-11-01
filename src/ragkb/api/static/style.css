@@ -2253,7 +2253,15 @@ input[type=number].num::-webkit-outer-spin-button { -webkit-appearance: none; ma
 }
 .fld-k { font-size: 12px; color: var(--text-2); }
 .fld-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.fld-row select { flex: 1 1 auto; min-width: 0; }
+.fld-row .mini { flex: none; }
 .fld-note { font-style: normal; font-size: 11px; color: var(--text-3); flex: none; }
+
+/* 翻译测试输出：占满整行（.sbk-fields 是两列网格），译文 dir=auto 自适应 RTL */
+.tr-out { grid-column: 1 / -1; padding: 8px 10px; border: 1px dashed var(--line);
+  border-radius: 8px; background: var(--surface-2); font-size: 12.5px; }
+.tr-out .tr-ok { color: var(--text); line-height: 1.6; word-break: break-word; }
+.tr-out .hint { margin-top: 4px; }
 
 /* 输入控件统一到一条线上：高度 30、圆角 7、底色比卡片抬一档。
    不加这条，select 会用 UA 的浅色系统样式，在深色卡上白得刺眼。 */

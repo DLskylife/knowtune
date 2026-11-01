@@ -3,4 +3,4 @@
 # 想回出厂值：删掉本文件，或点参数面板的「恢复默认」再保存。
 
 generation:
-  provider: bailian
+  provider: siliconflow
