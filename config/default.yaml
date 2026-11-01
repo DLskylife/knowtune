@@ -1,0 +1,202 @@
+# 全部可调参数的唯一来源。
+# 调优闭环：改这里 → `ragkb eval` → 与 baseline 对比 → 保留或回滚。
+# 任何不在本文件里的魔法数字都是 bug。
+
+version: 1
+prompt_version: qa_v1          # 必须与 config/prompts/ 下的文件名一致，并写入每条 query_log
+
+storage:
+  data_dir: ./data
+  db_path: ./data/library.db
+  vector_dir: ./data/vectors
+  busy_timeout_ms: 5000        # 导入占用写锁时，查询最多等 5s 而非立刻报 database locked
+  keep_generations: 1          # 重新索引时保留的旧代次数，用于回滚
+
+embedding:
+  model: BAAI/bge-small-zh-v1.5
+  local_path: ./data/models/bge-small-zh-v1.5   # 存在则优先本地，不碰网络
+  dim: 512                     # [待核实: 模型卡确认]
+  device: cpu
+  batch_size: 16               # CPU 上 16 比 64 更稳，避免内存尖峰
+  max_seq_length: 512          # [待核实: 模型卡确认]
+  normalize: true              # 归一化后余弦 = 点积，省一次除法
+
+chunking:
+  size: 480                    # 中文约 400-480 token，给 512 上限留余量
+  overlap: 80                  # 约 1/6，保证跨块语义连续
+  respect_headings: true       # 优先按标题层级切，避免把一个论点劈成两半
+  min_chunk: 80                # 短于此时并入前一块，避免产生"孤立标题"类垃圾 chunk
+
+retrieval:
+  dense:
+    enabled: true
+    top_k: 50
+  sparse:
+    enabled: true
+    top_k: 50
+    # 中文必须预分词，见 docs/ARCHITECTURE.md §4.3 实测结论
+    segmenter: jieba
+    userdict: ./config/jieba_userdict.txt
+  fusion:
+    # rrf      只看名次（1/(k+rank)），丢弃分差
+    # weighted 两路分数各自 min-max 归一到 0~1 后加权相加
+    # 实测（.workbuddy/eval_recall.py，两套探针 × 两个种子 × n≈300）：
+    #   rrf(0.5/0.35)      R@5 0.74~0.76  MRR 0.64
+    #   weighted(0.35/0.5) R@5 0.96~0.97  MRR 0.89~0.94
+    # 输赢的关键：RRF 眼里"BM25 断崖式第一"和"险胜第二"只差一个名次，
+    # 稠密路那批"语义沾边但不对"的候选就靠名次把决定性命中挤了下去。
+    # 归一化把"这一路有多确定"带进融合，这个信息 RRF 是丢掉的。
+    method: weighted
+    k: 60                      # 仅 rrf 使用：平滑常数，rank 从 1 起算
+    w_dense: 0.35              # 与 w_sparse 只表达相对比例，二者之和不要求为 1
+    w_sparse: 0.50             # 本语料上 BM25 是更强的那一路（单路 R@5 0.98 vs 稠密 0.58）
+    w_third: 0.0               # 预留第三路；启用时三者强制归一化
+    top_k: 20                  # 送入精排的候选数 —— CPU 延迟的主要开关
+  rerank:
+    enabled: true
+    # 需求原文指定 v2-m3，但 CPU 上 20 对约 2-5s（待实测）。
+    # base 档在个人设备上延迟约 1/3，质量损失通常 < 2%。改回 v2-m3 只需改这一行。
+    model: BAAI/bge-reranker-base
+    local_path: null           # 留空则按 data/models/<model-slug> 查找
+    allow_download: false      # false：本地没有就立刻降级，不去连可能连不上的 HF
+    top_k: 5
+    batch_size: 8
+    max_length: 512
+    timeout_s: 10.0            # 超时即回退到 RRF 顺序，并打 degraded=rerank_timeout
+  expand:
+    # 邻块扩展：把命中块前后各 N 块拉进来。理论上能补"答案被切分劈开"的漏检，
+    # 但实测在加权融合之上是**负收益**（R@20 0.995 → 0.975）：折价后的邻块
+    # 会把真正的命中挤出候选池。保留开关，证据变了再开。
+    enabled: false
+    neighbors: 1
+    discount: 0.65
+    seed_top: 8
+    max_candidates: 60           # 扩展后的候选池上限，防止宽参数把精排拖死
+  mmr:
+    enabled: false             # 开启条件：Top-5 中 >=3 条来自同一文档
+    lambda: 0.65
+  query_rewrite:
+    enabled: false             # 默认关闭，收益必须用评估集证明
+    max_variants: 3
+
+refusal:
+  enabled: true
+  # 实测（本语料 20 条可答 + 2 条应拒）：可答问题 top 落在 0.560~0.763，
+  # 完全不沾边的"今天北京天气"是 0.329。0.35 卡在两者之间，只拦"明显不沾边"。
+  # 不要再往上抬——单靠余弦分数分不开"该答"和"该拒"：
+  # "怎么用 Kubernetes 部署 GPU 集群"（该拒）得 0.620，
+  # 而"嵌入模型多少维"（该答）只有 0.560。
+  # 更细的区分交给生成端（prompt 要求无依据时说明）+ 引用覆盖率校验。
+  min_score: 0.35
+  # margin 实测无区分度（该拒的 0.0341 vs 该答的 0.0313），默认关闭。
+  # 打开它只会把"两条候选差不多"误判成"模型没把握"。
+  min_margin: 0.0
+  # margin 取前几条算。这也是标定口径：改了它，历史标定出的 min_margin 不可比。
+  margin_window: 5
+  # 低置信提醒（不拦截，只在答案旁提示"相关度偏低"）：
+  # top1 < min_score + soft_margin，或 margin < soft_floor 时触发。
+  soft_margin: 0.10
+  soft_floor: 0.015
+  calibrated_at: null
+  calibrated_on_model: null    # 换嵌入模型必须重新标定，余弦分布不可比
+  calibration_file: ./data/refusal_calibration.json
+                               # 标定结果落在独立 JSON 而不是回写本文件：回写会抹掉注释
+                               # 且只有 reliable=true 的结果才会被采纳
+
+evidence:
+  # 检索证据分档：high（>= min_score）/ mid（>= min_score * mid_ratio）/ low。
+  # 档位决定"严格照资料答"还是"允许用自身知识并标明"。mid_ratio 调高 =
+  # 更容易落到 low 档（模型更敢自由作答），调低 = 更倾向要求贴着资料答。
+  mid_ratio: 0.6
+
+generation:
+  # 三档后端统一走 OpenAI 兼容协议，切换只改这里或 UI 下拉框。
+  # mock 不发起任何网络请求，只用于验证"检索→装填→引用校验→SSE"链路是否贯通，
+  # 它的输出不是答案，UI 会打 MOCK 标记。
+  provider: vllm
+  providers:
+    vllm:
+      # 8100：8000 是 ragkb 自己的 Web 服务端口，撞在一起时只能看到"vLLM 起不来"
+      base_url: "http://127.0.0.1:8100/v1"
+      api_key_env: null              # 内网 vLLM 通常无鉴权
+      model: "Qwen2.5-7B-Instruct"
+      kind: vllm                     # 仅用于 UI 提示（启动命令 / 本地或云端），不参与请求协议
+    lmstudio:
+      base_url: "http://127.0.0.1:1234/v1"
+      api_key_env: null
+      model: "qwen2.5-7b-instruct"
+      kind: lmstudio
+    openai:
+      base_url: "https://api.openai.com/v1"
+      api_key_env: RAGKB_LLM_API_KEY   # 只读环境变量名，密钥永不落配置文件
+      model: "gpt-4o-mini"
+      kind: openai
+    mock:
+      base_url: null
+      api_key_env: null
+      model: "mock"
+      kind: mock
+  temperature: 0.1
+  # 这是"一次回答能吃多少 token"的天花板，**含推理模型的思考部分**。
+  # 1024 对推理型后端（deepseek-flash）是不够的：实测一次翻译里
+  # reasoning_tokens 就占 784，正文只剩两百来个，长一点的答案直接被
+  # finish_reason=length 截断，流式时甚至吐空。本地 7B 不吃思考预算，
+  # 抬到 3072 只是放宽上限，不会让它变慢。
+  max_tokens: 3072
+  context_token_budget: 6000
+  min_context_chars: 200               # 预算被历史吃光后仍留给资料的地板
+  stream: true
+  # 关掉推理模型的思考。翻译/问答这类确定性任务不需要思考：
+  # deepseek-flash 实测一次翻译烧 1020 个 reasoning token，关掉后 1116 → 222。
+  disable_thinking: true
+  pii_policy: warn                     # 仅对非本地 profile 生效：block | mask | warn
+  timeout:
+    connect: 5.0
+    read: 60.0
+    write: 10.0
+    pool: 5.0
+  retry:
+    max_attempts: 3                    # 含首次；仅在首 token 之前允许重试
+    initial_backoff_s: 1.0
+    max_backoff_s: 10.0
+
+chat:
+  history_turns: 5
+  history_token_budget: 1500
+  coreference:
+    mode: rule                 # rule | llm | off
+    llm_fallback: false
+
+ingest:
+  # 单文件上限。50MB 是老值，那是"单请求上传"时代的天花板：几十 MB 的请求
+  # 就会撞上浏览器超时/反代 body 限制，传不到判大小这一步。现在走分片上传
+  # （4MB 一片，可续传），传输侧不再是瓶颈，这个值才真正等于"解析上限"。
+  # 注意它约束的是解析：512MB 的 PDF 会整本载入内存，低配机器别往大调。
+  max_file_mb: 512
+  exclude_patterns:
+    - ".git/**"
+    - "node_modules/**"
+    - "__pycache__/**"
+    - "*.pyc"
+    - ".env"
+    - "*.key"
+    - "*.pem"
+    - "*.p12"
+  pdf:
+    min_text_chars_per_page: 20    # 低于此值判定"未检测到文本层，需 OCR"，明确报错而非静默入库
+  url:
+    allowed_domains: []            # 空 = 不限制
+    max_depth: 2
+    max_pages: 200
+
+eval:
+  dataset: ./evals/cases.jsonl
+  baseline: ./evals/baseline.json
+  k: 5
+  skip_generation: true            # 检索评估不跑生成，才能守住"5 分钟出结果"
+
+observability:
+  log_level: INFO
+  log_json: true
+  sample_rate: 1.0                 # 单用户全采
+  log_question_text: false         # 只落 digest + 字符数

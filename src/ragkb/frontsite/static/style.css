@@ -1,0 +1,679 @@
+/* 前台问答界面样式（2026-10-29，1.7.0：按"左栏 + 居中欢迎语 + 底部输入框"重做）
+   与后台 style.css 完全独立：配色、字体、圆角都不一样，改后台不会动到这里。
+   维吾尔语用阿拉伯字母，字体首选系统自带的 Microsoft Uighur，缺了就退到
+   Noto Naskh Arabic —— 用错字体会让字母连写断开，整页看着像乱码。
+   ⚠ 阿拉伯字母连写：RTL 文本一律不得加 letter-spacing，加了就把词切断。
+
+   ── 这次改版唯一的硬规则：布局骨架永不镜像 ──
+   不管界面是维语还是中文：侧栏在左、语言开关在右上、标题在左上、输入框在
+   底部居中、发送按钮在右端、用户气泡在右、AI 回答占满整行。
+   切语言只换字形与行内方向，不让任何元素换边——上一版把整块容器设成
+   dir=rtl，一点切换，徽记、按钮、文字全跑到另一边去，用户当场找不到东西。
+   所以骨架一律用物理 left/right 定位，方向只交给具体文本节点的 dir=auto。
+*/
+
+:root {
+  --paper: #fbfbf9;
+  --side: #f4f4f0;
+  --surface: #ffffff;
+  --surface-2: #f7f7f4;
+  --line: #e5e3da;
+  --line-soft: #eeece5;
+  --ink: #16211d;
+  --ink-2: #55625b;
+  --ink-3: #8b938d;
+  --brand: #0e5b46;
+  --brand-2: #0a4536;
+  --brand-soft: #e8f1ec;
+  --brand-line: rgba(14, 91, 70, .2);
+  --gold: #a97f43;
+  --gold-soft: #f4ead8;
+  --gold-line: rgba(169, 127, 67, .3);
+  --warn: #a94a2c;
+  --warn-soft: rgba(169, 74, 44, .08);
+  --user-bg: linear-gradient(150deg, #14664f 0%, #0b4a39 100%);
+  --r-xl: 18px;
+  --r-lg: 14px;
+  --r-md: 10px;
+  --shadow-sm: 0 1px 2px rgba(21, 33, 28, .05);
+  --shadow: 0 1px 2px rgba(21, 33, 28, .05), 0 10px 26px -14px rgba(21, 33, 28, .2);
+  --shadow-lg: 0 2px 6px rgba(21, 33, 28, .06), 0 22px 48px -22px rgba(21, 33, 28, .3);
+  --ug: "Microsoft Uighur", "UKIJ Tuz Tom", "ALKATIP Tor", "Noto Naskh Arabic",
+        "Segoe UI", Tahoma, sans-serif;
+  --zh: -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+  --ui: var(--ug);
+  --col: 748px;          /* 正文与输入框的公共列宽 */
+  --side-w: 262px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #0e1513;
+    --side: #121b18;
+    --surface: #16201c;
+    --surface-2: #1a2521;
+    --line: #2a3733;
+    --line-soft: #212d29;
+    --ink: #e9efea;
+    --ink-2: #a5b2ab;
+    --ink-3: #7d8a84;
+    --brand: #35a181;
+    --brand-2: #2a8a6c;
+    --brand-soft: rgba(53, 161, 129, .14);
+    --brand-line: rgba(53, 161, 129, .28);
+    --gold: #d2ab6c;
+    --gold-soft: rgba(210, 171, 108, .13);
+    --gold-line: rgba(210, 171, 108, .28);
+    --warn: #e0805d;
+    --warn-soft: rgba(224, 128, 93, .12);
+    --user-bg: linear-gradient(150deg, #1d7d61 0%, #14553f 100%);
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, .3);
+    --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 12px 28px -16px rgba(0, 0, 0, .6);
+    --shadow-lg: 0 2px 8px rgba(0, 0, 0, .4), 0 24px 52px -24px rgba(0, 0, 0, .7);
+  }
+}
+
+* { box-sizing: border-box; }
+
+/* .status / .to-bottom 都是 inline-flex，flex 会覆盖 hidden 的默认样式，
+   结果"该藏的没藏"——一条空状态行在输入框上方占着高度。这里钉死。 */
+[hidden] { display: none !important; }
+
+html, body {
+  margin: 0; height: 100%;
+  background: var(--paper); color: var(--ink);
+  font-family: var(--ui);
+  font-size: 15px; line-height: 1.9;
+  -webkit-font-smoothing: antialiased;
+}
+html[lang="zh"], html[lang="en"] { font-family: var(--zh); line-height: 1.72; }
+body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
+
+.sr-only {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+  overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
+}
+
+/* ------------------------------------------------------------ 骨架 */
+.app { display: flex; height: 100%; position: relative; }
+
+.main {
+  flex: 1; min-width: 0; min-height: 0;
+  display: flex; flex-direction: column;
+}
+
+/* 空态：欢迎语 + 输入框作为一组整体垂直居中（参考 DeepSeek 的落地页）。
+   auto 外边距而不是 justify-content:center —— 内容比视口高时，auto 会
+   自动收成 0 并允许滚动，center 会把顶部裁掉。 */
+.main.empty { overflow-y: auto; }
+.main.empty .chat { flex: 0 0 auto; margin-top: auto; overflow: visible; }
+.main.empty .composer { margin-bottom: auto; }
+
+/* ------------------------------------------------------------ 侧栏 */
+.side {
+  width: var(--side-w); flex: none;
+  display: flex; flex-direction: column;
+  background: var(--side);
+  border-right: 1px solid var(--line);
+  z-index: 30;
+}
+.side-head {
+  display: flex; align-items: center; gap: 10px;
+  padding: 16px 16px 12px;
+}
+.brand-mark {
+  position: relative; width: 30px; height: 30px; flex: none;
+  border-radius: 9px;
+  background: linear-gradient(145deg, #157053, #0a3d2e);
+  box-shadow: 0 2px 7px rgba(10, 60, 45, .28), inset 0 1px 0 rgba(255, 255, 255, .24);
+}
+.brand-mark i {
+  position: absolute; inset: 8px; border: 1.5px solid rgba(255, 255, 255, .82);
+  border-radius: 2px;
+}
+.brand-mark i:nth-child(2) { transform: rotate(45deg); border-color: rgba(255, 255, 255, .45); }
+
+.side-id { min-width: 0; }
+.side-name {
+  margin: 0; font-size: 13.5px; font-weight: 700; line-height: 1.5;
+  text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.side-meta {
+  margin: 1px 0 0; font-size: 11px; color: var(--ink-3); line-height: 1.5;
+  text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+.new-chat {
+  display: flex; align-items: center; gap: 8px;
+  margin: 2px 12px 10px; padding: 0 12px; height: 38px;
+  background: var(--surface); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 11px;
+  font: inherit; font-size: 13.5px; font-weight: 600; line-height: 1;
+  cursor: pointer; text-align: left;
+  transition: border-color .14s, color .14s, background .14s, box-shadow .14s;
+}
+.new-chat svg {
+  width: 15px; height: 15px; flex: none; fill: none;
+  stroke: var(--brand); stroke-width: 2.2; stroke-linecap: round;
+}
+.new-chat:hover {
+  border-color: var(--brand-line); color: var(--brand);
+  background: var(--brand-soft); box-shadow: var(--shadow-sm);
+}
+
+.side-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 2px 8px 14px; }
+.side-scroll::-webkit-scrollbar { width: 8px; }
+.side-scroll::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--ink) 14%, transparent);
+  border-radius: 6px; border: 2px solid transparent; background-clip: padding-box;
+}
+
+.side-group {
+  margin: 0; padding: 10px 8px 3px;
+  font-size: 10.5px; font-weight: 600; letter-spacing: .04em;
+  color: var(--ink-3); text-align: left; text-transform: none;
+}
+.sess {
+  display: block; width: 100%; padding: 7px 9px; margin: 1px 0;
+  border: 1px solid transparent; border-radius: 9px; background: transparent;
+  color: var(--ink-2); font: inherit; font-size: 13px; line-height: 1.6;
+  text-align: left; cursor: pointer;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  transition: background .13s, color .13s, border-color .13s;
+}
+.sess:hover { background: color-mix(in srgb, var(--ink) 5%, transparent); color: var(--ink); }
+.sess.on {
+  background: var(--surface); color: var(--ink); font-weight: 600;
+  border-color: var(--line); box-shadow: var(--shadow-sm);
+}
+.sess-row { position: relative; display: flex; align-items: stretch; margin: 1px 0; }
+.sess-row .sess { margin: 0; padding-right: 34px; }
+.sess-del {
+  position: absolute; top: 50%; right: 4px;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; padding: 0;
+  transform: translateY(-50%);
+  border: 0; border-radius: 7px; background: transparent;
+  color: var(--ink-3); cursor: pointer;
+  opacity: 0; transition: opacity .12s, background .12s, color .12s;
+}
+.sess-row:hover .sess-del, .sess-row:focus-within .sess-del { opacity: 1; }
+.sess-del:hover { background: var(--warn-soft); color: var(--warn); }
+/* 待确认态：按钮从图标变成一颗红色实心块，第二次点击才真删。
+   同时给标题让出位置，否则那颗红块会压住标题末尾的字。 */
+.sess-row.ask .sess { padding-right: 78px; }
+.sess-row.ask .sess-del, .sess-row.ask .sess-del:hover {
+  width: auto; height: 22px; padding: 0 7px;
+  background: var(--warn); color: #fff; opacity: 1;
+  font-family: var(--zh); font-size: 11px; font-weight: 600;
+  white-space: nowrap;
+}
+/* 触屏没有 hover：删除入口常显，否则只能靠猜 */
+@media (hover: none) {
+  .sess-del { opacity: .45; }
+}
+
+.side-empty {
+  margin: 14px 10px; font-size: 12px; color: var(--ink-3); line-height: 1.7;
+  text-align: left;
+}
+
+/* 移动端抽屉 */
+.scrim {
+  position: fixed; inset: 0; z-index: 20; background: rgba(12, 22, 18, .34);
+  backdrop-filter: blur(1px);
+}
+
+/* ------------------------------------------------------------ 顶栏 */
+.top {
+  flex: none; display: flex; align-items: center; gap: 10px;
+  padding: 12px 18px; min-height: 58px;
+}
+.top-id { min-width: 0; flex: 1; }
+.top h1 {
+  margin: 0; font-size: 14px; font-weight: 700; line-height: 1.5;
+  /* 物理左对齐：dir=rtl 时只改字形顺序，不把标题推到右边 */
+  text-align: left;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.top .sub {
+  margin: 1px 0 0; font-size: 11.5px; color: var(--ink-3); line-height: 1.5;
+  text-align: left;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+.icon-btn {
+  display: none; align-items: center; justify-content: center;
+  width: 32px; height: 32px; flex: none; padding: 0;
+  border: 1px solid var(--line); border-radius: 9px;
+  background: var(--surface); color: var(--ink-2); cursor: pointer;
+}
+.icon-btn svg {
+  width: 17px; height: 17px; fill: none;
+  stroke: currentColor; stroke-width: 2; stroke-linecap: round;
+}
+.icon-btn:hover { color: var(--brand); border-color: var(--brand-line); }
+
+/* 语言切换：两颗并排按钮，当前语言实心。
+   一颗按钮写"点了会变的那种语言"是这个界面最容易被误解的地方——
+   看到"中文"两个字，分不清是现状还是目标。 */
+.lang-switch {
+  display: inline-flex; align-items: stretch; flex: none;
+  border: 1px solid var(--line); border-radius: 999px;
+  overflow: hidden; background: var(--surface); padding: 2px; gap: 2px;
+}
+.lang-switch button {
+  appearance: none; border: 0; background: transparent; cursor: pointer;
+  font: inherit; font-size: 12.5px; line-height: 1.6; padding: 4px 11px;
+  /* 两段等宽：'ئۇيغۇرچە' 和 '中文' 字数差三倍，不定宽的话点一次切换，
+     整个胶囊的宽度就变一次，右边的按钮肉眼可见地横移。 */
+  min-width: 62px; text-align: center;
+  border-radius: 999px; color: var(--ink-2); white-space: nowrap;
+  transition: background .16s, color .16s;
+}
+.lang-switch button:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 6%, transparent); }
+.lang-switch button.on,
+.lang-switch button.on:hover {
+  background: var(--brand); color: #fff; font-weight: 600; cursor: default;
+}
+
+/* ------------------------------------------------------------ 聊天区 */
+.chat { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 0 6px; }
+/* 注意：这里**不能**加 scroll-behavior: smooth。流式回答每帧都在设 scrollTop，
+   平滑动画会被下一次赋值打断，表现就是滚到底时抖一下。回到底部那个按钮
+   单独用 scrollTo({behavior}) 平滑即可。 */
+.chat::-webkit-scrollbar { width: 9px; }
+.chat::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--ink) 14%, transparent);
+  border-radius: 6px; border: 2px solid transparent; background-clip: padding-box;
+}
+.chat::-webkit-scrollbar-track { background: transparent; }
+
+/* ------------------------------------------------------------ 空态 */
+.welcome {
+  max-width: var(--col); margin: 0 auto; padding: 8px 24px 22px;
+  text-align: center; animation: rise .3s ease-out both;
+}
+.wel-text {
+  margin: 0 auto; max-width: 30em;
+  font-size: 23px; line-height: 1.7; font-weight: 700; color: var(--ink);
+}
+.wel-hint {
+  margin: 10px auto 0; max-width: 34em;
+  font-size: 13px; line-height: 1.7; color: var(--ink-3);
+}
+/* 示例问题：居中的胶囊，换行自动收拢。不做成卡片网格——落地页上
+   三块大方卡会把"输入框"这个主角抢掉。 */
+.samples {
+  display: flex; flex-wrap: wrap; justify-content: center; gap: 8px;
+  margin-top: 22px;
+}
+.chip {
+  display: inline-flex; align-items: center; gap: 7px;
+  max-width: 100%; padding: 8px 14px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 999px;
+  color: var(--ink-2); font: inherit; font-size: 13px; line-height: 1.6;
+  text-align: left; cursor: pointer;
+  transition: border-color .16s, color .16s, background .16s, box-shadow .16s;
+}
+.chip .txt { min-width: 0; }
+.chip:hover {
+  border-color: var(--brand-line); color: var(--brand);
+  background: var(--brand-soft); box-shadow: var(--shadow-sm);
+}
+.chip:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+
+/* ------------------------------------------------------------ 消息 */
+.msgs {
+  max-width: var(--col); margin: 0 auto; padding: 6px 16px 10px;
+  display: flex; flex-direction: column; gap: 22px;
+}
+.msg { animation: pop .2s ease-out; }
+@keyframes pop {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes rise {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .msg, .welcome, .chip { animation: none !important; }
+}
+
+/* 用户气泡：实心深青绿 + 白字，恒靠右（容器是 ltr，不随界面语言翻转）。
+   浅色气泡在纸底上几乎看不见，用户分不清哪句是自己问的。 */
+.msg.user {
+  align-self: flex-end; max-width: 76%;
+  background: var(--user-bg); color: #fff;
+  border-radius: 16px 16px 4px 16px;
+  padding: 9px 15px; white-space: pre-wrap;
+  box-shadow: 0 6px 18px -12px rgba(10, 60, 45, .7);
+}
+/* AI 回答不套卡片：整页白底上直接排字，读起来最安静（原稿也长，
+   再包一层边框和阴影只是加噪点）。证据徽标负责给它一个视觉起点。 */
+.msg.bot { align-self: stretch; max-width: 100%; padding: 2px 0; }
+.msg.bot.failed {
+  border-radius: var(--r-lg); padding: 12px 14px;
+  background: var(--warn-soft); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warn) 22%, transparent);
+}
+
+/* ------------------------------------------------------------ 答案正文 */
+.answer { white-space: pre-wrap; font-size: 15px; }
+.answer .md { white-space: normal; }
+/* 流式光标：正在出字和"出完了"必须能分辨，否则用户会一直等下去 */
+.answer.streaming > .md > :last-child::after {
+  content: ""; display: inline-block; width: 2px; height: 1em;
+  margin-inline-start: 2px; vertical-align: -.14em;
+  background: var(--brand); animation: caret 1s step-end infinite;
+}
+@keyframes caret { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+.answer.muted { color: var(--ink-2); }
+/* 失败：一个感叹号 + 砖橙色，扫一眼就知道"这次没拿到答案" */
+.answer.err { color: var(--warn); padding-inline-start: 24px; position: relative; }
+.answer.err::before {
+  content: "!"; position: absolute; inset-inline-start: 0; top: .18em;
+  width: 17px; height: 17px; border-radius: 50%;
+  background: var(--warn); color: #fff;
+  font-family: var(--zh); font-size: 11.5px; font-weight: 700; line-height: 17px;
+  text-align: center;
+}
+/* 切到中文草稿时的"另一套排版"：换中文字体 */
+.answer.alt { font-family: var(--zh); line-height: 1.78; }
+
+.md p { margin: 0 0 .92em; }
+.md > :last-child { margin-bottom: 0; }
+.md ol, .md ul { margin: .1em 0 .8em; padding-inline-start: 1.55em; }
+.md li { margin: .2em 0; padding-inline-start: .18em; }
+.md li::marker { color: var(--brand); font-weight: 700; }
+.md strong { font-weight: 700; color: var(--ink); }
+.md code {
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: .9em;
+  background: var(--surface-2); border: 1px solid var(--line-soft);
+  border-radius: 5px; padding: 1px 5px;
+}
+.md h4 { margin: .2em 0 .5em; font-size: 15.5px; }
+
+/* 引用编号：必须隔离，否则 RTL 段落里 [1] 会被双向算法挪到数字另一侧。
+   做成可点的小牌——"这结论从哪来"是这种问答界面唯一值得点的地方。 */
+.cite {
+  /* 尺寸按 px 定死。原先用 em（.7em ≈ 10.5px、高 1.36em ≈ 14px）跟着正文缩放，
+     挤在 15px 汉字旁边只有指甲盖大，浅青底又接近纸色，看着像正文里混进一个
+     圈号数字，读者根本不知道那是个能点的来源。18px 的方块 + 两侧 3px 间距，
+     才在一屏汉字里立得住。 */
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 18px; height: 18px; padding: 0 4px; margin: 0 3px;
+  border-radius: 5px; border: 1px solid var(--brand-line);
+  background: var(--brand-soft); color: var(--brand);
+  font-family: var(--zh); font-size: 11px; font-weight: 700; line-height: 1;
+  direction: ltr; unicode-bidi: isolate; vertical-align: -.08em;
+  cursor: pointer; transition: background .14s, color .14s;
+}
+.cite:hover { background: var(--brand); color: #fff; }
+.cite:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+/* 引用牌 + 它注释的那个字绑成不可断的一小段（见 app.js 里的 bindCites）。
+   少了这条，牌会在行尾被单独挤到下一行行首，看起来像个新序号。 */
+.nb { white-space: nowrap; }
+/* 一段话里连引两条（"[2][4]"）时两枚牌挨着，各自的 3px 叠加成 6px，
+   读起来像"2 4"两个孤立的数字。收紧成 2px。 */
+.nb .cite + .cite { margin-inline: 1px; }
+
+/* 检索证据档位：答案有多少来自资料，必须在读正文之前就看见 */
+.ev-badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  margin-bottom: 9px;
+  font-size: 11.5px; font-weight: 600; line-height: 1.6;
+  padding: 2px 10px; border-radius: 999px;
+  border: 1px solid var(--line);
+}
+.ev-badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.ev-badge.high { color: var(--brand); background: var(--brand-soft); border-color: var(--brand-line); }
+.ev-badge.mid { color: var(--gold); background: var(--gold-soft); border-color: var(--gold-line); }
+.ev-badge.low { color: var(--warn); background: var(--warn-soft); border-color: color-mix(in srgb, var(--warn) 30%, transparent); }
+
+.thinking {
+  display: inline-flex; align-items: center; gap: 7px;
+  margin-top: 8px; font-size: 12.5px; color: var(--ink-3);
+}
+/* 三点呼吸：流式等待时页面必须有东西在动，否则 30 秒的翻译阶段像死机 */
+.thinking::before {
+  content: ""; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--brand); animation: pulse 1.1s ease-in-out infinite;
+  flex: none;
+}
+@keyframes pulse {
+  0%, 100% { opacity: .25; transform: scale(.8); }
+  50% { opacity: 1; transform: scale(1); }
+}
+
+/* 这一行定死 ltr：AI 气泡本身是 dir=auto（维语答案时整块文字右起），
+   若不钉住，耗时和复制键会跟着翻到另一头——同一套界面里"复制"忽左忽右，
+   用户每次都要重新找。只有这行是"骨架"，不跟随正文方向。 */
+.foot {
+  direction: ltr;
+  display: flex; align-items: center; gap: 10px;
+  /* 加了反馈键之后这一行最多有 5 个元素（耗时/语言/占位/两个反馈/复制）。
+     窄屏 + 长耗时文案时允许折行，否则按钮会被压成两行字。 */
+  flex-wrap: wrap; row-gap: 4px;
+  margin-top: 10px; font-size: 11.5px; color: var(--ink-3);
+}
+.foot .spacer { flex: 1; }
+/* 答案语言标记：只在"这条答案不是当前界面语言"时出现。
+   小、灰、不抢眼——它的作用是不让人误会，不是让人盯。 */
+.foot .alang {
+  font-size: 11px; color: var(--ink-3);
+  border: 1px solid var(--line); border-radius: 999px;
+  padding: 1px 8px; line-height: 1.6; white-space: nowrap;
+}
+.copy {
+  appearance: none; border: 1px solid transparent; background: transparent;
+  color: var(--ink-3); font: inherit; font-size: 11.5px; line-height: 1.6;
+  border-radius: 7px; padding: 2px 9px; cursor: pointer;
+  transition: color .14s, background .14s, border-color .14s;
+}
+.copy:hover { color: var(--brand); background: var(--brand-soft); border-color: var(--brand-line); }
+.copy.done { color: var(--brand); border-color: var(--brand-line); background: var(--brand-soft); }
+
+/* 反馈：和复制键同排、同尺寸，但图标欠奉所以留出间距。
+   置灰态可见（而不是消失）——用户点完要能看见"已经记下了"，
+   按钮原地消失会让人怀疑自己点错了。 */
+.foot .fb {
+  appearance: none; border: 1px solid transparent; background: transparent;
+  color: var(--ink-3); font: inherit; font-size: 11.5px; line-height: 1.6;
+  border-radius: 7px; padding: 2px 9px; cursor: pointer;
+  white-space: nowrap; flex: 0 0 auto;
+  transition: color .14s, background .14s, border-color .14s;
+}
+.foot .fb + .fb { margin-inline-start: 2px; }
+.foot .fb:hover:not(:disabled) {
+  color: var(--brand); background: var(--brand-soft); border-color: var(--brand-line);
+}
+.foot .fb:disabled { cursor: default; opacity: .72; }
+
+/* 来源：默认折叠，但摘要是一枚实体胶囊而不是灰字——
+   它承载的是"这个答案有没有依据"，不该比正文还弱。 */
+.srcs { margin-top: 12px; }
+.srcs summary {
+  display: inline-flex; align-items: center; gap: 7px;
+  list-style: none; cursor: pointer; user-select: none;
+  font-size: 12.5px; font-weight: 600; color: var(--brand);
+  background: var(--brand-soft); border: 1px solid var(--brand-line);
+  border-radius: 999px; padding: 4px 13px;
+  transition: background .14s;
+}
+.srcs summary::-webkit-details-marker { display: none; }
+.srcs summary:hover { background: color-mix(in srgb, var(--brand) 14%, transparent); }
+.srcs summary .caret {
+  width: 6px; height: 6px; border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor; transform: rotate(45deg) translate(-1px, -1px);
+  transition: transform .18s; margin-inline-start: 1px;
+}
+.srcs[open] summary .caret { transform: rotate(225deg) translate(-1px, -1px); }
+.srcs ul { margin: 10px 0 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+.src-item {
+  display: flex; gap: 10px; align-items: flex-start;
+  background: var(--surface-2); border: 1px solid var(--line-soft);
+  border-radius: var(--r-md); padding: 10px 12px;
+  transition: border-color .2s, background .2s;
+}
+.src-item .n {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  min-width: 20px; height: 20px; padding: 0 5px; border-radius: 6px;
+  background: var(--brand); color: #fff;
+  font-family: var(--zh); font-size: 11px; font-weight: 700; line-height: 1;
+  direction: ltr; unicode-bidi: isolate;
+}
+.src-body { min-width: 0; flex: 1; }
+.src-head { font-size: 12.5px; font-weight: 600; color: var(--ink); line-height: 1.6; }
+.src-prev {
+  margin-top: 3px; font-size: 12px; color: var(--ink-2); line-height: 1.75;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+/* 点了正文里的 [1]，对应来源闪一下——不然用户滚过去也不知道该看哪条 */
+.src-item.flash {
+  border-color: var(--brand);
+  background: color-mix(in srgb, var(--brand) 8%, var(--surface-2));
+  animation: flash 1.4s ease-out;
+}
+@keyframes flash {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--brand) 40%, transparent); }
+  100% { box-shadow: 0 0 0 12px transparent; }
+}
+
+/* 复读截断提示：不能假装没发生，否则用户会以为答案本来就长这样。 */
+.loop-warn {
+  margin-top: 10px; font-size: 12px; color: var(--warn);
+  background: var(--warn-soft); border: 1px solid color-mix(in srgb, var(--warn) 22%, transparent);
+  border-radius: 8px; padding: 7px 10px; line-height: 1.7;
+}
+
+/* 翻译没成：这是"降级通知"，不是错误——正文仍然是内容，只是语言不对。
+   用比复读警告更弱的中性色，免得和真正的失败混为一谈。 */
+.tr-warn {
+  color: var(--ink-2);
+  background: var(--surface-2);
+  border-color: var(--line);
+}
+
+/* 状态行里夹的中文检索词：单独隔离成 LTR，否则在维语句子里会被重排得乱跳 */
+.q-zh {
+  direction: ltr; unicode-bidi: isolate;
+  font-family: var(--zh); font-weight: 600; color: var(--ink-2);
+}
+
+/* ------------------------------------------------------------ 回到底部 */
+.to-bottom {
+  position: absolute; left: 50%; bottom: 132px; transform: translateX(-50%);
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--surface); color: var(--brand);
+  border: 1px solid var(--brand-line); border-radius: 999px;
+  padding: 5px 13px; font: inherit; font-size: 12px; cursor: pointer;
+  box-shadow: var(--shadow); z-index: 5;
+  animation: pop .18s ease-out;
+}
+.to-bottom:hover { background: var(--brand-soft); }
+.to-bottom .arrow { font-size: 13px; line-height: 1; }
+
+/* ------------------------------------------------------------ 输入区 */
+.composer { flex: none; padding: 6px 24px 14px; }
+.status {
+  display: flex; align-items: center; gap: 8px;
+  max-width: var(--col); margin: 0 auto 7px;
+  font-size: 12px; color: var(--ink-2); line-height: 1.7;
+}
+
+/* 输入框做成一张圆角大卡：上面一行写字，下面一行放工具与发送键。
+   发送键是圆形箭头——比"发送"两个字窄一半，维语长词也不会把按钮撑歪。 */
+.box {
+  max-width: var(--col); margin: 0 auto;
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: 22px; padding: 10px 10px 8px 16px;
+  box-shadow: var(--shadow);
+  transition: border-color .16s, box-shadow .16s;
+}
+.box:focus-within {
+  border-color: var(--brand-line);
+  box-shadow: 0 0 0 3px var(--brand-soft), var(--shadow);
+}
+#q {
+  display: block; width: 100%; resize: none; border: none; outline: none;
+  background: transparent; padding: 2px 0 6px;
+  font: inherit; font-size: 15px; line-height: 1.75;
+  color: var(--ink); max-height: 176px; min-height: 27px;
+}
+#q::placeholder { color: var(--ink-3); opacity: .85; }
+
+.box-foot { display: flex; align-items: center; gap: 8px; }
+.box-foot .grow { flex: 1; }
+.tool {
+  display: inline-flex; align-items: center; gap: 6px;
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 11.5px; line-height: 1.6; color: var(--brand);
+  background: var(--brand-soft); border: 1px solid var(--brand-line);
+  border-radius: 999px; padding: 3px 10px;
+}
+.tool::before {
+  content: ""; width: 5px; height: 5px; border-radius: 50%;
+  background: currentColor; flex: none;
+}
+
+.send {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 34px; height: 34px; padding: 0;
+  background: var(--brand); color: #fff; border: none; border-radius: 50%;
+  cursor: pointer;
+  box-shadow: 0 6px 16px -10px rgba(10, 60, 45, .9);
+  transition: background .14s, transform .1s, opacity .14s;
+}
+.send svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.send .ico-stop { display: none; fill: currentColor; stroke: none; }
+.send.stopping .ico-send { display: none; }
+.send.stopping .ico-stop { display: block; }
+.send:hover:not(:disabled) { background: var(--brand-2); }
+.send:active:not(:disabled) { transform: scale(.94); }
+.send:disabled {
+  background: color-mix(in srgb, var(--ink) 11%, transparent);
+  color: var(--ink-3); box-shadow: none; cursor: default;
+}
+/* 生成中：按钮变成"停止"，用砂金区分——同一个位置换了两件事，
+   颜色不同才不会误点 */
+.send.stopping { background: var(--gold); }
+.send.stopping:hover { background: color-mix(in srgb, var(--gold) 86%, #000); }
+
+.disclaimer {
+  max-width: var(--col); margin: 8px auto 0;
+  font-size: 11px; color: var(--ink-3); line-height: 1.7; text-align: center;
+}
+
+.fatal {
+  margin: 60px auto; max-width: 520px; text-align: center; color: var(--warn);
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-xl);
+  padding: 26px; font-family: var(--zh); line-height: 1.8;
+}
+
+/* ------------------------------------------------------------ 窄屏 */
+@media (max-width: 860px) {
+  .side {
+    position: fixed; top: 0; bottom: 0; left: 0;
+    width: 280px; transform: translateX(-100%);
+    transition: transform .22s ease;
+    box-shadow: var(--shadow-lg);
+  }
+  .side.open { transform: none; }
+  .icon-btn { display: inline-flex; }
+  .top { padding: 10px 12px; min-height: 54px; }
+  .top .sub { display: none; }
+  .composer { padding: 4px 12px 10px; }
+  .box { border-radius: 19px; padding: 8px 8px 7px 13px; }
+  .welcome { padding: 8px 16px 16px; }
+  .wel-text { font-size: 19px; }
+  .msgs { padding: 6px 14px 8px; gap: 18px; }
+  .msg.user { max-width: 88%; }
+  .to-bottom { bottom: 124px; }
+  .disclaimer { font-size: 10.5px; }
+}
+
+@media (max-width: 400px) {
+  .lang-switch button { padding: 4px 9px; font-size: 12px; }
+  .top h1 { font-size: 13px; }
+}

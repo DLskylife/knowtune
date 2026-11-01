@@ -1,0 +1,295 @@
+"""后端服务探测 —— 首页与模型页要回答的那个问题："现在到底能不能用"。
+
+两段式验证（2026-10-28 教训）：
+1. 打 `{base_url}/models`——快，能区分"端口活着 / 进程没起 / 模型没加载"；
+2. /models 通了**还不算联通**：one-api 这类网关对 /models 永远回 200 全列表，
+   结果四个后端全都"就绪"，实际只有一个真加载了模型。所以再发一次
+   `max_tokens=1` 的补全，模型真能吐字才算 ok，吐不出就是 warn。
+   ping 的 prompt 只有 1 个 token，本地服务几百毫秒内返回。
+
+探测结果带内存缓存（首页刷新不该同步探 N 个后端），并且**落盘**——
+以前缓存在内存里，服务一重启模型页就全部显示"还没探测"，用户以为
+之前测的结果丢了（数据没更新，其实是没人再探过）。
+"""
+
+from __future__ import annotations
+
+import ipaddress
+import json
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from typing import Any
+from urllib.parse import urlparse
+
+import httpx
+
+from .config import Config, ProviderCfg
+
+CACHE_TTL_S = 15.0
+_CACHE: dict[str, dict[str, Any]] = {}
+_CACHE_LOCK = threading.Lock()
+_CACHE_FILE: Path | None = None
+_CACHE_LOADED = False
+
+_ERROR_HINTS = {
+    "connect": "端口上没有服务在监听（进程没起，或地址写错）",
+    "timeout": "连接超时：端口没有响应（服务没起、被防火墙丢弃，或模型还在加载）",
+    "404": "服务在跑，但这个路径没有 /models —— 大概率 base_url 少了 /v1",
+    "401": "鉴权失败：检查环境变量里的密钥",
+    "403": "服务拒绝访问：检查密钥权限或来源限制",
+}
+
+
+def _classify(exc: Exception) -> tuple[str, str]:
+    if isinstance(exc, httpx.ConnectError):
+        return "down", _ERROR_HINTS["connect"]
+    if isinstance(exc, httpx.TimeoutException):
+        return "timeout", _ERROR_HINTS["timeout"]
+    if isinstance(exc, httpx.HTTPStatusError):
+        code = exc.response.status_code
+        return "error", f"HTTP {code}：{_ERROR_HINTS.get(str(code), '服务返回了错误')}"
+    return "error", f"{type(exc).__name__}: {exc}"
+
+
+# 这些模型会出现在云厂商的 /models 里，但**不能做文本对话**：图像、语音、
+# 实时流、向量、重排。把它们混进"可点选"的下拉里，用户点到就是一次 403/500，
+# 而我们自己的报错还写着"检查密钥权限"——纯属把人往沟里带。
+_NON_CHAT_HINTS = (
+    "realtime", "audio", "image", "embedding", "rerank", "asr", "tts",
+    "video", "ocr", "wanx", "cosyvoice", "paraformer", "livetranslate",
+    "text-to-speech", "speech-", "-speech", "flux", "stable-diffusion",
+)
+
+
+def split_chat_models(ids: list[str]) -> tuple[list[str], int]:
+    """挑出能做文本对话的模型，返回 (对话类列表, 被过滤掉的数量)。
+
+    注意别把 "omni" 一刀切掉：实测 `qwen3.8-omni-flash` 能对话，
+    不能对话的是 `-realtime` 那一支，所以按更具体的词过滤。
+    """
+    chat, rest = [], 0
+    for m in ids:
+        low = m.lower()
+        if any(h in low for h in _NON_CHAT_HINTS):
+            rest += 1
+            continue
+        chat.append(m)
+    return chat, rest
+
+
+def _is_local(url: str) -> bool:
+    """本机地址必须绕开 HTTP(S)_PROXY。
+
+    踩过：用户开着代理时，httpx 默认读环境变量，连 127.0.0.1:8000 也发给代理，
+    代理回一个 502。表现是"本地服务明明起来了，页面说不可用"，而且延迟 5 秒。
+    """
+    host = (urlparse(url).hostname or "").lower()
+    if host == "localhost" or host.endswith(".local"):
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False  # 域名走系统代理，那是用户自己要的行为
+    return ip.is_loopback or ip.is_private or ip.is_unspecified
+
+
+def _verify_chat(p: ProviderCfg, *, headers: dict, timeout_s: float = 20.0) -> tuple[bool, str]:
+    """发一次 max_tokens=1 的补全。/models 通了只说明"有个 OpenAI 兼容服务
+    在这个端口上"，不说明你配的那个模型真能出字。
+
+    超时给到 20s、连接 3s：本地 7B 首次被请求时要先加载权重，十几秒都正常，
+    沿用服务探测的 2.5s 会把"正在加载"误判成"不通"。
+    """
+    url = p.base_url.rstrip("/") + "/chat/completions"
+    payload = {
+        "model": p.model or "default",
+        "messages": [{"role": "user", "content": "ping"}],
+        "max_tokens": 1,
+        "temperature": 0,
+        "stream": False,
+    }
+    try:
+        with httpx.Client(
+            timeout=httpx.Timeout(timeout_s, connect=3.0),
+            trust_env=not _is_local(url),
+        ) as client:
+            resp = client.post(url, headers=headers, json=payload)
+            resp.raise_for_status()
+            body = resp.json()
+        if not body.get("choices"):
+            return False, "响应里没有 choices"
+        return True, ""
+    except Exception as exc:  # noqa: BLE001 - 探测必须吞掉一切异常
+        return False, _classify(exc)[1]
+
+
+def probe_one(
+    name: str, p: ProviderCfg, *, timeout_s: float = 2.5, chat_timeout_s: float = 10.0
+) -> dict[str, Any]:
+    started = time.perf_counter()
+    result: dict[str, Any] = {
+        "name": name,
+        "kind": p.kind,
+        "base_url": p.base_url,
+        "model": p.model,
+        "checked_at": time.time(),
+    }
+
+    if p.kind == "mock" or not p.base_url:
+        result.update(
+            status="mock" if p.kind == "mock" else "unset",
+            ok=p.kind == "mock",
+            latency_ms=0,
+            message="不发起网络请求" if p.kind == "mock" else "还没填 base_url",
+            models=[],
+        )
+        return result
+
+    headers = {}
+    key = p.api_key(name)
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+    # 没填密钥也照发：有些自建网关不需要鉴权，先斩后奏比直接拦死准。
+    # 真被拒了再在错误信息里点明"是缺密钥"，而不是丢一个裸 401 让人自己猜。
+    auth_miss = not key
+
+    url = p.base_url.rstrip("/") + "/models"
+    try:
+        with httpx.Client(
+            timeout=httpx.Timeout(timeout_s, connect=min(1.5, timeout_s)),
+            trust_env=not _is_local(url),
+        ) as client:
+            resp = client.get(url, headers=headers)
+            resp.raise_for_status()
+            body = resp.json()
+        ids = [
+            str(m.get("id"))
+            for m in (body.get("data") or [])
+            if isinstance(m, dict) and m.get("id")
+        ]
+        latency = int((time.perf_counter() - started) * 1000)
+        listed = p.model in ids
+        # 图像/语音/实时/向量这几类也会挂在同一个 /models 下，不能让人去点它们
+        chat_ids, hidden = split_chat_models(ids)
+        # /models 200 ≠ 联通。追加对话验证：真能出 1 个 token 才算 ok。
+        chat_ok, chat_msg = _verify_chat(p, headers=headers, timeout_s=chat_timeout_s)
+        if chat_ok:
+            status = "ok"
+            if ids:
+                msg = f"就绪 · 对话验证通过 · {len(chat_ids)} 个可对话模型"
+                if hidden:
+                    msg += f"（另有 {hidden} 个图像/语音/实时类已隐藏）"
+            else:
+                msg = "就绪 · 对话验证通过（/models 返回空列表）"
+        elif not ids:
+            status = "warn"
+            msg = "服务在跑，但 /models 返回空列表、对话也没通 —— 先在服务里加载一个模型"
+        else:
+            status = "warn"
+            extra = "" if listed else f"（且模型列表里没有 {p.model}）"
+            if "403" in chat_msg or "401" in chat_msg:
+                # 列表能拉、对话被拒：最常见的两个原因是"这个模型不归这把密钥调"
+                # 与"专属部署得用业务空间域名"。不点破的话，用户只会反复换密钥。
+                hint = ("（模型出现在 /models 里 ≠ 这把密钥能调用它：先换个模型试；"
+                        "专属部署要在业务空间专属域名下调用）")
+            elif p.model not in chat_ids:
+                hint = "（这个模型多半不是文本对话模型，换一个 qwen-plus / glm / deepseek 这类）"
+            elif "超时" in chat_msg:
+                hint = "（可能是模型正在加载，稍后重试）"
+            else:
+                hint = ""
+            msg = f"服务在跑，但 {p.model} 对话失败 —— {chat_msg}{hint}{extra}"
+        result.update(status=status, ok=True, latency_ms=latency, message=msg,
+                      models=chat_ids[:60], models_hidden=hidden,
+                      models_total=len(ids), model_listed=listed)
+    except Exception as exc:  # noqa: BLE001 - 探测必须吞掉一切异常
+        status, message = _classify(exc)
+        code = getattr(exc, "response", None)
+        code = getattr(code, "status_code", None) if code is not None else None
+        if auth_miss and (code in (401, 403) or "401" in message or "403" in message):
+            status, message = "no_key", "这个服务要鉴权，但还没填密钥——在弹窗里填 API Key 再探测"
+        result.update(
+            status=status, ok=False,
+            latency_ms=int((time.perf_counter() - started) * 1000),
+            message=message, models=[],
+        )
+    return result
+
+
+def _ensure_cache_file(cfg: Config) -> None:
+    """绑定落盘路径并读回上次的结果。只做一次；探测结果跨重启保留，
+    模型页才不会在服务重启后全部显示"还没探测"。"""
+    global _CACHE_FILE, _CACHE_LOADED
+    if _CACHE_LOADED:
+        return
+    with _CACHE_LOCK:
+        if _CACHE_LOADED:
+            return
+        try:
+            _CACHE_FILE = cfg.storage.data_dir / "probe_cache.json"
+            if _CACHE_FILE.exists():
+                data = json.loads(_CACHE_FILE.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    _CACHE.update(data)
+        except Exception:  # noqa: BLE001 - 缓存坏了不该挡住探测
+            pass
+        _CACHE_LOADED = True
+
+
+def _persist() -> None:
+    if _CACHE_FILE is None:
+        return
+    try:
+        _CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = _CACHE_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(_CACHE, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(_CACHE_FILE)
+    except Exception:  # noqa: BLE001 - 落盘失败只影响下次重启的展示
+        pass
+
+
+def record(item: dict[str, Any]) -> None:
+    """外部（如 /api/services/probe?name=）探测完单颗后写缓存。"""
+    with _CACHE_LOCK:
+        _CACHE[item["name"]] = item
+    _persist()
+
+
+def probe_all(cfg: Config, *, force: bool = True) -> dict[str, dict[str, Any]]:
+    _ensure_cache_file(cfg)
+    now = time.time()
+    names = list(cfg.generation.providers)
+
+    def run(name: str) -> tuple[str, dict[str, Any]]:
+        cached = _CACHE.get(name)
+        if not force and cached and now - cached["checked_at"] < CACHE_TTL_S:
+            return name, cached
+        return name, probe_one(name, cfg.generation.providers[name])
+
+    with ThreadPoolExecutor(max_workers=min(4, max(1, len(names)))) as pool:
+        for name, item in pool.map(run, names):
+            with _CACHE_LOCK:
+                _CACHE[name] = item
+    _persist()
+    return {name: _CACHE[name] for name in names if name in _CACHE}
+
+
+def cached(name: str, *, max_age_s: float = 24 * 3600) -> dict[str, Any] | None:
+    """上次探测结果。窗口给到 24h：这是"最近一次的结论"而不是"实时状态"，
+    前端会显示探测时间；真要新数据走强制探测。之前窗口只有 300s，服务重启
+    后模型页整页"还没探测"，看起来像数据全丢了。"""
+    item = _CACHE.get(name)
+    if item and time.time() - item["checked_at"] < max_age_s:
+        return item
+    return None
+
+
+def invalidate(name: str | None = None) -> None:
+    with _CACHE_LOCK:
+        if name is None:
+            _CACHE.clear()
+        else:
+            _CACHE.pop(name, None)
+    _persist()

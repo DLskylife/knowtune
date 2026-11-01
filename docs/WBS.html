@@ -1,0 +1,445 @@
+<!doctype html><html lang="zh-CN"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>sky_agent WBS · 工作分解结构</title>
+<meta name="description" content="sky_agent 本地 RAG 知识库的 WBS 图与工作包字典">
+<style>
+*{box-sizing:border-box}
+:root{
+  --paper:#FBFAF7; --card:#FFFFFF; --ink:#23262A; --ink-2:#4E5459; --ink-3:#878D93;
+  --brand:#0F6E56; --brand-soft:#E1F5EE; --gold:#B8863B; --gold-soft:#FAEEDA;
+  --line:#E6E2D8; --line-2:#F1EEE6; --warn:#B45309; --todo:#8A8F94; --ok:#0F6E56;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --paper:#141614; --card:#1B1E1B; --ink:#E8EBE7; --ink-2:#B4BAB5; --ink-3:#868C87;
+    --brand:#5DCAA5; --brand-soft:#122A22; --gold:#E8C07A; --gold-soft:#2A2115;
+    --line:#2C302C; --line-2:#232623; --warn:#F0A868; --todo:#8A908C; --ok:#5DCAA5;
+  }
+}
+html{-webkit-text-size-adjust:100%}
+body{
+  margin:0; background:var(--paper); color:var(--ink);
+  font:400 15px/1.72 system-ui,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1160px;margin:0 auto;padding:56px 28px 96px}
+.narrow{max-width:820px}
+
+/* ---------- 抬头 ---------- */
+.eyebrow{
+  font-size:12px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--brand);font-weight:500;margin-bottom:14px;
+}
+h1{
+  font-size:34px;line-height:1.28;font-weight:500;margin:0 0 16px;
+  letter-spacing:-.01em;
+}
+.lead{font-size:16px;color:var(--ink-2);max-width:720px;margin:0 0 8px}
+.lead b{font-weight:500;color:var(--ink)}
+.meta{
+  margin-top:22px;padding-top:18px;border-top:1px solid var(--line);
+  font-size:12.5px;color:var(--ink-3);display:flex;flex-wrap:wrap;gap:8px 22px;
+}
+.meta b{font-weight:500;color:var(--ink-2)}
+
+/* ---------- 指标 ---------- */
+.metrics{
+  display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+  gap:12px;margin:34px 0 8px;
+}
+.m{background:var(--card);border:.5px solid var(--line);border-radius:12px;padding:16px 18px}
+.m .k{font-size:12px;color:var(--ink-3);margin-bottom:6px}
+.m .v{font-size:26px;font-weight:500;line-height:1.1;letter-spacing:-.02em}
+.m .v small{font-size:13px;font-weight:400;color:var(--ink-3);margin-left:4px;letter-spacing:0}
+
+/* ---------- 章节 ---------- */
+section{margin-top:64px}
+h2{
+  font-size:20px;font-weight:500;margin:0 0 6px;
+  display:flex;align-items:baseline;gap:10px;
+}
+h2 .num{
+  font-size:12px;font-weight:400;color:var(--brand);
+  font-variant-numeric:tabular-nums;letter-spacing:.06em;
+}
+.sub{color:var(--ink-2);font-size:14px;margin:0 0 24px;max-width:760px}
+
+/* ---------- 图 ---------- */
+.fig{background:var(--card);border:.5px solid var(--line);border-radius:16px;padding:26px 22px}
+.fig svg{display:block;height:auto}
+.legend{
+  display:flex;flex-wrap:wrap;align-items:center;gap:6px 20px;
+  margin-top:18px;padding-top:16px;border-top:1px solid var(--line-2);
+  font-size:12.5px;color:var(--ink-3);
+}
+.legend i{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px}
+.dot-ok{background:var(--ok)}.dot-warn{background:var(--gold)}
+
+/* ---------- 字典 ---------- */
+.tools{display:flex;gap:8px;margin-bottom:18px}
+.tools button{
+  appearance:none;font:inherit;font-size:13px;color:var(--ink-2);
+  background:var(--card);border:.5px solid var(--line);border-radius:8px;
+  padding:6px 14px;cursor:pointer;transition:border-color .14s,color .14s;
+}
+.tools button:hover{border-color:var(--brand);color:var(--brand)}
+.grp{background:var(--card);border:.5px solid var(--line);border-radius:12px;margin-bottom:12px;overflow:hidden}
+.grp>summary{
+  list-style:none;cursor:pointer;padding:15px 20px;
+  display:flex;align-items:center;gap:14px;
+}
+.grp>summary::-webkit-details-marker{display:none}
+.grp>summary::before{
+  content:"";width:6px;height:6px;border-right:1.5px solid var(--ink-3);
+  border-bottom:1.5px solid var(--ink-3);transform:rotate(-45deg);
+  transition:transform .16s;flex:none;margin-top:-3px;
+}
+.grp[open]>summary::before{transform:rotate(45deg);margin-top:0}
+.grp>summary .code{
+  font-variant-numeric:tabular-nums;font-size:13px;color:var(--brand);
+  font-weight:500;flex:none;
+}
+.grp>summary .name{font-size:15.5px;font-weight:500;flex:none}
+.grp>summary .cnt{font-size:12.5px;color:var(--ink-3);flex:none;margin-left:auto}
+.grp>summary .st{flex:none}
+.note{padding:0 20px 14px;font-size:13.5px;color:var(--ink-2)}
+
+table{width:100%;border-collapse:collapse;font-size:13.5px}
+thead th{
+  text-align:left;font-weight:500;font-size:11.5px;letter-spacing:.06em;
+  color:var(--ink-3);text-transform:uppercase;
+  padding:0 12px 9px;border-bottom:1px solid var(--line);
+}
+tbody td{padding:11px 12px;border-bottom:1px solid var(--line-2);vertical-align:top}
+tbody tr:last-child td{border-bottom:0}
+tbody tr:hover{background:color-mix(in srgb,var(--brand) 4%,transparent)}
+td.c{font-variant-numeric:tabular-nums;color:var(--brand);font-weight:500;white-space:nowrap}
+td.w{font-weight:500}
+td.d{color:var(--ink-2);font-size:13px}
+td.r{font-size:12px;color:var(--ink-3);font-variant-numeric:tabular-nums;white-space:nowrap}
+td.s{text-align:right;white-space:nowrap}
+.tb-wrap{padding:0 20px 18px}
+
+.b-ok,.b-warn,.b-todo{
+  display:inline-block;font-size:11.5px;line-height:1.6;padding:2px 9px;
+  border-radius:999px;border:.5px solid transparent;white-space:nowrap;
+}
+.b-ok{color:var(--ok);background:var(--brand-soft);border-color:color-mix(in srgb,var(--ok) 26%,transparent)}
+.b-warn{color:var(--warn);background:var(--gold-soft);border-color:color-mix(in srgb,var(--warn) 26%,transparent)}
+.b-todo{color:var(--todo);background:color-mix(in srgb,var(--todo) 10%,transparent);border-color:color-mix(in srgb,var(--todo) 24%,transparent)}
+
+/* ---------- 缺口 ---------- */
+.gap-tb{background:var(--card);border:.5px solid var(--line);border-radius:12px;overflow:hidden}
+.gap-tb td.impact{color:var(--ink-2);font-size:13px}
+.tag{
+  font-size:11.5px;color:var(--ink-3);background:var(--line-2);
+  padding:1px 7px;border-radius:5px;white-space:nowrap;
+}
+
+/* ---------- 里程碑 ---------- */
+.ms{position:relative;padding-left:26px}
+.ms::before{
+  content:"";position:absolute;left:5px;top:8px;bottom:8px;
+  width:1px;background:var(--line);
+}
+.ms-item{position:relative;padding:0 0 22px}
+.ms-item::before{
+  content:"";position:absolute;left:-25px;top:7px;width:9px;height:9px;
+  border-radius:50%;background:var(--paper);border:1.5px solid var(--brand);
+}
+.ms-item:last-child{padding-bottom:0}
+.ms-h{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.ms-h .c{font-size:13px;font-weight:500;color:var(--brand);font-variant-numeric:tabular-nums}
+.ms-h .n{font-size:14.5px;font-weight:500}
+.ms-h .t{font-size:12px;color:var(--ink-3);font-variant-numeric:tabular-nums;margin-left:auto}
+.ms-p{font-size:13.5px;color:var(--ink-2);margin:3px 0 0}
+
+.risk td.imp{font-size:12.5px;white-space:nowrap}
+.risk td.imp.high{color:var(--warn)}
+.risk td.imp.mid{color:var(--ink-3)}
+
+footer{
+  margin-top:72px;padding-top:22px;border-top:1px solid var(--line);
+  font-size:12.5px;color:var(--ink-3);display:flex;flex-wrap:wrap;gap:6px 20px;
+}
+
+@media (max-width:720px){
+  .wrap{padding:36px 18px 64px}
+  h1{font-size:26px}
+  /* 1120 宽的结构图塞进 390 屏 = 12.5px 字缩成 4px，等于没画。
+     宁可横向滚动，也不能让图变成装饰。 */
+  .fig{padding:16px 12px;overflow-x:auto}
+  .fig svg{min-width:1000px}
+  .grp>summary{padding:13px 14px;gap:10px;flex-wrap:wrap}
+  .grp>summary .cnt{margin-left:0;width:100%}
+  .tb-wrap{padding:0 6px 12px}
+  thead th:nth-child(4),tbody td.c-req{display:none}
+  td.d{font-size:12.5px}
+}
+
+@media print{
+  body{background:#fff;font-size:11pt}
+  .wrap{max-width:none;padding:0}
+  .tools{display:none}
+  .fig,.grp,.gap-tb{break-inside:avoid;box-shadow:none}
+  section{break-before:auto;margin-top:32px}
+  details{display:block}
+  details>summary{list-style:none}
+  a{color:inherit;text-decoration:none}
+}
+</style></head><body><div class="wrap">
+<div class="narrow">
+<div class="eyebrow">Work Breakdown Structure</div>
+<h1>sky_agent 工作分解结构</h1>
+<p class="lead">按<b>交付物</b>分解，不按阶段分解。三层：项目 → 八个一级交付物 → 49 个工作包。每个工作包都能落到仓库里的一个文件或一个端点，每个都标了它覆盖哪条需求。</p>
+<p class="lead">工作包是最底层可估算单元，再往下拆就是在数代码行了，没有管理意义。未实现的 4 条需求同样挂在树上——不留在灰色地带，是 WBS 的 100% 原则。</p>
+<div class="meta">
+<span><b>数据来源</b> ARCHITECTURE.md §9／§14、各包文件路径、测试与评估基线</span>
+<span><b>统计口径</b> 以仓库当前状态为准，非计划值</span>
+</div></div>
+<div class="metrics">
+<div class="m"><div class="k">一级交付物</div><div class="v">8</div></div>
+<div class="m"><div class="k">工作包</div><div class="v">49<small>5 项有缺口</small></div></div>
+<div class="m"><div class="k">需求条目</div><div class="v">32<small>24 / 4 / 4</small></div></div>
+<div class="m"><div class="k">测试</div><div class="v">172<small>条全绿</small></div></div>
+<div class="m"><div class="k">Recall@5</div><div class="v">95.0<small>%</small></div></div>
+<div class="m"><div class="k">代码规模</div><div class="v">21k<small>行</small></div></div>
+</div>
+<section><h2><span class="num">01</span>WBS 图</h2>
+<p class="sub">八个分支按「底座 → 内容 → 检索 → 生成 → 会话 → 评估 → 后台 → 前台」的依赖顺序排列，前一支是后一支的输入。</p>
+<div class="fig">
+<svg viewBox="0 0 1120 570" width="100%" role="img" aria-labelledby="wbsT wbsD">
+<title id="wbsT">sky_agent WBS 工作分解结构</title>
+<desc id="wbsD">根节点为项目，下分八个一级交付物，共四十九个工作包。绿色为已交付，琥珀色为含遗留项。</desc>
+<style>
+.bx rect{fill:#E1F5EE;stroke:#0F6E56;stroke-width:.5}
+.wx rect{fill:#FAEEDA;stroke:#BA7517;stroke-width:.5}
+.bx .gh{fill:#085041}.bx .gs{fill:#0F6E56}
+.wx .gh{fill:#633806}.wx .gs{fill:#854F0B}
+.gh{font-size:14px;font-weight:500}.gs{font-size:12.5px}
+.ed{stroke:#0F6E56;fill:none;stroke-width:.5}
+.rt{fill:none;stroke:#0F6E56;stroke-width:.5}
+@media(prefers-color-scheme:dark){
+.bx rect{fill:#04342C;stroke:#5DCAA5}
+.wx rect{fill:#412402;stroke:#EF9F27}
+.bx .gh{fill:#9FE1CB}.bx .gs{fill:#5DCAA5}
+.wx .gh{fill:#FAC775}.wx .gs{fill:#EF9F27}
+.ed,.rt{stroke:#5DCAA5}
+}
+</style>
+<rect class="rt" x="385" y="16" width="360" height="56" rx="10"/>
+<text x="560" y="40" text-anchor="middle" style="font-size:15px;font-weight:500;fill:currentColor">sky_agent · 本地 RAG 知识库</text>
+<text x="565" y="58" text-anchor="middle" style="font-size:12px;fill:currentColor;opacity:.62">L1 项目 ｜ 8 个一级交付物 ｜ 49 个工作包</text>
+<path class="ed" d="M565 72 V330"/>
+<path class="ed" d="M160.0 96 H970.0"/>
+<path class="ed" d="M160.0 96 V112"/>
+<path class="ed" d="M430.0 96 V112"/>
+<path class="ed" d="M700.0 96 V112"/>
+<path class="ed" d="M970.0 96 V112"/>
+<path class="ed" d="M160.0 330 H970.0"/>
+<path class="ed" d="M160.0 330 V350"/>
+<path class="ed" d="M430.0 330 V350"/>
+<path class="ed" d="M700.0 330 V350"/>
+<path class="ed" d="M970.0 330 V350"/>
+<g class="bx"><rect x="40" y="112" width="240" height="200" rx="10"/>
+<text class="gh" x="56" y="142">1.0 架构与工程</text>
+<text class="gs" x="56" y="166">1.1 架构文档与需求锚定</text>
+<text class="gs" x="56" y="187">1.2 环境自检与依赖锁定</text>
+<text class="gs" x="56" y="208">1.3 三层配置体系</text>
+<text class="gs" x="56" y="229">1.4 SQLite 数据模型</text>
+<text class="gs" x="56" y="250">1.5 单元测试</text>
+<text class="gs" x="56" y="271">1.6 UI 冒烟工装</text>
+<text class="gs" x="56" y="292">1.7 真机实测工装</text>
+</g>
+<g class="wx"><rect x="310" y="112" width="240" height="200" rx="10"/>
+<text class="gh" x="326" y="142">2.0 导入与治理</text>
+<text class="gs" x="326" y="166">2.1 多格式解析</text>
+<text class="gs" x="326" y="187">2.2 清洗与分块策略</text>
+<text class="gs" x="326" y="208">2.3 嵌入与索引写入</text>
+<text class="gs" x="326" y="229">2.4 重索引原子切换</text>
+<text class="gs" x="326" y="250">2.5 URL / 目录导入</text>
+<text class="gs" x="326" y="271">2.6 chunk 预览与编辑</text>
+<text class="gs" x="326" y="292">2.7 多知识库隔离</text>
+</g>
+<g class="wx"><rect x="580" y="112" width="240" height="200" rx="10"/>
+<text class="gh" x="596" y="142">3.0 混合检索</text>
+<text class="gs" x="596" y="166">3.1 稠密向量检索</text>
+<text class="gs" x="596" y="187">3.2 jieba ＋ FTS5 稀疏路</text>
+<text class="gs" x="596" y="208">3.3 归一化加权融合</text>
+<text class="gs" x="596" y="229">3.4 精排与降级</text>
+<text class="gs" x="596" y="250">3.5 元数据过滤 ＋ MMR</text>
+<text class="gs" x="596" y="271">3.6 检索调试端点</text>
+</g>
+<g class="wx"><rect x="850" y="112" width="240" height="200" rx="10"/>
+<text class="gh" x="866" y="142">4.0 生成与引用</text>
+<text class="gs" x="866" y="166">4.1 上下文装填预算</text>
+<text class="gs" x="866" y="187">4.2 强制引用与校验</text>
+<text class="gs" x="866" y="208">4.3 检索证据分档</text>
+<text class="gs" x="866" y="229">4.4 拒答双条件与标定</text>
+<text class="gs" x="866" y="250">4.5 SSE 流式四事件</text>
+<text class="gs" x="866" y="271">4.6 多后端接入</text>
+</g>
+<g class="wx"><rect x="40" y="350" width="240" height="200" rx="10"/>
+<text class="gh" x="56" y="380">5.0 会话系统</text>
+<text class="gs" x="56" y="404">5.1 多会话 CRUD</text>
+<text class="gs" x="56" y="425">5.2 多轮上下文预算</text>
+<text class="gs" x="56" y="446">5.3 消息持久化</text>
+<text class="gs" x="56" y="467">5.4 反馈收集</text>
+<text class="gs" x="56" y="488">5.5 历史恢复</text>
+</g>
+<g class="wx"><rect x="310" y="350" width="240" height="200" rx="10"/>
+<text class="gh" x="326" y="380">6.0 评估与观测</text>
+<text class="gs" x="326" y="404">6.1 评估集 22 条</text>
+<text class="gs" x="326" y="425">6.2 Recall@K / MRR</text>
+<text class="gs" x="326" y="446">6.3 拒答阈值标定</text>
+<text class="gs" x="326" y="467">6.4 请求日志埋点</text>
+<text class="gs" x="326" y="488">6.5 忠实度判据</text>
+</g>
+<g class="bx"><rect x="580" y="350" width="240" height="200" rx="10"/>
+<text class="gh" x="596" y="380">7.0 管理后台</text>
+<text class="gs" x="596" y="404">7.1 四视图外壳</text>
+<text class="gs" x="596" y="425">7.2 首页仪表盘</text>
+<text class="gs" x="596" y="446">7.3 对话视图</text>
+<text class="gs" x="596" y="467">7.4 知识库视图</text>
+<text class="gs" x="596" y="488">7.5 参数面板</text>
+<text class="gs" x="596" y="509">7.6 模型页与探测</text>
+<text class="gs" x="596" y="530">7.7 云端密钥内存化</text>
+</g>
+<g class="bx"><rect x="850" y="350" width="240" height="200" rx="10"/>
+<text class="gh" x="866" y="380">8.0 维语前台</text>
+<text class="gs" x="866" y="404">8.1 站点与服务实例</text>
+<text class="gs" x="866" y="425">8.2 翻译／推理双角色</text>
+<text class="gs" x="866" y="446">8.3 中维切换零位移</text>
+<text class="gs" x="866" y="467">8.4 视觉体系重做</text>
+<text class="gs" x="866" y="488">8.5 本机会话存档</text>
+<text class="gs" x="866" y="509">8.6 错误态与降级</text>
+</g>
+</svg>
+<div class="legend">
+<span><i class="dot-ok"></i>已交付：工作包全部到位</span>
+<span><i class="dot-warn"></i>有遗留：至少一个工作包未完成或受限</span>
+<span style="margin-left:auto">44 已交付 · 4 有限制 · 1 未做</span>
+</div></div></section>
+<section><h2><span class="num">02</span>WBS 字典</h2>
+<p class="sub">每个工作包的交付物写在「落地位置」列，点开分组可看到覆盖的需求编号。这些路径就是审查时的入口。</p>
+<div class="tools"><button onclick="setAll(true)">全部展开</button><button onclick="setAll(false)">全部折叠</button></div>
+<details class="grp" open><summary><span class="code">1.0</span><span class="name">架构与工程</span><span class="cnt">7 个工作包 · 7 完成</span><span class="st"><span class="b-ok">已交付</span></span></summary>
+<p class="note">项目基座。文档、配置、数据模型、测试工装都在这一支，其余七支都踩在它上面。</p>
+<div class="tb-wrap"><table><thead><tr><th style="width:9%">编号</th><th style="width:23%">工作包</th><th>交付物 / 落地位置</th><th style="width:13%" class="c-req">覆盖需求</th><th style="width:11%;text-align:right">状态</th></tr></thead><tbody>
+<tr><td class="c">1.1</td><td class="w">架构文档与需求锚定</td><td class="d">docs/ARCHITECTURE.md（1857 行）＋ F1–F5 逐条对照表</td><td class="r c-req">全量</td><td class="s"><span class="b-ok">已交付</span></td></tr>
+<tr><td class="c">1.2</td><td class="w">环境自检与依赖锁定</td><td class="d">scripts/check_env.py → docs/env_report.json；CPU 版 torch、HF 镜像抓取</td><td class="r c-req">S0</td><td class="s"><span class="b-ok">已交付</span></td></tr>
+<tr><td class="c">1.3</td><td class="w">三层配置体系</td><td class="d">default.yaml → models.yaml → 知识库级覆盖（kbconfig.py）</td><td class="r c-req">F1.5</td><td class="s"><span class="b-ok">已交付</span></td></tr>
+<tr><td class="c">1.4</td><td class="w">SQLite 数据模型</td><td class="d">schema.sql；代次 generation ＋ active_gen 原子切换</td><td class="r c-req">F1.7</td><td class="s"><span class="b-ok">已交付</span></td></tr>
+<tr><td class="c">1.5</td><td class="w">单元测试</td><td class="d">tests/test_core.py，172 条，含密钥、站点角色、模型清单</td><td class="r c-req">—</td><td class="s"><span class="b-ok">已交付</span></td></tr>
+<tr><td class="c">1.6</td><td class="w">UI 冒烟工装</td><td class="d">scripts/uismoke.py，34 项断言；切语言 8 锚点位移检测</td><td class="r c-req">—</td><td class="s"><span class="b-ok">已交付</span></td></tr>
+<tr><td class="c">1.7</td><td class="w">真机实测工装</td><td class="d">scripts/livecheck.py（CDP 打真接口）＋ scripts/shot.py（截图）</td><td class="r c-req">—</td><td class="s"><span class="b-ok">已交付</span></td></tr>
+</tbody></table></div></details>
+<details class="grp" open><summary><span class="code">2.0</span><span class="name">导入与治理</span><span class="cnt">7 个工作包 · 6 完成</span><span class="st"><span class="b-warn">有限制</span></span></summary>
+<p class="note">把格式各异的文件变成可检索、可追溯、可回滚的 chunk。垃圾进就是垃圾出。</p>
+<div class="tb-wrap"><table><thead><tr><th style="width:9%">编号</th><th style="width:23%">工作包</th><th>交付物 / 落地位置</th><th style="width:13%" class="c-req">覆盖需求</th><th style="width:11%;text-align:right">状态</th></tr></thead><tbody>
+<tr><td class="c">2.1</td><td class="w">多格式解析</td><td class="d">ingest/loader.py：PDF/Word/Excel/PPT/MD/TXT/源码；无文本层显式报错不静默</td><td class="r c-req">F1.1</td><td class="s"><span class="b-ok">已交付</span></td></tr>
+<tr><td class="c">2.2</td><td class="w">清洗与分块策略</td><td class="d">ingest/cleaner.py ＋ chunker.py；按文档类型分档 chunk size</td><td class="r c-req">F1.1</td><td class="s"><span class="b-ok">已交付</span></td></tr>
+<tr><td class="c">2.3</td><td class="w">嵌入与索引写入</td><td class="d">index/embedder.py ＋ vectors.py ＋ sparse.py；bge-small-zh 512 维</td><td class="r c-req">F2.1 / F2.2</td><td class="s"><span class="b-ok">已交付</span></td></tr>
+<tr><td class="c">2.4</td><td class="w">重索引原子切换</td><td class="d">代次隔离，旧索引在新索引 ready 之前继续对外服务</td><td class="r c-req">F1.7</td><td class="s"><span class="b-ok">已交付</span></td></tr>
+<tr><td class="c">2.5</td><td class="w">URL / 目录导入</td><td class="d">单条 ＋ 批量 ≤50、SSRF 防护、域名白名单；目录递归 ≤500 文件</td><td class="r c-req">F1.2 / F1.3</td><td class="s"><span class="b-warn">有限制</span></td></tr>
+<tr><td class="c">2.6</td><td class="w">chunk 预览与编辑</td><td class="d">GET/PATCH/split/merge/DELETE；改完只重算该条的分词/哈希/嵌入/FTS</td><td class="r c-req">F1.4</td><td class="s"><span class="b-ok">已交付</span></td></tr>
+<tr><td class="c">2.7</td><td class="w">多知识库隔离</td><td class="d">检索 SQL 与向量 mask 双路按 kb_id 过滤，防一路过滤一路漏检</td><td class="r c-req">F1.5</td><td class="s"><span class="b-ok">已交付</span></td></tr>
+</tbody></table></div></details>
+<details class="grp" open><summary><span class="code">3.0</span><span class="name">混合检索</span><span class="cnt">6 个工作包 · 5 完成</span><span class="st"><span class="b-warn">有限制</span></span></summary>
+<p class="note">系统的质量天花板。上游不给对，下游再会写也只能编。</p>
+<div class="tb-wrap"><table><thead><tr><th style="width:9%">编号</th><th style="width:23%">工作包</th><th>交付物 / 落地位置</th><th style="width:13%" class="c-req">覆盖需求</th><th style="width:11%;text-align:right">状态</th></tr></thead><tbody>
+<tr><td class="c">3.1</td><td class="w">稠密向量检索</td><td class="d">bge-small-zh-v1.5，numpy 暴力点积，61 chunk 实测 17–36ms</td><td class="r c-req">F2.1</td><td class="s"><span class="b-ok">已交付</span></td></tr>
+<tr><td class="c">3.2</td><td class="w">jieba ＋ FTS5 稀疏路</td><td class="d">预分词后写入；实测 trigram 对 2 字查询命中为 0，故弃用默认分词器</td><td class="r c-req">F2.2</td><td class="s"><span class="b-ok">已交付</span></td></tr>
+<tr><td class="c">3.3</td><td class="w">归一化加权融合</td><td class="d">0.50 稠密 ＋ 0.35 稀疏，归一化后加权（RRF 在长尾上拖后腿，已替换）</td><td class="r c-req">F2.3</td><td class="s"><span class="b-ok">已交付</span></td></tr>
+<tr><td class="c">3.4</td><td class="w">精排与降级</td><td class="d">CrossEncoder 路径完整（超时降级／失败缓存），模型未下载 → rerank_unavailable</td><td class="r c-req">F2.4</td><td class="s"><span class="b-warn">有限制</span></td></tr>
+<tr><td class="c">3.5</td><td class="w">元数据过滤 ＋ MMR</td><td class="d">source_types／时间范围／doc_ids，两路同一组条件；MMR 默认关闭</td><td class="r c-req">F2.6 / F2.7</td><td class="s"><span class="b-ok">已交付</span></td></tr>
+<tr><td class="c">3.6</td><td class="w">检索调试端点</td><td class="d">/api/search/debug：dense／sparse／融合／耗时／降级／拒答判定</td><td class="r c-req">F2.8</td><td class="s"><span class="b-ok">已交付</span></td></tr>
+</tbody></table></div></details>
+<details class="grp" open><summary><span class="code">4.0</span><span class="name">生成与引用</span><span class="cnt">6 个工作包 · 5 完成</span><span class="st"><span class="b-warn">有限制</span></span></summary>
+<p class="note">让每句话都能被点开验证，或者干脆承认查不到。两件事都不做才是灾难。</p>
+<div class="tb-wrap"><table><thead><tr><th style="width:9%">编号</th><th style="width:23%">工作包</th><th>交付物 / 落地位置</th><th style="width:13%" class="c-req">覆盖需求</th><th style="width:11%;text-align:right">状态</th></tr></thead><tbody>
+<tr><td class="c">4.1</td><td class="w">上下文装填预算</td><td class="d">按相关度排序 ＋ token 预算裁剪，记录 context_used／dropped</td><td class="r c-req">F3.1</td><td class="s"><span class="b-ok">已交付</span></td></tr>
+<tr><td class="c">4.2</td><td class="w">强制引用与校验</td><td class="d">cite.py：引用编号可点回查；覆盖率与越界编号检测</td><td class="r c-req">F3.2</td><td class="s"><span class="b-ok">已交付</span></td></tr>
+<tr><td class="c">4.3</td><td class="w">检索证据分档</td><td class="d">evidence.py：high／medium／low 随 prompt 下发，让模型知道自己站在什么地上</td><td class="r c-req">12.28</td><td class="s"><span class="b-ok">已交付</span></td></tr>
+<tr><td class="c">4.4</td><td class="w">拒答双条件与标定</td><td class="d">绝对阈值 0.54 ＋ 分布区分度；误拒 0%，但阈值分不开「相似但无答案」</td><td class="r c-req">F3.3</td><td class="s"><span class="b-warn">有限制</span></td></tr>
+<tr><td class="c">4.5</td><td class="w">SSE 流式四事件</td><td class="d">meta／delta／done／error，先推 citations 骨架再出字</td><td class="r c-req">F3.4</td><td class="s"><span class="b-ok">已交付</span></td></tr>
+<tr><td class="c">4.6</td><td class="w">多后端接入</td><td class="d">mock／ollama／vllm／openai／deepseek／bailian；参数不兼容退让、代理直连</td><td class="r c-req">F3.5</td><td class="s"><span class="b-ok">已交付</span></td></tr>
+</tbody></table></div></details>
+<details class="grp" open><summary><span class="code">5.0</span><span class="name">会话系统</span><span class="cnt">5 个工作包 · 4 完成</span><span class="st"><span class="b-warn">有限制</span></span></summary>
+<p class="note">多轮追问不失焦，关掉窗口还能找回来。</p>
+<div class="tb-wrap"><table><thead><tr><th style="width:9%">编号</th><th style="width:23%">工作包</th><th>交付物 / 落地位置</th><th style="width:13%" class="c-req">覆盖需求</th><th style="width:11%;text-align:right">状态</th></tr></thead><tbody>
+<tr><td class="c">5.1</td><td class="w">多会话 CRUD</td><td class="d">GET/PATCH/DELETE /api/sessions ＋ 消息列表；Alt+点击重命名</td><td class="r c-req">F4.1</td><td class="s"><span class="b-ok">已交付</span></td></tr>
+<tr><td class="c">5.2</td><td class="w">多轮上下文预算</td><td class="d">最近 5 轮进 prompt，按 token 预算整轮丢弃（不切半句）</td><td class="r c-req">F4.2</td><td class="s"><span class="b-ok">已交付</span></td></tr>
+<tr><td class="c">5.3</td><td class="w">消息持久化</td><td class="d">message 表；message_id 随 done 事件下发，供反馈关联</td><td class="r c-req">F4.1</td><td class="s"><span class="b-ok">已交付</span></td></tr>
+<tr><td class="c">5.4</td><td class="w">反馈收集</td><td class="d">回答下方「有用／无用」＋ 原因自由文本</td><td class="r c-req">F5.6</td><td class="s"><span class="b-ok">已交付</span></td></tr>
+<tr><td class="c">5.5</td><td class="w">历史恢复</td><td class="d">后台走 GET /api/sessions/{id}/messages；前台仍以 localStorage 30 轮为准</td><td class="r c-req">—</td><td class="s"><span class="b-warn">有限制</span></td></tr>
+</tbody></table></div></details>
+<details class="grp" open><summary><span class="code">6.0</span><span class="name">评估与观测</span><span class="cnt">5 个工作包 · 4 完成</span><span class="st"><span class="b-warn">有限制</span></span></summary>
+<p class="note">没有基线的优化都是自我安慰。</p>
+<div class="tb-wrap"><table><thead><tr><th style="width:9%">编号</th><th style="width:23%">工作包</th><th>交付物 / 落地位置</th><th style="width:13%" class="c-req">覆盖需求</th><th style="width:11%;text-align:right">状态</th></tr></thead><tbody>
+<tr><td class="c">6.1</td><td class="w">评估集 22 条</td><td class="d">evals/cases.jsonl：20 可答 ＋ 2 应拒；用文档+关键词匹配，重分块不失效</td><td class="r c-req">F5.1</td><td class="s"><span class="b-ok">已交付</span></td></tr>
+<tr><td class="c">6.2</td><td class="w">Recall@K / MRR</td><td class="d">Recall@5 95.0%／MRR 0.7792／Hit@1 65%／p50 17ms；--save 写基线</td><td class="r c-req">F5.2</td><td class="s"><span class="b-ok">已交付</span></td></tr>
+<tr><td class="c">6.3</td><td class="w">拒答阈值标定</td><td class="d">网格扫描 0.20–0.80 × margin 0–0.12，误拒优先；样本不足明确警告</td><td class="r c-req">F5.4</td><td class="s"><span class="b-ok">已交付</span></td></tr>
+<tr><td class="c">6.4</td><td class="w">请求日志埋点</td><td class="d">query_log：耗时／token／模型／chunk 列表／降级；/api/logs 可按库与时间筛</td><td class="r c-req">F5.5</td><td class="s"><span class="b-ok">已交付</span></td></tr>
+<tr><td class="c">6.5</td><td class="w">忠实度判据</td><td class="d">目前只有引用覆盖率，没有逐句 LLM 判定</td><td class="r c-req">F5.3</td><td class="s"><span class="b-todo">未做</span></td></tr>
+</tbody></table></div></details>
+<details class="grp" open><summary><span class="code">7.0</span><span class="name">管理后台</span><span class="cnt">7 个工作包 · 7 完成</span><span class="st"><span class="b-ok">已交付</span></span></summary>
+<p class="note">给自己看的操作台：知识库、参数、模型、调试面板。</p>
+<div class="tb-wrap"><table><thead><tr><th style="width:9%">编号</th><th style="width:23%">工作包</th><th>交付物 / 落地位置</th><th style="width:13%" class="c-req">覆盖需求</th><th style="width:11%;text-align:right">状态</th></tr></thead><tbody>
+<tr><td class="c">7.1</td><td class="w">四视图外壳</td><td class="d">首页／对话／知识库／模型，左栏常驻</td><td class="r c-req">12.8</td><td class="s"><span class="b-ok">已交付</span></td></tr>
+<tr><td class="c">7.2</td><td class="w">首页仪表盘</td><td class="d">资产、服务状态、模型状态、最近日志一屏</td><td class="r c-req">12.7</td><td class="s"><span class="b-ok">已交付</span></td></tr>
+<tr><td class="c">7.3</td><td class="w">对话视图</td><td class="d">单会话、上下文占用提示、文档预览、检索调试面板</td><td class="r c-req">12.9 / 12.10</td><td class="s"><span class="b-ok">已交付</span></td></tr>
+<tr><td class="c">7.4</td><td class="w">知识库视图</td><td class="d">信息／参数／内容／检索／会话 五栏；导入进度、自检、删库代价预演</td><td class="r c-req">12.14／12.21／12.22／12.24</td><td class="s"><span class="b-ok">已交付</span></td></tr>
+<tr><td class="c">7.5</td><td class="w">参数面板</td><td class="d">数值控件不用滑杆；库级参数改完自动重排，没有「跟随全局」这一层</td><td class="r c-req">12.3／12.17／12.20</td><td class="s"><span class="b-ok">已交付</span></td></tr>
+<tr><td class="c">7.6</td><td class="w">模型页与探测</td><td class="d">后端注册表、按系统给启动命令、探测；/models 通了不等于能调用</td><td class="r c-req">12.6／12.19／12.23</td><td class="s"><span class="b-ok">已交付</span></td></tr>
+<tr><td class="c">7.7</td><td class="w">云端密钥内存化</td><td class="d">secrets.py 进程级 dict，可选落盘 0600；model_dump 不含密钥</td><td class="r c-req">12.30</td><td class="s"><span class="b-ok">已交付</span></td></tr>
+</tbody></table></div></details>
+<details class="grp" open><summary><span class="code">8.0</span><span class="name">维语前台</span><span class="cnt">6 个工作包 · 6 完成</span><span class="st"><span class="b-ok">已交付</span></span></summary>
+<p class="note">给终端用户看的：一个提问框，和一份带来源的答案。</p>
+<div class="tb-wrap"><table><thead><tr><th style="width:9%">编号</th><th style="width:23%">工作包</th><th>交付物 / 落地位置</th><th style="width:13%" class="c-req">覆盖需求</th><th style="width:11%;text-align:right">状态</th></tr></thead><tbody>
+<tr><td class="c">8.1</td><td class="w">站点与服务实例</td><td class="d">前台 8800／后台 8000；同进程复用 state，站点流程不与 /api/ask 共用</td><td class="r c-req">12.26</td><td class="s"><span class="b-ok">已交付</span></td></tr>
+<tr><td class="c">8.2</td><td class="w">翻译／推理双角色</td><td class="d">roles.py 解析两个模型；/api/info 与 /api/ask 走同一解析路径</td><td class="r c-req">12.27</td><td class="s"><span class="b-ok">已交付</span></td></tr>
+<tr><td class="c">8.3</td><td class="w">中维切换零位移</td><td class="d">html[dir] 恒 ltr，骨架用物理 left/right；8 锚点 1px 位移即断言失败</td><td class="r c-req">12.32</td><td class="s"><span class="b-ok">已交付</span></td></tr>
+<tr><td class="c">8.4</td><td class="w">视觉体系重做</td><td class="d">左栏＋居中欢迎＋圆角输入框；纸白／深青绿／砂金，纯 CSS 八角星徽记</td><td class="r c-req">12.31</td><td class="s"><span class="b-ok">已交付</span></td></tr>
+<tr><td class="c">8.5</td><td class="w">本机会话存档</td><td class="d">localStorage 30 轮，单条答案截 12000 字；写盘失败静默降级</td><td class="r c-req">—</td><td class="s"><span class="b-ok">已交付</span></td></tr>
+<tr><td class="c">8.6</td><td class="w">错误态与降级</td><td class="d">用户看一句话，原文进 title；砖橙气泡＋感叹号，不暴露堆栈</td><td class="r c-req">12.32</td><td class="s"><span class="b-ok">已交付</span></td></tr>
+</tbody></table></div></details>
+<section><h2><span class="num">03</span>范围缺口</h2>
+<p class="sub">九项明确知道没做完或做不透的地方。列出来不是自我批评，是让下一个决定有依据——哪些能忍，哪些必须补。</p>
+<div class="gap-tb"><div class="tb-wrap" style="padding-top:18px"><table><thead><tr><th style="width:7%">编号</th><th style="width:17%">缺口</th><th style="width:30%">现状</th><th style="width:9%">所属</th><th style="width:37%">影响</th></tr></thead><tbody>
+<tr><td class="c">F2.5</td><td class="w">查询改写</td><td class="d">配置项 retrieval.query_rewrite 已留，未实现</td><td><span class="tag">检索</span></td><td class="impact">多轮指代（它／这个）退回给模型自己扛，召回靠运气</td></tr>
+<tr><td class="c">F4.3</td><td class="w">对话内查询改写</td><td class="d">未实现</td><td><span class="tag">会话</span></td><td class="impact">追问第 3 轮之后容易答非所问</td></tr>
+<tr><td class="c">F4.4</td><td class="w">历史检索</td><td class="d">未实现</td><td><span class="tag">会话</span></td><td class="impact">只能按会话翻，不能跨会话搜「我以前问过什么」</td></tr>
+<tr><td class="c">F5.3</td><td class="w">生成忠实度</td><td class="d">只有 cite.verify 的引用覆盖率，无逐句判据</td><td><span class="tag">评估</span></td><td class="impact">引用编号对得上 ≠ 那句话被资料支持，存在「引了但没用」的盲区</td></tr>
+<tr><td class="c">F2.4</td><td class="w">精排模型未下载</td><td class="d">reranker 权重缺失，走 rerank_unavailable 降级</td><td><span class="tag">检索</span></td><td class="impact">召回质量停在融合层；补齐后 p95 会涨约 1.3s（CPU）</td></tr>
+<tr><td class="c">F3.3</td><td class="w">拒答方法边界</td><td class="d">阈值已标定 0.54、误拒 0%，但 r02 top=0.599 高于多数正样本</td><td><span class="tag">生成</span></td><td class="impact">分数阈值在语义上分不开「相似但没答案」，需换判据而非调参</td></tr>
+<tr><td class="c">F1.2</td><td class="w">sitemap 整站抓取</td><td class="d">单条＋批量 ≤50 已通，整站未做</td><td><span class="tag">导入</span></td><td class="impact">整站迁移知识库要手工分批</td></tr>
+<tr><td class="c">F1.3</td><td class="w">.gitignore 解析</td><td class="d">只有扩展名白名单兜底</td><td><span class="tag">导入</span></td><td class="impact">导代码仓库会带进一堆噪音文件</td></tr>
+<tr><td class="c">—</td><td class="w">前台历史只存本地</td><td class="d">后台有 /api/sessions/{id}/messages 且后台前端在用；前台没接</td><td><span class="tag">会话</span></td><td class="impact">换设备／清缓存后前台历史全丢，服务端其实有数据却用不上</td></tr>
+</tbody></table></div></div></section>
+<section><h2><span class="num">04</span>里程碑</h2>
+<p class="sub">S0–S6 是竖切片阶段，D3／D4 是两个交付界面。日期来自项目记录，不是排期——这座塔是三天垒起来的。</p>
+<div class="ms">
+<div class="ms-item"><div class="ms-h"><span class="c">S0</span><span class="n">环境自检</span><span class="t">10-27</span></div><p class="ms-p">输出 JSON 报告，FTS5 与中文分词项全绿</p></div>
+<div class="ms-item"><div class="ms-h"><span class="c">S1</span><span class="n">竖切片</span><span class="t">10-27</span></div><p class="ms-p">1 个 .md → 切分 → 嵌入 → 双路检索 → 带 [1] 的答案</p></div>
+<div class="ms-item"><div class="ms-h"><span class="c">S2</span><span class="n">检索质量</span><span class="t">10-27</span></div><p class="ms-p">20 条评估集＋Recall@5 基线，目标 ≥70%（实测 95.0%）</p></div>
+<div class="ms-item"><div class="ms-h"><span class="c">S3</span><span class="n">加固</span><span class="t">10-27</span></div><p class="ms-p">断网／断模型／坏文件三种故障不崩、有可读原因；SSE</p></div>
+<div class="ms-item"><div class="ms-h"><span class="c">S4</span><span class="n">会话</span><span class="t">10-27</span></div><p class="ms-p">多会话、多轮、持久化、反馈</p></div>
+<div class="ms-item"><div class="ms-h"><span class="c">S5</span><span class="n">拒答标定</span><span class="t">10-27</span></div><p class="ms-p">calibrate 脚本＋双条件判定，误拒 ≤10%（实测 0%）</p></div>
+<div class="ms-item"><div class="ms-h"><span class="c">S6</span><span class="n">复杂导入</span><span class="t">10-28</span></div><p class="ms-p">PDF／Office／URL／目录；10 篇抽 9 篇可读</p></div>
+<div class="ms-item"><div class="ms-h"><span class="c">D3</span><span class="n">管理后台</span><span class="t">10-27 → 10-29</span></div><p class="ms-p">四视图外壳＋参数面板＋模型页＋密钥内存化（§12.1–12.30）</p></div>
+<div class="ms-item"><div class="ms-h"><span class="c">D4</span><span class="n">维语前台</span><span class="t">10-28 → 10-29</span></div><p class="ms-p">独立站点 8800；1.7.0 骨架零镜像，34 项 UI 断言全过</p></div>
+</div></section>
+<section><h2><span class="num">05</span>风险清单</h2>
+<p class="sub">只留会真的咬人的。已经发生过的标为高——概率不再是估计，是记录。</p>
+<div class="gap-tb risk"><div class="tb-wrap" style="padding-top:18px"><table><thead><tr><th>风险</th><th style="width:10%">概率</th><th>缓解</th></tr></thead><tbody>
+<tr><td class="w">CPU 精排把 P95 拖到 5s+</td><td class="imp high">高</td><td class="d">默认 base 档＋候选降到 10＋可关闭；当前直接降级</td></tr>
+<tr><td class="w">拒答阈值未标定导致误拒</td><td class="imp high">高</td><td class="d">S5 已标定 0.54，未标定时界面明示</td></tr>
+<tr><td class="w">评估集随分块策略失效</td><td class="imp mid">中</td><td class="d">expected 用文档级＋关键词柔性匹配，不用 chunk_id</td></tr>
+<tr><td class="w">PDF 抽取质量差（双栏／表格）</td><td class="imp high">高</td><td class="d">抽取器可替换＋导入后强制人工预览（2.6）</td></tr>
+<tr><td class="w">jieba 切碎专有名词</td><td class="imp mid">中</td><td class="d">用户词典＋自动沉淀术语</td></tr>
+<tr><td class="w">bge 版本漂移导致拒答失准</td><td class="imp mid">中</td><td class="d">模型名带版本号入库，换模型强制重标定</td></tr>
+</tbody></table></div></div></section>
+<footer><span>由 scripts/gen_wbs.py 生成</span><span>数据随仓库更新，重跑即可刷新</span><span>口径：仓库当前状态</span></footer>
+</div><script>function setAll(v){document.querySelectorAll("details.grp").forEach(function(d){d.open=v})}</script></div></body></html>

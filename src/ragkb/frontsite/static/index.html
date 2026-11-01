@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="ug" dir="ltr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>ئۇيغۇر تېبابىتى بىلىم سوئال-جاۋاب سىستېمىسى</title>
+<link rel="stylesheet" href="/style.css?v=1.7.4">
+<link rel="icon" href="data:,">
+<script>
+  /*
+   * 构建号自检。HTML 是 no-store 的，但 WebView 仍可能把旧的 app.js 留在缓存里，
+   * 于是出现"HTML 新、JS 旧"：按钮按新版渲染出来了，事件却是旧 JS 绑的（或根本
+   * 没绑）——表现就是"按钮在，点了没反应"。这里用页面里这份**一定是新的**编号去
+   * 核对 app.js 报上来的编号，对不上就强制换一次。只换一次（sessionStorage 记
+   * 一笔），免得极端情况下刷成死循环。
+   */
+  window.SITE_REQ_BUILD = "1.7.4";
+  addEventListener("load", function () {
+    if (window.SITE_BUILD === window.SITE_REQ_BUILD) return;
+    if (sessionStorage.getItem("ragkb.site.reloaded")) return;
+    sessionStorage.setItem("ragkb.site.reloaded", "1");
+    location.replace(location.pathname + "?cb=" + Date.now());
+  });
+</script>
+</head>
+<body>
+<div class="app">
+
+  <!-- 左侧栏：导航与语言开关。位置永远在左，切语言也不动——
+       这是这次改版最重要的一条：镜像整页会让所有元素换边，用户点完
+       开关就找不到刚才那个按钮了。 -->
+  <aside class="side" id="side" aria-label="导航">
+    <div class="side-head">
+      <!-- 品牌徽记：纯 CSS 画的八角星（两个方块旋转叠加），不引外部图片，
+           离线下也不会变成碎图标 -->
+      <span class="brand-mark" aria-hidden="true"><i></i><i></i></span>
+      <div class="side-id">
+        <p class="side-name" id="sideName" dir="auto"></p>
+        <p class="side-meta" id="sideMeta" dir="ltr"></p>
+      </div>
+    </div>
+
+    <button class="new-chat" id="btnNew" type="button">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+      <span id="newLabel"></span>
+    </button>
+
+    <div class="side-scroll" id="sideScroll"></div>
+  </aside>
+
+  <div class="scrim" id="scrim" hidden></div>
+
+  <div class="main" id="main">
+    <header class="top">
+      <button class="icon-btn only-narrow" id="btnSide" type="button" aria-label="menu">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+      </button>
+      <div class="top-id">
+        <!-- 标题左对齐是写死的物理方向（不是 start），所以 dir 只影响字形顺序，
+             切换语言时文字位置不会跳。 -->
+        <h1 id="siteTitle" dir="auto"></h1>
+        <p class="sub" id="siteSub" dir="auto"></p>
+      </div>
+      <!-- 中/维切换是全局的：一次点完，整页所有回答一起换语言。常显——
+           "拿到原稿才出现"的写法等于没问过问题就永远看不见按钮。
+           两颗并排按钮 + 当前语言高亮：比一颗"点了会变成X"的按钮清楚得多。 -->
+      <div class="lang-switch" id="langSwitch" role="group" aria-label="语言"></div>
+    </header>
+
+    <main class="chat" id="chat">
+      <div class="welcome" id="welcome" hidden>
+        <h2 class="wel-text" id="welText" dir="auto"></h2>
+        <p class="wel-hint" id="welHint" dir="auto"></p>
+        <div class="samples" id="samples"></div>
+      </div>
+      <div class="msgs" id="msgs"></div>
+    </main>
+
+    <!-- 用户往上翻看旧答案时，新内容不该把他拽回底部。这个按钮只在
+         "已经不在底部"时出现，点一下回到底部并恢复自动跟随。 -->
+    <button class="to-bottom" id="toBottom" type="button" hidden>
+      <span class="arrow" aria-hidden="true">↓</span><span id="toBottomLabel"></span>
+    </button>
+
+    <footer class="composer">
+      <div class="status" id="status" hidden></div>
+      <div class="box">
+        <!-- dir=auto：输维吾尔语自动按 RTL 排，输中文自动按 LTR 排 -->
+        <textarea id="q" rows="1" dir="auto" autocomplete="off" spellcheck="false"></textarea>
+        <div class="box-foot">
+          <!-- 只陈述事实：资料是什么语言、答案是什么语言。它不是按钮，
+               放这里是告诉用户"为什么答案有时来得慢"。 -->
+          <span class="tool" id="toolChip"></span>
+          <span class="grow"></span>
+          <button class="send" id="btnSend" type="button" disabled>
+            <svg class="ico-send" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 19V5M5.5 11.5 12 5l6.5 6.5"/>
+            </svg>
+            <svg class="ico-stop" viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="7" y="7" width="10" height="10" rx="2.5"/>
+            </svg>
+            <span class="sr-only" id="sendLabel"></span>
+          </button>
+        </div>
+      </div>
+      <p class="disclaimer" id="disclaimer" dir="auto"></p>
+    </footer>
+  </div>
+</div>
+<script src="/app.js?v=1.7.4"></script>
+</body>
+</html>

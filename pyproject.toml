@@ -1,0 +1,74 @@
+[build-system]
+requires = ["hatchling>=1.25.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ragkb"
+version = "0.1.0"
+description = "本地个人 RAG 知识库：多格式导入 + 混合检索 + 带引用生成 + 可量化评估"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+
+# 版本策略：此处写「实测可用的最低版本」，实际部署用 `pip freeze > requirements.lock`
+# 锁定到具体 patch 版本。LLM 生态迭代快，只有 lock 文件能保证三个月后还能装出同一套环境。
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "pydantic>=2.9.0",
+    "pydantic-settings>=2.5.0",
+    "PyYAML>=6.0.2",
+    "httpx>=0.27.2",
+    "tenacity>=9.0.0",
+    "numpy>=1.26.4",
+    "jieba>=0.42.1",
+    "structlog>=24.4.0",
+    "python-multipart>=0.0.9",
+]
+
+[project.optional-dependencies]
+# 文档抽取。按需安装：只导 Markdown 的用户不必装 openpyxl。
+extract = [
+    "pypdf>=5.1.0",
+    "python-docx>=1.1.2",
+    "openpyxl>=3.1.5",
+    "python-pptx>=1.0.2",
+    "beautifulsoup4>=4.12.3",
+    "trafilatura>=1.12.0",
+]
+# 嵌入与精排。注意：CPU 版 torch 必须从 PyTorch 官方 index 安装，
+# 直接 pip install 会拉 CUDA 版本（体积差约 10 倍）：
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+#   pip install -e ".[local]"
+local = [
+    "sentence-transformers>=3.3.0",
+]
+# 可选加速路径：ONNX Runtime 跑嵌入比 torch 快 1.5-3 倍（待实测），
+# 但 bge-reranker-v2-m3 在 fastembed 中的可用性需核实。
+onnx = [
+    "onnxruntime>=1.20.0",
+    "fastembed>=0.4.0",
+]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "ruff>=0.7.0",
+    "mypy>=1.13.0",
+]
+all = ["ragkb[extract,local,dev]"]
+
+[project.scripts]
+ragkb = "ragkb.cli:main"   # S1 提供
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ragkb"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

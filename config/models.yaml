@@ -1,0 +1,26 @@
+# 后端注册表：只记录与 default.yaml 不同的条目 + 被删除的内置后端。
+# roles 是角色分工（哪个后端干翻译、哪个干输出），没配就所有活儿都归
+# 当前后端。由 Web UI 的「模型服务 / 站点」页维护，改完重启生效（或点重读）。
+
+deleted:
+- openai
+providers:
+  lmstudio:
+    base_url: http://127.0.0.1:1235/v1
+    model: qwen3-1.7b-sft_v2
+    kind: lmstudio
+  deepseek:
+    base_url: https://api.deepseek.com
+    model: deepseek-flash
+    kind: deepseek
+    model_list:
+    - id: deepseek-v4-pro
+    - id: deepseek-flash
+  bailian:
+    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    model: kimi-k3
+    kind: bailian
+    model_list:
+    - id: glm-5.3
+    - id: deepseek-v4.1-flash
+    - id: kimi-k3
