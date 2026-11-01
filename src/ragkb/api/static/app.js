@@ -4805,6 +4805,7 @@ async function openModelEditor(name) {
         </div>
         <span class="hint">从下拉里选；探测过就有候选。<b>这里选的模型才真正用于问答。</b></span></div>
       <div class="form-row" style="grid-column: span 2"><label>模型清单（我打算用哪些；可增删）</label>
+        <input id="mPoolFilter" placeholder="筛选候选：输入关键字，如 qwen2.5" autocomplete="off" spellcheck="false">
         <div id="mList" class="model-list"></div>
         <div style="margin-top:6px"><button class="ghost-btn" id="mListAdd" type="button">＋ 添加模型</button></div>
         <span class="hint">清单只是候选表，不影响调用；真正生效的是上面的「默认模型」。
@@ -4905,16 +4906,25 @@ async function openModelEditor(name) {
   const CUSTOM = "__custom__";
   // 候选池 = 上次探测回来的 + 已存清单里的 + 当前默认模型（它未必在清单里）。
   // 没探测过时至少已有条目还选得到，也不会把当前默认值显示成"未选"。
+  // 排序是为了"找得到"：厂商 /models 的返回顺序没规律，几百条里肉眼翻等于没有。
   let pool = [...new Set([
     ...((cur && cur.models) || []),
     ...((cur && cur.model_list) || []).map((m) => m.id),
     ...(cur && cur.model ? [cur.model] : []),
-  ].filter(Boolean))];
+  ].filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  // 候选过滤：几百个模型里找一个，原生下拉只能靠键盘跳转，用户不知道也不会用。
+  // 一个小输入框按子串筛，行里已选的值不受过滤影响（见 optionsOf）。
+  let poolFilter = "";
+  const passFilter = (id, value) =>
+    !poolFilter || id.toLowerCase().includes(poolFilter) || id === value;
 
   const optionsOf = (value, ph) => {
     const opts = [`<option value="">${esc(ph || "（选一个模型）")}</option>`];
-    pool.forEach((id) => opts.push(
-      `<option value="${esc(id)}"${id === value ? " selected" : ""}>${esc(id)}</option>`));
+    pool.forEach((id) => {
+      if (!passFilter(id, value)) return;
+      opts.push(
+        `<option value="${esc(id)}"${id === value ? " selected" : ""}>${esc(id)}</option>`);
+    });
     // 已存但不在候选里（探测失败、或换过后端）：保留原值，别让下拉框悄悄改掉数据
     if (value && !pool.includes(value)) {
       opts.push(`<option value="${esc(value)}" selected>${esc(value)}（不在候选里）</option>`);
@@ -5005,6 +5015,7 @@ async function openModelEditor(name) {
   const refreshModelOptions = () => {
     collectModelList().map((m) => m.id).filter(Boolean)
       .forEach((i) => { if (!pool.includes(i)) pool.push(i); });
+    pool.sort((a, b) => a.localeCompare(b));
     refreshAllSelects();
     const mm = $("mModel");
     if (mm && mm.tagName === "SELECT") {
@@ -5064,6 +5075,17 @@ async function openModelEditor(name) {
     refreshModelOptions();
   };
   $("mList").oninput = (e) => { if (e.target.classList.contains("mr-id")) refreshModelOptions(); };
+  // 候选过滤框：只影响下拉里的选项，不动任何已存的值。
+  $("mPoolFilter").oninput = (e) => {
+    poolFilter = e.target.value.trim().toLowerCase();
+    refreshAllSelects();
+    const mm = $("mModel");
+    if (mm && mm.tagName === "SELECT") {
+      const v = mm.value;
+      mm.innerHTML = optionsOf(v, "（先点验证探测，或从清单里选）");
+      mm.value = v;
+    }
+  };
 
   // 记住"上一次自动填进去的默认值"：换类型时，只有当地址还是上一个类型的默认值
   // （说明用户没动过它）才跟着换。以前只判空，结果选了 DeepSeek 地址还停在

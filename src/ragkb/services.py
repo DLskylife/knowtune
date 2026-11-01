@@ -60,6 +60,11 @@ _NON_CHAT_HINTS = (
     "realtime", "audio", "image", "embedding", "rerank", "asr", "tts",
     "video", "ocr", "wanx", "cosyvoice", "paraformer", "livetranslate",
     "text-to-speech", "speech-", "-speech", "flux", "stable-diffusion",
+    # ModelScope / 火山这类聚合市场实测漏网的三类：文生/图生视频（Wan2.2-T2V、
+    # I2V）、图像生成（Kwai-Kolors/kolors）、向量（BAAI/bge-m3）。它们混在
+    # 下拉里点一下就是一次 403/500，而且白白把候选列表撑长，真想用的模型
+    # 反而"一直找不到"。
+    "t2v", "i2v", "text-to-video", "image-to-video", "kolors", "bge",
 )
 
 
@@ -202,7 +207,10 @@ def probe_one(
                 hint = ""
             msg = f"服务在跑，但 {p.model} 对话失败 —— {chat_msg}{hint}{extra}"
         result.update(status=status, ok=True, latency_ms=latency, message=msg,
-                      models=chat_ids[:60], models_hidden=hidden,
+                      # 截断保险丝，不是展示上限：60 会把 ModelScope 这种几百条
+                      # 的市场截在字母序前段，用户"一直找不到"目标模型。现在
+                      # 非对话类已过滤 + 前端有筛选框，放宽到 300 足够。
+                      models=chat_ids[:300], models_hidden=hidden,
                       models_total=len(ids), model_listed=listed)
     except Exception as exc:  # noqa: BLE001 - 探测必须吞掉一切异常
         status, message = _classify(exc)

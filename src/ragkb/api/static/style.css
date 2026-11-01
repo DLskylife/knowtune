@@ -7,6 +7,9 @@
    ========================================================================== */
 
 :root {
+  /* 整页只有深色主题。原生控件的弹层（select 下拉、日期选择器）跟着这个走，
+     不写它，Chromium 在 Windows 上就用系统浅色渲染下拉——白底黑字糊在深色页面上。 */
+  color-scheme: dark;
   /* 三级表面：聊天区最暗，侧栏/面板抬一层，控件再抬一层。层级靠明度差，
      不靠描边堆叠，暗色界面里线一多就显脏。 */
   --bg: #0a0c10;
@@ -390,6 +393,14 @@ kbd {
 .field select:hover { border-color: #333b4a; color: var(--text); }
 .field select:focus-visible { border-color: var(--accent); }
 #providerSel { width: 158px; }
+
+/* select 弹层（option 列表）双保险：color-scheme: dark 已让 Chromium 用暗色
+   渲染弹层，再显式给 option 上色，防止个别平台/版本仍回退系统浅色。 */
+option, optgroup {
+  background: var(--surface-2);
+  color: var(--text);
+}
+option:checked { color: var(--text); }
 #topKSel { width: 84px; }
 
 /* 开关：input 只做状态源（透明、不可见但仍可聚焦），视觉交给 .sw。
