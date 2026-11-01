@@ -4806,7 +4806,7 @@ async function openModelEditor(name) {
         <span class="hint">从下拉里选；探测过就有候选。<b>这里选的模型才真正用于问答。</b></span></div>
       <div class="form-row" style="grid-column: span 2"><label>模型清单（我打算用哪些；可增删）</label>
         <div id="mList" class="model-list"></div>
-        <div style="margin-top:6px"><button class="ghost-btn" id="mListAdd" type="button">＋ 添加一行</button></div>
+        <div style="margin-top:6px"><button class="ghost-btn" id="mListAdd" type="button">＋ 添加模型</button></div>
         <span class="hint">清单只是候选表，不影响调用；真正生效的是上面的「默认模型」。
           点「验证」探测出可用模型后，每行都能从下拉里选，并能<b>单独测这一个</b>能不能对话。</span></div>
     </div>
@@ -4947,20 +4947,24 @@ async function openModelEditor(name) {
     el.value = v || "";
   };
 
+  // 表头跟行共用同一套 grid 列，视觉上是一张表而不是一坨控件
+  const listHead = () => `<div class="model-row model-head">
+      <span>模型</span><span>上下文</span><span>最大输出</span><span></span><span></span>
+    </div>`;
   const renderList = (entries) => {
     const box = $("mList");
     const rows = (entries && entries.length) ? entries : [];
     box.innerHTML = rows.length
-      ? rows.map((m) => listRow(m.id, m.context, m.max_output)).join("")
+      ? listHead() + rows.map((m) => listRow(m.id, m.context, m.max_output)).join("")
       : `<p class="hint" style="margin:4px 0">还没有条目。点上面「验证」探测出可用模型，再逐行从下拉里选。</p>`;
     refreshModelOptions();
   };
   const listRow = (id, ctx, out) => `<div class="model-row" data-row>
       <select class="mr-id">${optionsOf(id || "")}</select>
-      <input class="mr-ctx" value="${ctx || ""}" placeholder="上下文，如 128000" inputmode="numeric">
-      <input class="mr-out" value="${out || ""}" placeholder="最大输出，如 8192" inputmode="numeric">
-      <button class="mini" type="button" data-test title="只测这一个模型能不能对话">测试</button>
-      <button class="mini" type="button" data-drop>删除</button>
+      <input class="mr-ctx" value="${ctx || ""}" placeholder="如 128000" inputmode="numeric">
+      <input class="mr-out" value="${out || ""}" placeholder="如 8192" inputmode="numeric">
+      <button class="mini icon" type="button" data-test title="只测这一个模型能不能对话">▶</button>
+      <button class="mini icon danger" type="button" data-drop title="删除这一行">✕</button>
       <span class="mr-state"></span>
     </div>`;
 
@@ -5017,11 +5021,17 @@ async function openModelEditor(name) {
       max_output: r.querySelector(".mr-out").value.trim(),
     })).filter((m) => m.id);
   };
+  // 从空态到第一行：表头要在这里补出来。点「添加模型」和点探测候选都是
+  // 直接插行、不走 renderList，漏了表头第一行就成了没有列名的孤行。
+  const ensureHead = () => {
+    const box = $("mList");
+    box.querySelector("p.hint")?.remove();
+    if (!box.querySelector("[data-row]")) box.insertAdjacentHTML("beforeend", listHead());
+  };
   const addToEntry = (id) => {
     if (!id) return;
-    const cur = collectModelList();
-    if (cur.some((m) => m.id === id)) return;      // 已有就不重复加
-    $("mList").querySelector("p.hint")?.remove();  // 去掉"还没有条目"的提示
+    if (collectModelList().some((m) => m.id === id)) return;  // 已有就不重复加
+    ensureHead();
     $("mList").insertAdjacentHTML("beforeend", listRow(id, "", ""));
     refreshModelOptions();
   };
@@ -5031,7 +5041,7 @@ async function openModelEditor(name) {
   $("mModel").innerHTML = optionsOf((cur && cur.model) || "", "（先点验证探测，或从清单里选）");
   renderList((cur && cur.model_list) || []);
   $("mListAdd").onclick = () => {
-    $("mList").querySelector("p.hint")?.remove();
+    ensureHead();
     $("mList").insertAdjacentHTML("beforeend", listRow("", "", ""));
     refreshModelOptions();
     const rows = $("mList").querySelectorAll("[data-row]");
