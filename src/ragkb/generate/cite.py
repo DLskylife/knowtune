@@ -40,6 +40,27 @@ class CiteReport:
         return not self.invalid_ids
 
 
+def verbatim_ratio(answer: str, sources: list[str]) -> float:
+    """答案里"逐字照抄资料"的句子占比。
+
+    小模型（本地 7B 及以下）常常不听"不要复述原文"那一条：把检索到的块整段
+    搬出来，连块里的 OCR 乱码、条目编号、页眉一起抄。用户看到的是"直接截断
+    的文本"，而不是答案——这比拒答更伤信任，因为界面上看着像正常回答。
+    这里量化它，供界面标注，不改写答案（校验器只判不改）。
+    """
+    if not answer or not sources:
+        return 0.0
+    sents = [s.strip() for s in SENT_SPLIT.split(answer) if len(s.strip()) >= 12]
+    if not sents:
+        return 0.0
+    pool = [c for c in sources if c]
+    hit = 0
+    for s in sents:
+        if any(s in c for c in pool):
+            hit += 1
+    return hit / len(sents)
+
+
 def verify(answer: str, n_context: int) -> CiteReport:
     ids = [int(m.group(1)) for m in CITE_RE.finditer(answer)]
     invalid = sorted({i for i in ids if i < 1 or i > n_context})

@@ -30,6 +30,7 @@ from pydantic import BaseModel, Field
 from ..config import Config, ProviderCfg, calibration_of, load_config
 from ..db import Database
 from ..generate import cite as cite_mod
+from ..generate import llm as llm_mod
 from ..generate.llm import LLMClient, LLMError
 from ..generate.prompt import REFUSE_TEMPLATE, build_context
 from ..index.embedder import Embedder
@@ -2697,7 +2698,12 @@ def ask(req: AskRequest) -> Response:
                 pass  # 记日志失败不能盖住断开信号本身
             raise  # GeneratorExit 必须继续往上抛，否则生成器收不干净
         except LLMError as exc:
+            # 原始报错是一串英文（"You didn't provide an API key…"），不说人话
+            # 也不指路。补一句"下一步该干什么"，否则用户只知道"它又坏了"。
             error = str(exc)
+            hint = llm_mod.human_hint(exc, kb_cfg.generation.provider)
+            if hint:
+                error = f"{error}\n\n{hint}"
         except Exception as exc:
             error = f"{type(exc).__name__}: {exc}"
         gen_ms = int((time.perf_counter() - gen_started) * 1000)
@@ -2710,6 +2716,11 @@ def ask(req: AskRequest) -> Response:
             return
 
         report = cite_mod.verify(answer, len(bundle.citations))
+        # 照抄检测：拿本次真正装进提示词的那几块原文比对（bundle.used 才是
+        # 模型看到的资料，用它而不是全库，避免"抄了别的块"也算进比例）。
+        vr = cite_mod.verbatim_ratio(answer, [c.text for _, c in bundle.used])
+        if vr >= 0.6 and not report.blanket:
+            report.blanket = f"疑似照抄原文：{vr:.0%} 的句子与资料逐字相同，未归纳作答"
         citations = [asdict(c) for c in bundle.citations]
         msg_id = (
             _save(conn, session_id, req.question, answer, trace_id, citations)

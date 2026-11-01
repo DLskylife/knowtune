@@ -8,7 +8,7 @@ from __future__ import annotations
 import pytest
 
 from ragkb.config import ChunkingCfg, defaults_config, load_config
-from ragkb.generate.cite import verify
+from ragkb.generate.cite import verify, verbatim_ratio
 from ragkb.ingest.chunker import chunk_blocks, estimate_tokens
 from ragkb.ingest.loader import ExtractError, decode_bytes, load_inline_text
 from ragkb.models import Block, Hit
@@ -138,6 +138,23 @@ class TestCite:
         report = verify(text, n_context=1)
         assert report.blanket is None
         assert report.coverage == 1.0
+
+
+class TestVerbatim:
+    """照抄检测：小模型把检索块整段搬出来，界面必须能认出这不是答案。"""
+
+    SRC = "甲信突出骨，用黄连二两，醋浸一宿，加入蜡清五合，熬煎成膏，去渣取胶涂上。"
+
+    def test_copy_is_detected(self):
+        ratio = verbatim_ratio(self.SRC, [self.SRC])
+        assert ratio >= 0.9
+
+    def test_paraphrase_is_not(self):
+        ratio = verbatim_ratio("黄连醋浸后与蜡同煎成膏，外敷患处 [1]。", [self.SRC])
+        assert ratio < 0.5
+
+    def test_no_sources_means_zero(self):
+        assert verbatim_ratio("随便一句回答内容足够长以便进入统计。", []) == 0.0
 
 
 class TestLoader:

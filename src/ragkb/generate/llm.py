@@ -44,6 +44,26 @@ class LLMError(Exception):
         self.status = status
 
 
+def human_hint(exc: "LLMError", provider: str = "") -> str:
+    """把模型调用失败翻译成"下一步该干什么"。
+
+    实测（2026-11-01）：三个云后端密钥全废，界面上只显示一串英文 401
+    （"You didn't provide an API key…"），用户看不出这是"要填密钥"还是
+    "系统坏了"，只会觉得"这个对话没有任何意义"。状态码能指向明确动作。
+    """
+    code = getattr(exc, "status", None)
+    who = f"后端「{provider}」" if provider else "模型后端"
+    if code in (401, 403):
+        return f"{who}的密钥无效或未填写——去「模型」页重新填密钥，或换一个可用的后端。"
+    if code == 404:
+        return f"{who}的地址或模型名不存在（404）：多半是模型名写错、或地址少了 /v1。"
+    if code == 429:
+        return f"{who}被限流或额度用尽，稍后重试或换一个后端。"
+    if code is not None and code >= 500:
+        return f"{who}服务端出错，稍后重试。"
+    return ""
+
+
 @dataclass
 class LLMResult:
     text: str
