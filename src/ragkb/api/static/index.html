@@ -160,7 +160,10 @@
               <span class="field-label">生成模型</span>
               <select id="genModelSel" title="只覆盖这一问用的模型，留空=跟随后端默认"></select>
             </label>
+            <button class="mini" id="btnTrTest" style="align-self:flex-end"
+              title="拿上面这个后端单独跑一次翻译（不碰知识库）：前台链路翻译挂了，对话里只表现为「答非所问」，不单独测根本定位不到">测翻译</button>
           </div>
+          <div class="cfg-hint" id="trTestOut" hidden></div>
         </div>
         <div class="cfg-sec">
           <div class="cfg-label">本次提问的检索参数</div>

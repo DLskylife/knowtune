@@ -768,7 +768,10 @@ function syncProviderOptions(d = state.models) {
       : p.status === "mock" ? "（mock）"
       : (p.status === "down" || p.status === "timeout" || p.status === "error")
         ? "（未连通）" : "";
-    o.textContent = `${p.name} · ${shortModel(p.model)}${mark}`;
+    // 谁是"当前"必须写在选项里：两个下拉长得一样，不标出来用户会以为
+    // 在对话页选了就等于切换了全局当前后端（其实是只对这一问生效）。
+    o.textContent = `${p.name} · ${shortModel(p.model)}${mark}`
+      + (p.active ? " · 当前" : "");
     o.title = `${p.name}（${p.kind_label || p.kind || "自定义"}）\n`
       + `${p.model} @ ${p.base_url || "未配置地址"}\n${p.message || "还没探测"}`;
     sel.appendChild(o);
@@ -947,11 +950,22 @@ function renderCfgSummary() {
 
   const hint = $("providerHint");
   if (hint) {
-    hint.textContent = !prov
+    const curName = state.models?.active || "";
+    // 对话页下拉是"这一问用谁"，模型页「设为当前」是"全局默认用谁"。
+    // 两者不一致时必须说清，否则用户以为自己切了当前后端——实测最容易
+    // 在这里产生"我选了 A 怎么还在用 B"的错觉。
+    const off = Boolean(prov && curName && prov.name !== curName);
+    hint.innerHTML = !prov
       ? "还没有可用的后端，去「模型管理」配一个。"
       : !prov.ready
-        ? `这个后端还不能用：${prov.ready_reason || "配置不完整"}`
-        : (prov.message || "还没探测") + (ready === false ? "（当前后端不可用）" : "");
+        ? `这个后端还不能用：${esc(prov.ready_reason || "配置不完整")}`
+        : esc(prov.message || "还没探测") + (ready === false ? "（当前后端不可用）" : "");
+    if (off) {
+      hint.innerHTML += `<span class="warn"> · 仅这一问用它（当前是 ${esc(curName)}）</span>`
+        + `<button class="mini" id="btnUseCurrent" title="把 ${esc(prov.name)} 设为系统当前后端并落盘">设为当前</button>`;
+      const b = $("btnUseCurrent");
+      if (b) b.onclick = () => useModel(prov.name);
+    }
     hint.className = "cfg-hint" + (prov && !prov.ready ? " warn" : "");
   }
   syncKbOptions();
@@ -1179,6 +1193,7 @@ async function ask(question) {
   }
   state.busy = true;
   state.lastConfidence = null;
+  state.lastGen = null;
   $("btnSend").disabled = true;
   $("emptyState")?.remove();
   appendUser(question);
@@ -1270,6 +1285,10 @@ async function ask(question) {
           // 直问模型没有检索过程，右侧调试面板那一堆"dense/sparse/融合"
           // 全是空的，留着只会让人以为检索坏了。
           state.lastDirect = obj.mode === "direct";
+          // 服务端回显"这一问到底用的哪个后端/模型"。界面选了 A 却跑在 B 上，
+          // 只有服务端看得见；不回显的话"选哪个就是测哪个"永远无法自证。
+          state.lastGen = (obj.provider || obj.model)
+            ? { provider: obj.provider || "", model: obj.model || "" } : null;
           if (obj.debug && !state.lastDirect) renderDebug(obj.debug);
           if (state.lastDirect) {
             $("panelDebug").innerHTML =
@@ -1295,10 +1314,17 @@ async function ask(question) {
           paint(false);
         } else if (event === "done") {
           paint(true);
+          // meta 没带回显（比如老版本服务端）时用 done 里的那份兜底
+          if (!state.lastGen && obj.provider) {
+            state.lastGen = { provider: obj.provider, model: obj.model || "" };
+          }
           // 直问模型（不挂载库）没有资料、没有编号，引用类脚注全是误导：
           // 覆盖 0% 会让人以为"引用没引上"，其实这一问本来就不引用。
-          if (state.lastDirect) {
-            foot.innerHTML = `<span class="ok" title="未挂载知识库，模型凭自身知识作答">直问模型 · 无引用</span>`;
+            if (state.lastDirect) {
+              foot.innerHTML = `<span class="ok" title="未挂载知识库，模型凭自身知识作答">直问模型 · 无引用</span>`;
+              if (state.lastGen?.provider) {
+                foot.innerHTML += genTag(state.lastGen);
+              }
             if (obj.message_id) {
               foot.innerHTML += `<button data-fb="up" title="回答有用">有用</button>` +
                 `<button data-fb="down" title="回答无用，进入待分析队列">无用</button>`;
@@ -1334,6 +1360,7 @@ async function ask(question) {
             if (obj.degraded?.length) {
               bits.push(`<span class="warn" title="${esc(obj.degraded.join(","))}">降级 ${esc(obj.degraded.map(degLabel).join("、"))}</span>`);
             }
+            if (state.lastGen?.provider) bits.push(genTag(state.lastGen));
             if (obj.citations?.length) {
               bits.push(`<button data-src="cites">查看 ${obj.citations.length} 条来源</button>`);
             }
@@ -1365,6 +1392,16 @@ async function ask(question) {
 
 /* 脚注里的两类按钮（跳来源、反馈）在"正常带引用"和"直问模型"两条分支里
    都要用，各写一份必然发散——直问那一支漏绑反馈是最容易发生的那种 bug。 */
+/* 脚注里的"这一问用的是谁"：后端名 + 模型短名（全名挂 title）。
+   存在的理由：对话页下拉选的后端只对这一问生效、不改动全局当前后端，
+   不在答案上回显的话，"我选的到底跑没跑"这件事没有任何证据。 */
+function genTag(g) {
+  if (!g || !g.provider) return "";
+  const m = g.model ? shortModel(g.model) : "";
+  return `<span class="gen-tag" title="本次实际调用：${esc(g.provider)}${
+    g.model ? " / " + esc(g.model) : ""}">${esc(g.provider)}${m ? " · " + esc(m) : ""}</span>`;
+}
+
 function bindFootActions(foot, obj) {
   bindCiteBtn(foot, obj);
   bindFeedback(foot, obj);
@@ -2940,6 +2977,31 @@ $("providerSel").addEventListener("change", (e) => {
   saveAdv();
   renderCfgSummary();
 });
+
+/* 拿对话页当前选中的后端单独测一次翻译。
+   为什么放这里：站点页那个「测翻译」测的是角色分工指向的后端，跟对话里选的
+   不是同一个；用户想验证"我现在用的这个能不能翻"，就得有个跟着选择走的入口。 */
+$("btnTrTest").onclick = async () => {
+  const out = $("trTestOut");
+  const btn = $("btnTrTest");
+  const name = $("providerSel").value;
+  if (!name) return;
+  btn.disabled = true;
+  out.hidden = false;
+  out.innerHTML = `<span class="hint">${esc(name)} 翻译中…（一句往返，云端可能几秒）</span>`;
+  try {
+    const r = await jsonPost("/api/translate-test", { provider: name });
+    out.innerHTML = r.ok
+      ? `<div dir="auto">${esc(r.output)}</div>`
+        + `<span class="hint">${esc(r.provider)} · ${r.src}→${r.dst} · ${r.latency_ms}ms</span>`
+      : `<span class="warn">翻译失败：${esc(r.error || "输出为空或与原文相同")}</span>`
+        + (r.output ? `<div dir="auto">${esc(r.output)}</div>` : "");
+  } catch (err) {
+    out.innerHTML = `<span class="warn">${esc(err.message)}</span>`;
+  } finally {
+    btn.disabled = false;
+  }
+};
 
 $("topKSel").addEventListener("change", () => {
   localStorage.setItem("ragkb.topk", $("topKSel").value);
@@ -4925,6 +4987,9 @@ async function useModel(name, opts = {}) {
     // 但看到的却是旧名字。
     $("providerSel").value = name;
     localStorage.setItem("ragkb.provider", name);
+    // 后端换了，模型候选也得跟着换：还留着上一个后端的模型名，这一问就会
+    // 拿 A 的模型名去打 B 的接口，回一个 404，而界面上看不出哪里不对。
+    syncGenModelOptions();
     renderCfgSummary();
     if (state.view === "models") await renderModels();
     // 只在"引导卡还在屏幕上"时重绘：切后端不该把用户正在看的对话擦掉。

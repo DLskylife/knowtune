@@ -2595,6 +2595,19 @@ def ask(req: AskRequest) -> Response:
     history = chatctx.trim_history(history, budget=int(kb_cfg.chat.history_token_budget))
     context_usage = _context_usage(conn, session_id, history, kb_cfg)
 
+    # 本次提问真正要用的后端：对话页下拉选的那个优先，没传才落到库/系统当前后端。
+    # 这个值算一次、全程复用——下面提示词、报错指路、探测缓存作废、query_log
+    # 全都得指同一个后端。散着写 kb_cfg.generation.provider 的后果是：用户选了
+    # deepseek 提问，401 报错却说"后端 siliconflow 密钥无效"，日志里也记成
+    # siliconflow，等于"选哪个都是测当前那个"。
+    gen_provider = req.provider or kb_cfg.generation.provider
+    try:
+        _gen_name, _gen_prov = state.llm.resolve(gen_provider)
+        gen_model = req.model or _gen_prov.model
+    except llm_mod.LLMError:
+        # 后端名不存在：不在这里拦（下面调用会给出同一份报错），只把名字留下来
+        _gen_name, gen_model = gen_provider, req.model or ""
+
     def stream() -> Iterator[str]:
         """StreamingResponse 会把同步生成器丢到线程池里迭代，而上面那个 conn 是在
         路由线程里创建的——sqlite3 连接不能跨线程用。所以这里必须重新取连接。
@@ -2665,12 +2678,14 @@ def ask(req: AskRequest) -> Response:
                 if session_id else None
             )
             yield _sse("done", {
-                "trace_id": trace_id, "refused": True, "citations": [],
+                "trace_id": trace_id, "refused": True,
+                "provider": gen_provider, "model": gen_model,
+                "citations": [],
                 "cite_coverage": 0.0, "invalid_ids": [], "degraded": result.degraded,
                 "answer": REFUSE_TEMPLATE,
                 "message_id": msg_id,
             })
-            _log(conn, trace_id, req, result, timings, "refuse", 0, 0, 0.0, history_len=len(history), provider=kb_cfg.generation.provider)
+            _log(conn, trace_id, req, result, timings, "refuse", 0, 0, 0.0, history_len=len(history), provider=gen_provider)
             return
 
         bundle = (
@@ -2684,7 +2699,7 @@ def ask(req: AskRequest) -> Response:
                 history_text_tokens=sum(len(h["content"]) for h in history),
                 # 这个后端待会儿真的要拿去生成，提示词就得取它那份覆盖。
                 # 取成"系统当前后端"的话，界面切到别的后端后提示词会张冠李戴。
-                provider=req.provider or kb_cfg.generation.provider,
+                provider=gen_provider,
             )
         )
         yield _sse("meta", {
@@ -2702,6 +2717,10 @@ def ask(req: AskRequest) -> Response:
                 "top_score": result.refusal.top_score if result.refusal else None,
             },
             "debug": _debug_payload(result, kb_cfg, kb_overrides),
+            # 回显本次真正用的后端与模型：对话页下拉选了 A 却答的是 B，这件事
+            # 只有服务端知道，前端不显示就没人能发现"选哪个都没区别"。
+            "provider": gen_provider,
+            "model": gen_model,
         })
 
         messages = bundle.messages(req.question, history)
@@ -2711,7 +2730,7 @@ def ask(req: AskRequest) -> Response:
         try:
             for piece in state.llm.stream(
                 messages,
-                provider=req.provider or kb_cfg.generation.provider,
+                provider=gen_provider,
                 model=req.model,
                 temperature=req.temperature,
                 max_tokens=req.max_tokens,
@@ -2726,7 +2745,7 @@ def ask(req: AskRequest) -> Response:
             timings["gen_ms"] = int((time.perf_counter() - gen_started) * 1000)
             try:
                 _log(conn, trace_id, req, result, timings, "disconnect", 0, 0, 0.0,
-                     len(history), provider=kb_cfg.generation.provider)
+                     len(history), provider=gen_provider)
             except Exception:
                 pass  # 记日志失败不能盖住断开信号本身
             raise  # GeneratorExit 必须继续往上抛，否则生成器收不干净
@@ -2734,13 +2753,13 @@ def ask(req: AskRequest) -> Response:
             # 原始报错是一串英文（"You didn't provide an API key…"），不说人话
             # 也不指路。补一句"下一步该干什么"，否则用户只知道"它又坏了"。
             error = str(exc)
-            hint = llm_mod.human_hint(exc, kb_cfg.generation.provider)
+            hint = llm_mod.human_hint(exc, gen_provider)
             if hint:
                 error = f"{error}\n\n{hint}"
             # 调用被拒 = 探测时那把钥匙已经不作数了（换过、或重启后内存里没了）。
             # 缓存不作废的话，模型页会继续显示上一把钥匙探出来的绿灯。
             if getattr(exc, "status", None) in (401, 403):
-                services_mod.invalidate(kb_cfg.generation.provider)
+                services_mod.invalidate(gen_provider)
         except Exception as exc:
             error = f"{type(exc).__name__}: {exc}"
         gen_ms = int((time.perf_counter() - gen_started) * 1000)
@@ -2749,7 +2768,7 @@ def ask(req: AskRequest) -> Response:
         answer = "".join(acc)
         if error and not answer:
             yield _sse("error", {"message": error, "trace_id": trace_id})
-            _log(conn, trace_id, req, result, timings, "error", 0, 0, 0.0, len(history), provider=kb_cfg.generation.provider)
+            _log(conn, trace_id, req, result, timings, "error", 0, 0, 0.0, len(history), provider=gen_provider)
             return
 
         report = cite_mod.verify(answer, len(bundle.citations))
@@ -2766,6 +2785,8 @@ def ask(req: AskRequest) -> Response:
         yield _sse("done", {
             "trace_id": trace_id,
             "refused": False,
+            "provider": gen_provider,
+            "model": gen_model,
             "citations": citations,
             "cite_coverage": report.coverage,
             "cite_blanket": report.blanket,
@@ -2775,7 +2796,7 @@ def ask(req: AskRequest) -> Response:
             "answer": answer,
             "message_id": msg_id,
         })
-        _log(conn, trace_id, req, result, timings, "ok", 0, 0, report.coverage, len(history), provider=kb_cfg.generation.provider)
+        _log(conn, trace_id, req, result, timings, "ok", 0, 0, report.coverage, len(history), provider=gen_provider)
         _ = started  # 保留给 trace 扩展，避免被 lint 判定未使用
 
     if not (kb_cfg.generation.stream if req.stream is None else req.stream):

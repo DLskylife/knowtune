@@ -3898,3 +3898,137 @@ class TestChunkSizeVsEmbedWindow:
         over = [d for d in drafts if d.token_count > win]
         assert not over, f"{len(over)} 个块超过嵌入窗口 {win}"
 
+
+
+def collect_sse(resp) -> str:
+    """把 StreamingResponse 里所有 SSE 片段拼成一段文本。
+
+    Starlette 在这里给的是 async 迭代器（同步生成器被丢到线程池后包了一层），
+    所以只能 async for 收，不能 list() 一把抓。
+    """
+    import asyncio
+
+    async def _go():
+        out = []
+        async for chunk in resp.body_iterator:
+            out.append(chunk.decode() if isinstance(chunk, bytes) else chunk)
+        return "".join(out)
+
+    return asyncio.run(_go())
+
+
+class TestAskUsesSelectedBackend:
+    """对话页下拉选的后端必须真的被调用——报错指路、日志、缓存作废都指名它。
+
+    回归背景（2026-11-01）：全局当前后端是 siliconflow，请求里指定
+    provider=deepseek 提问，401 报错却提示「后端 siliconflow 的密钥无效」，
+    query_log 里记的模型也是 siliconflow 那份。根因是 ask 里六处各取各的
+    "当前后端"，而"这一问真正用的是谁"只有 llm.stream 一处知道。
+    用户看到的现象就是：在对话页选哪个后端，结果都像在测当前那个。
+    """
+
+    @staticmethod
+    def _prepare(monkeypatch, invalidated):
+        """装一个最小可跑的 ask：内存库 + 假 LLM（401）+ 当前后端=siliconflow。"""
+        import sqlite3
+        from pathlib import Path
+
+        import ragkb
+        import ragkb.api.app as A
+        import ragkb.services as services_mod
+        from ragkb.config import Config, ProviderCfg
+        from ragkb.generate.llm import LLMError
+
+        cfg = Config()
+        cfg.generation.providers = {
+            "siliconflow": ProviderCfg(base_url="https://sf/v1", kind="openai",
+                                       model="Qwen/Qwen2.5-7B-Instruct"),
+            "deepseek": ProviderCfg(base_url="https://ds/v1", kind="deepseek",
+                                    model="deepseek-flash"),
+        }
+        cfg.generation.provider = "siliconflow"
+
+        # check_same_thread=False：StreamingResponse 把生成器丢进线程池迭代，
+        # 默认连接在跨线程这一步就会抛 "created in thread id ..."。
+        conn = sqlite3.connect(":memory:", check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        conn.executescript((Path(ragkb.__file__).parent / "schema.sql")
+                           .read_text(encoding="utf-8"))
+
+        class FakeLLM:
+            def __init__(self, cfg): self.cfg = cfg
+            def resolve(self, provider):
+                name = provider or self.cfg.generation.provider
+                if name not in self.cfg.generation.providers:
+                    raise LLMError(f"未知 provider: {name}")
+                return name, self.cfg.generation.providers[name]
+            def stream(self, *a, **k):
+                raise LLMError("LLM 返回 401: Token is invalid.", status=401)
+
+        st = A.state
+        monkeypatch.setattr(st, "cfg", cfg)
+        monkeypatch.setattr(st, "llm", FakeLLM(cfg))
+        # conn 是只读 property，只能从类上换掉（monkeypatch 会自动还原）
+        monkeypatch.setattr(A.AppState, "conn", conn)
+        monkeypatch.setattr(st.db, "conn", lambda: conn)
+        monkeypatch.setattr(st, "effective_cfg", lambda kb_id: cfg)
+        monkeypatch.setattr(st, "tuned", lambda kb_id: {})
+        monkeypatch.setattr(A.Embedder, "is_loaded", True)
+        monkeypatch.setattr(services_mod, "invalidate",
+                            lambda name=None, *a, **k: invalidated.append(name))
+        return conn
+
+    @staticmethod
+    def _run(monkeypatch, invalidated, **kw):
+        import ragkb.api.app as A
+
+        conn = TestAskUsesSelectedBackend._prepare(monkeypatch, invalidated)
+        req = A.AskRequest(question="维吾尔医学的四种体液是什么？",
+                           kb_id=None, direct=True, **kw)
+        return conn, collect_sse(A.ask(req))
+
+    def test_error_hint_names_the_selected_backend(self, monkeypatch):
+        invalidated = []
+        _, body = self._run(monkeypatch, invalidated, provider="deepseek")
+        # 报错必须指向真正在调用的那个，否则用户按提示去填错了后端的密钥
+        assert "deepseek" in body
+        assert "siliconflow" not in body
+
+    def test_query_log_records_the_selected_backend(self, monkeypatch):
+        invalidated = []
+        conn, _ = self._run(monkeypatch, invalidated, provider="deepseek")
+        row = conn.execute("SELECT model FROM query_log").fetchone()
+        assert row is not None, "query_log 没落记录，这条测试就没测到东西"
+        assert row["model"] == "deepseek-flash"
+
+    def test_401_invalidates_probe_cache_of_selected_backend(self, monkeypatch):
+        invalidated = []
+        self._run(monkeypatch, invalidated, provider="deepseek")
+        # 作废错的那个，等于让报错后端继续顶着绿灯留在模型页
+        assert invalidated == ["deepseek"]
+
+    def test_done_payload_echoes_backend_and_model(self, monkeypatch):
+        """界面要能自证"跑的就是我选的"：done/meta 里回显本次用的后端与模型。"""
+        import ragkb.api.app as A
+
+        invalidated = []
+        self._prepare(monkeypatch, invalidated)
+
+        # 只吐一个字的假客户端，重点是它记住自己被要求用哪个后端、哪个模型
+        class SpyLLM:
+            def __init__(self, cfg): self.cfg = cfg; self.seen = None
+            def resolve(self, provider):
+                name = provider or self.cfg.generation.provider
+                return name, self.cfg.generation.providers[name]
+            def stream(self, messages, provider=None, model=None, **kw):
+                self.seen = (provider, model)
+                yield "好"
+
+        spy = SpyLLM(A.state.cfg)
+        monkeypatch.setattr(A.state, "llm", spy)
+        req = A.AskRequest(question="体液有几种？", kb_id=None, direct=True,
+                           provider="deepseek", model="deepseek-v4-pro")
+        body = collect_sse(A.ask(req))
+        assert spy.seen == ("deepseek", "deepseek-v4-pro"), "请求没带上本次选的后端/模型"
+        assert '"provider":"deepseek"' in body.replace(" ", "")
+        assert "deepseek-v4-pro" in body

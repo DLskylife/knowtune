@@ -618,6 +618,16 @@ option:checked { color: var(--text); }
 .msg-foot button:hover { color: var(--text); border-color: #333b4a; background: var(--surface-3); }
 .msg-foot button:disabled { opacity: .5; }
 
+/* 「本次实际调用的后端 · 模型」：用虚线框跟"状态类"脚注区分开——
+   它是事实陈述，不是警告，画成黄的会让人以为出了问题。 */
+.msg-foot .gen-tag {
+  border: 1px dashed var(--line);
+  border-radius: 6px;
+  padding: 2px 8px;
+  color: var(--text-2);
+  cursor: help;
+}
+
 .cursor {
   display: inline-block;
   width: 6px; height: 14px;
