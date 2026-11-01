@@ -32,7 +32,7 @@ from ..db import Database
 from ..generate import cite as cite_mod
 from ..generate import llm as llm_mod
 from ..generate.llm import LLMClient, LLMError
-from ..generate.prompt import REFUSE_TEMPLATE, build_context
+from ..generate.prompt import REFUSE_TEMPLATE, build_context, build_direct
 from ..index.embedder import Embedder
 from ..index.sparse import SparseIndex
 from ..index.vectors import VectorStore
@@ -42,7 +42,7 @@ from ..ingest import loader as loader_mod
 from ..ingest.chunker import repair_chunk_primitives
 from ..ingest.cleaner import clean_loaded, plan_from_dict, rules_payload
 from ..ingest.pipeline import IngestPipeline, display_title
-from ..retrieve.engine import RetrievalEngine
+from ..retrieve.engine import RetrievalEngine, RetrievalResult
 from ..retrieve.rerank import Reranker
 from .. import chatctx, kbconfig, logbus, modelcfg, promptcfg
 from .. import paths as paths_mod
@@ -325,6 +325,18 @@ class AskRequest(BaseModel):
     doc_ids: list[int] | None = None
     imported_after: str | None = None
     imported_before: str | None = None
+
+    # ---- 本次提问临时生效的覆盖（不写盘，只影响这一条请求）----
+    model: str | None = None
+    temperature: float | None = Field(default=None, ge=0.0, le=2.0)
+    max_tokens: int | None = Field(default=None, ge=64, le=8192)
+    stream: bool | None = None
+    mmr: bool | None = None
+    # 点分路径 → 值的临时参数覆盖。白名单由 kbconfig.effective 把关
+    # （不在 KB_PARAM_MAP 里的键直接丢弃），前端传再多也改不动别的配置。
+    overrides: dict[str, Any] | None = None
+    # 不挂载知识库时：True=完全不检索、直接问模型；False=跨全部库检索。
+    direct: bool = False
 
     def filters(self) -> dict:
         return {
@@ -2562,6 +2574,10 @@ def ask(req: AskRequest) -> Response:
     conn = state.conn
     # 这个库自己的一套参数（没有覆盖时就是全局对象本身，零开销）
     kb_cfg = state.effective_cfg(req.kb_id)
+    # 对话页「高级参数」里的临时覆盖：只在本次请求生效，不写盘。
+    # 借 kbconfig 那条链路是为了白名单和类型校验都只有一份实现。
+    if req.overrides:
+        kb_cfg = kbconfig.effective(kb_cfg, req.overrides)
     kb_overrides = state.tuned(req.kb_id)
 
     session_id = req.session_id
@@ -2610,16 +2626,23 @@ def ask(req: AskRequest) -> Response:
         conn = state.db.conn()
         started = time.perf_counter()
         timings: dict[str, int] = {}
-        result = state.engine.search(
-            conn,
-            req.question,
-            kb_id=req.kb_id,
-            top_k=req.top_k,
-            rerank=req.rerank,
-            rerank_model=req.rerank_model,
-            filters=req.filters(),
-            cfg=kb_cfg,
-        )
+        if req.direct:
+            # 不挂载知识库 + 用户选了「直接问模型」：检索整段跳过。
+            # 这里必须是"一条空结果"而不是 None——下面拒答判定、引用校验、
+            # 计时统计全都按 result 走，空对象能让它们自然退化成"没资料"。
+            result = RetrievalResult(query=req.question, candidates=[], timings=timings)
+        else:
+            result = state.engine.search(
+                conn,
+                req.question,
+                kb_id=req.kb_id,
+                top_k=req.top_k,
+                rerank=req.rerank,
+                rerank_model=req.rerank_model,
+                mmr=req.mmr,
+                filters=req.filters(),
+                cfg=kb_cfg,
+            )
         timings.update(result.timings)
 
         if result.refusal and result.refusal.refused:
@@ -2650,20 +2673,23 @@ def ask(req: AskRequest) -> Response:
             _log(conn, trace_id, req, result, timings, "refuse", 0, 0, 0.0, history_len=len(history), provider=kb_cfg.generation.provider)
             return
 
-        bundle = build_context(
-            result.candidates,
-            question=req.question,
-            token_budget=kb_cfg.generation.context_token_budget,
-            min_context_chars=kb_cfg.generation.min_context_chars,
-            prompt_version=state.cfg.prompt_version,
-            history_text_tokens=sum(len(h["content"]) for h in history),
-            # 这个后端待会儿真的要拿去生成，提示词就得取它那份覆盖。
-            # 取成"系统当前后端"的话，界面切到别的后端后提示词会张冠李戴。
-            provider=req.provider or kb_cfg.generation.provider,
+        bundle = (
+            build_direct(req.question, history) if req.direct
+            else build_context(
+                result.candidates,
+                question=req.question,
+                token_budget=kb_cfg.generation.context_token_budget,
+                min_context_chars=kb_cfg.generation.min_context_chars,
+                prompt_version=state.cfg.prompt_version,
+                history_text_tokens=sum(len(h["content"]) for h in history),
+                # 这个后端待会儿真的要拿去生成，提示词就得取它那份覆盖。
+                # 取成"系统当前后端"的话，界面切到别的后端后提示词会张冠李戴。
+                provider=req.provider or kb_cfg.generation.provider,
+            )
         )
         yield _sse("meta", {
             "trace_id": trace_id,
-            "mode": "answer",
+            "mode": "direct" if req.direct else "answer",
             "citations": [asdict(c) for c in bundle.citations],
             "context_used": bundle.used,
             "context_dropped": bundle.dropped,
@@ -2683,7 +2709,13 @@ def ask(req: AskRequest) -> Response:
         error: str | None = None
         gen_started = time.perf_counter()
         try:
-            for piece in state.llm.stream(messages, provider=req.provider or kb_cfg.generation.provider):
+            for piece in state.llm.stream(
+                messages,
+                provider=req.provider or kb_cfg.generation.provider,
+                model=req.model,
+                temperature=req.temperature,
+                max_tokens=req.max_tokens,
+            ):
                 acc.append(piece)
                 yield _sse("delta", {"text": piece})
         except GeneratorExit:
@@ -2746,7 +2778,7 @@ def ask(req: AskRequest) -> Response:
         _log(conn, trace_id, req, result, timings, "ok", 0, 0, report.coverage, len(history), provider=kb_cfg.generation.provider)
         _ = started  # 保留给 trace 扩展，避免被 lint 判定未使用
 
-    if not kb_cfg.generation.stream:
+    if not (kb_cfg.generation.stream if req.stream is None else req.stream):
         # stream=false：把同一条链路整条跑完，只取 done 事件的载荷当 JSON 返回。
         #
         # 不给非流式单写一遍"检索 + 生成 + 引用校验"——两份实现必然发散，而

@@ -68,6 +68,34 @@ def load_system_prompt(version: str, answer_lang: str | None = None,
     return promptcfg.system_prompt(version, answer_lang, provider)
 
 
+DIRECT_SYSTEM = (
+    "你现在是**不挂载任何知识库**的通用助手：这次对话不提供任何资料，"
+    "也没有引用编号。\n\n"
+    "规则：\n"
+    "1. 凭你自己的知识回答，不要声称引用了资料，也不要编造 [1] 这类编号；\n"
+    "2. 不确定就说不确定，不要为了显得有依据而虚构出处；\n"
+    "3. 直接、完整地回答，不要复述问题。"
+)
+
+
+def build_direct(question: str, history: list[dict] | None = None) -> ContextBundle:
+    """不挂载知识库时的对话装填：只有问题本身，没有【资料】段。
+
+    为什么要单独一条路而不是让 build_context 传空候选：那份系统提示词里压着
+    "只能依据资料、不得使用外部知识"，资料段一空，模型就只能复读拒答模板——
+    用户选了"不挂载库"却拿到"资料中未找到依据"，等于界面在骗人。
+    """
+    return ContextBundle(
+        system_prompt=DIRECT_SYSTEM,
+        user_prompt=question,
+        citations=[],
+        used=0,
+        dropped=0,
+        tokens_used=0,
+        used_texts=[],
+    )
+
+
 def _header(n: int, c: Candidate) -> str:
     bits = [f"[{n}]", f"《{c.doc_title}》"]
     if c.page_no:

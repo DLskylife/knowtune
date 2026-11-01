@@ -449,6 +449,9 @@ function renderSessions() {
 async function ensureSession(reloadMessages = true) {
   if (!state.kbId) {
     state.sessionInfo = null;
+    // 不挂载知识库时清掉会话：留着上一个库的 session_id，这一轮"直问模型"
+    // 就会被写进那个库的对话历史里——侧栏里突然冒出一段没有来源的对话。
+    state.sessionId = null;
     renderSessions();
     return null;
   }
@@ -775,6 +778,8 @@ function syncProviderOptions(d = state.models) {
   sel.value = want;
   const cur = list.find((p) => p.name === sel.value);
   sel.title = cur ? `${cur.model} @ ${cur.base_url || "未配置"}` : "";
+  // 探测完模型列表会变（比如刚探出 67 个可用模型），生成模型的下拉要跟着换
+  syncGenModelOptions();
 }
 
 function shortModel(m) {
@@ -794,28 +799,145 @@ function providerNow() {
 function syncKbOptions() {
   const sel = $("kbSel");
   if (!sel) return;
-  sel.innerHTML = state.kbs.length
+  // 「不挂载」必须是第一个且永远存在的选项：只有一个库时如果没有它，
+  // 想"只测模型不检索"就只能去改配置。空字符串 = kb_id=null。
+  sel.innerHTML = `<option value="">（不挂载知识库）</option>` + (state.kbs.length
     ? state.kbs.map((k) =>
         `<option value="${k.id}">${esc(k.name)}</option>`).join("")
-    : `<option value="">（还没有知识库）</option>`;
-  if (state.kbId) sel.value = String(state.kbId);
+    : `<option value="" disabled>（还没有知识库）</option>`);
+  sel.value = state.kbId ? String(state.kbId) : "";
+
   const kb = state.kbs.find((k) => k.id === state.kbId);
   $("kbMountNote").textContent = kb ? `${state.docs.length} 篇文档` : "";
   $("kbSelHint").textContent = kb
     ? (state.docs.length
         ? `提问只在这一个库的字块里检索。当前 ${state.docs.length} 篇文档。`
         : "这个库还没有文档，先去「知识库」页导入。")
-    : "先建一个知识库，提问才有东西可检索。";
+    : "不挂载也能问：下面选「直接问模型」就是纯对话，不检索、不带引用编号。";
+  syncNoKbRow();
+}
+
+/* 不挂载知识库时才有意义的两行：这一问到底走不走检索。
+   藏起来是因为挂载了库的时候这两行纯属噪音。 */
+/* ------------------------------------------------------ 高级参数（临时覆盖）
+
+   这些旋钮的共同点：只想在这一问上试试，不想写进配置。
+   走两条路——生成侧的（模型/温度/长度/流式）本来就是 per-call 参数；
+   检索侧的走 overrides 点分路径，后端用 kbconfig.effective 合成一份临时
+   配置副本，白名单外的键直接被丢掉，所以这里传错也改不坏别的配置。 */
+const ADV_KEY = "ragkb.chatOpts";
+
+const advEls = () => ({
+  model: $("genModelSel"), temp: $("optTemp"), maxTok: $("optMaxTok"),
+  stream: $("optStream"), turns: $("optTurns"), fusion: $("optFusion"),
+  wdense: $("optWdense"), pool: $("optPool"), mmr: $("optMmr"),
+  noRefuse: $("optNoRefuse"), noKbMode: $("noKbMode"),
+});
+
+const advNum = (v) => {
+  const s = String(v ?? "").trim();
+  if (s === "" || Number.isNaN(Number(s))) return null;
+  return Number(s);
+};
+
+/* 留空一律"跟随配置"：前端不猜默认值，后端那份才是准的。
+   传了空字符串过去会被当成 0，比不传更糟。 */
+function collectOverrides() {
+  const el = advEls();
+  const ov = {};
+  if (el.fusion.value) ov["retrieval.fusion.method"] = el.fusion.value;
+  const w = advNum(el.wdense.value);
+  if (w !== null) ov["retrieval.fusion.w_dense"] = w;
+  const pool = advNum(el.pool.value);
+  if (pool !== null) ov["retrieval.fusion.top_k"] = pool;
+  if (el.mmr.value !== "") ov["retrieval.mmr.enabled"] = el.mmr.value === "1";
+  if (el.noRefuse.checked) ov["refusal.enabled"] = false;
+  const turns = advNum(el.turns.value);
+  if (turns !== null) ov["chat.history_turns"] = turns;
+  return ov;
+}
+
+function saveAdv() {
+  const el = advEls();
+  try {
+    localStorage.setItem(ADV_KEY, JSON.stringify({
+      model: el.model.value || "", temp: el.temp.value, maxTok: el.maxTok.value,
+      stream: el.stream.checked, turns: el.turns.value, fusion: el.fusion.value,
+      wdense: el.wdense.value, pool: el.pool.value, mmr: el.mmr.value,
+      noRefuse: el.noRefuse.checked, noKbMode: el.noKbMode.value,
+    }));
+  } catch (_) { /* 隐私模式下 localStorage 会抛，存不下就算了，不影响提问 */ }
+}
+
+function restoreAdv() {
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(ADV_KEY) || "{}") || {}; } catch (_) { saved = {}; }
+  const el = advEls();
+  el.temp.value = saved.temp ?? "";
+  el.maxTok.value = saved.maxTok ?? "";
+  el.stream.checked = saved.stream !== false;
+  el.turns.value = saved.turns ?? "";
+  el.fusion.value = saved.fusion || "";
+  el.wdense.value = saved.wdense ?? "";
+  el.pool.value = saved.pool ?? "";
+  el.mmr.value = saved.mmr ?? "";
+  el.noRefuse.checked = Boolean(saved.noRefuse);
+  el.noKbMode.value = saved.noKbMode || "direct";
+  // 生成模型要等后端下拉填完才有选项，这里先记下，syncGenModelOptions 里回填
+  el.model.dataset.want = saved.model || "";
+}
+
+function resetAdv() {
+  const el = advEls();
+  el.temp.value = ""; el.maxTok.value = ""; el.turns.value = "";
+  el.wdense.value = ""; el.pool.value = "";
+  el.fusion.value = ""; el.mmr.value = "";
+  el.noRefuse.checked = false; el.stream.checked = true;
+  saveAdv();
+  renderCfgSummary();
+}
+
+/* 生成模型下拉：选项来自该后端探测回来的可用模型 + 它自己填的默认模型。
+   没有探测结果时至少还能选到默认那个，不至于手打。 */
+function syncGenModelOptions() {
+  const sel = $("genModelSel");
+  if (!sel) return;
+  const p = providerNow();
+  const ids = [...new Set([
+    ...((p && p.models) || []),
+    ...((p && p.model_list) || []).map((m) => (typeof m === "string" ? m : m?.id)).filter(Boolean),
+    p?.model,
+  ].filter(Boolean))];
+  const want = sel.dataset.want || sel.value;
+  sel.innerHTML =
+    `<option value="">跟随后端（${esc(shortModel(p?.model)) || "未配置"}）</option>`
+    + ids.map((m) => `<option value="${esc(m)}">${esc(m)}</option>`).join("");
+  sel.value = ids.includes(want) ? want : "";
+  sel.dataset.want = "";
+}
+
+function syncNoKbRow() {
+  const off = !state.kbId;
+  $("noKbRow").hidden = !off;
+  $("noKbHint").hidden = !off;
+  if (!off) return;
+  $("noKbHint").textContent = $("noKbMode").value === "direct"
+    ? "完全不检索：模型凭自己的知识回答，没有引用编号，也不会因相关度不足而拒答。"
+    : "在全部知识库的字块里检索（不限定某一个库），回答仍带引用编号。";
 }
 
 function renderCfgSummary() {
   if (!$("cfgSummary")) return;
   const kb = state.kbs.find((k) => k.id === state.kbId);
   const prov = providerNow();
-  const bits = [kb ? kb.name : "未挂载知识库"];
+  const bits = [kb ? kb.name : (state.kbs.length ? "不挂载知识库" : "未挂载知识库")];
   bits.push(prov ? prov.name : "未配模型");
+  if (!kb && $("noKbMode")?.value === "direct") bits.push("直问模型");
   if ($("deepMode").checked) bits.push("深度");
   if ($("topKSel").value) bits.push(`Top${$("topKSel").value}`);
+  const ov = collectOverrides();
+  const nOv = Object.keys(ov).length;
+  if (nOv) bits.push(`+${nOv} 项覆盖`);
   $("cfgSummary").textContent = bits.join(" · ");
 
   // 一个圆点同时表达"有没有选"和"连不连得通"：选都没选是灰，选了但连不上是红。
@@ -1075,14 +1197,23 @@ async function ask(question) {
     scrollIfNearBottom();
   };
 
+  const opt = advEls();
   const payload = {
     question,
-    kb_id: state.kbId,
+    // 不挂载知识库时 kb_id 必须是 null（不是 0 / ""）：0 会被当成"查一个不存在的库"
+    kb_id: state.kbId || null,
     session_id: state.sessionId,
     provider: $("providerSel").value || null,
     top_k: $("topKSel").value ? Number($("topKSel").value) : null,
     rerank: $("deepMode").checked ? true : null,
     rerank_model: $("deepMode").checked ? "BAAI/bge-reranker-v2-m3" : null,
+    model: opt.model.value || null,
+    temperature: advNum(opt.temp.value),
+    max_tokens: advNum(opt.maxTok.value),
+    stream: opt.stream.checked ? null : false,   // 默认流式，只有关掉才需要显式传
+    // 不挂载知识库 + 选了「直接问模型」才跳过检索；跨全库检索仍走正常链路
+    direct: !state.kbId && opt.noKbMode.value === "direct",
+    overrides: collectOverrides(),
   };
 
   try {
@@ -1136,7 +1267,15 @@ async function ask(question) {
         if (event === "meta") {
           citations = obj.citations || [];
           state.lastCitations = citations;
-          if (obj.debug) renderDebug(obj.debug);
+          // 直问模型没有检索过程，右侧调试面板那一堆"dense/sparse/融合"
+          // 全是空的，留着只会让人以为检索坏了。
+          state.lastDirect = obj.mode === "direct";
+          if (obj.debug && !state.lastDirect) renderDebug(obj.debug);
+          if (state.lastDirect) {
+            $("panelDebug").innerHTML =
+              `<div class="dbg-block"><h4>未检索</h4><p class="hint">这一问不挂载知识库，`
+              + `直接问模型：不检索、不引用、不做拒答判定。</p></div>`;
+          }
           if (obj.context) {
             state.lastCtx = obj.context;
             applyCtxNotice(el, obj.context);
@@ -1156,7 +1295,16 @@ async function ask(question) {
           paint(false);
         } else if (event === "done") {
           paint(true);
-          if (!obj.refused) {
+          // 直问模型（不挂载库）没有资料、没有编号，引用类脚注全是误导：
+          // 覆盖 0% 会让人以为"引用没引上"，其实这一问本来就不引用。
+          if (state.lastDirect) {
+            foot.innerHTML = `<span class="ok" title="未挂载知识库，模型凭自身知识作答">直问模型 · 无引用</span>`;
+            if (obj.message_id) {
+              foot.innerHTML += `<button data-fb="up" title="回答有用">有用</button>` +
+                `<button data-fb="down" title="回答无用，进入待分析队列">无用</button>`;
+            }
+            bindFootActions(foot, obj);
+          } else if (!obj.refused) {
             const bits = [];
             if (obj.cite_coverage !== undefined) {
               const pct = Math.round(obj.cite_coverage * 100);
@@ -1194,34 +1342,8 @@ async function ask(question) {
                         `<button data-fb="down" title="回答无用，进入待分析队列">无用</button>`);
             }
             foot.innerHTML = bits.join("");
-            foot.querySelector("[data-src=cites]")?.addEventListener("click", () => {
-              switchTab("source");
-              showCitation(obj.citations[0]);
-            });
-            foot.querySelectorAll("[data-fb]").forEach((btn) => {
-              btn.onclick = async () => {
-                const verdict = btn.dataset.fb;
-                const send = async (comment) => {
-                  await jsonPost("/api/feedback", {
-                    message_id: obj.message_id,
-                    verdict,
-                    comment,
-                  });
-                  foot.querySelectorAll("[data-fb]").forEach((b) => (b.disabled = true));
-                  btn.textContent = verdict === "up" ? "已标记有用" : "已记录";
-                };
-                if (verdict === "up") {
-                  try { await send(""); } catch (err) { alert(err.message); }
-                  return;
-                }
-                // 原生 prompt() 的白框跟整个界面格格不入，还看不出提交到哪；
-                // 换成界面内浮层，顺便用 placeholder 把"写什么有用"提示出来。
-                showModal("这条回答哪里不对？（可留空）",
-                  `<textarea id="fbComment" class="fb" placeholder="比如：答非所问 / 引用了不相关的片段 / 结论有错 / 漏了关键内容…"></textarea>`,
-                  async () => { await send($("fbComment").value.trim()); },
-                  { okLabel: "提交反馈" });
-              };
-            });
+            bindCiteBtn(foot, obj);
+            bindFeedback(foot, obj);
           }
         } else if (event === "error") {
           bubble.innerHTML = renderBody(acc) +
@@ -1239,6 +1361,47 @@ async function ask(question) {
     loadKb();
     loadSessions();
   }
+}
+
+/* 脚注里的两类按钮（跳来源、反馈）在"正常带引用"和"直问模型"两条分支里
+   都要用，各写一份必然发散——直问那一支漏绑反馈是最容易发生的那种 bug。 */
+function bindFootActions(foot, obj) {
+  bindCiteBtn(foot, obj);
+  bindFeedback(foot, obj);
+}
+
+function bindCiteBtn(foot, obj) {
+  foot.querySelector("[data-src=cites]")?.addEventListener("click", () => {
+    switchTab("source");
+    showCitation(obj.citations[0]);
+  });
+}
+
+function bindFeedback(foot, obj) {
+  foot.querySelectorAll("[data-fb]").forEach((btn) => {
+    btn.onclick = async () => {
+      const verdict = btn.dataset.fb;
+      const send = async (comment) => {
+        await jsonPost("/api/feedback", {
+          message_id: obj.message_id,
+          verdict,
+          comment,
+        });
+        foot.querySelectorAll("[data-fb]").forEach((b) => (b.disabled = true));
+        btn.textContent = verdict === "up" ? "已标记有用" : "已记录";
+      };
+      if (verdict === "up") {
+        try { await send(""); } catch (err) { alert(err.message); }
+        return;
+      }
+      // 原生 prompt() 的白框跟整个界面格格不入，还看不出提交到哪；
+      // 换成界面内浮层，顺便用 placeholder 把"写什么有用"提示出来。
+      showModal("这条回答哪里不对？（可留空）",
+        `<textarea id="fbComment" class="fb" placeholder="比如：答非所问 / 引用了不相关的片段 / 结论有错 / 漏了关键内容…"></textarea>`,
+        async () => { await send($("fbComment").value.trim()); },
+        { okLabel: "提交反馈" });
+    };
+  });
 }
 
 /* ------------------------------------------------------------------ 引用 */
@@ -2738,7 +2901,22 @@ $("cfgPop").querySelectorAll("[data-goto]").forEach((btn) => {
 });
 
 $("kbSel").onchange = async (e) => {
-  const id = Number(e.target.value);
+  const raw = e.target.value;
+  if (!raw) {
+    // 不挂载知识库：清掉库与会话，消息区留着——刚问出来的那几轮不该被换库冲掉。
+    state.kbId = null;
+    localStorage.removeItem("ragkb.kb");
+    state.kbCfgDraftFor = null;
+    state.kbDetail = null;
+    state.docs = [];
+    state.sessionId = null;
+    renderKbList();
+    renderDocs();
+    renderSessions();
+    renderCfgSummary();
+    return;
+  }
+  const id = Number(raw);
   if (!id || id === state.kbId) return;
   await selectKb(id);          // 里面已经重取会话并重绘知识库页
   // 在知识库页换库就留在知识库页。原来一律跳回对话页，等于把正在核对文档的
@@ -2756,6 +2934,10 @@ $("providerSel").addEventListener("change", (e) => {
   localStorage.setItem("ragkb.provider", e.target.value);
   const opt = e.target.selectedOptions[0];
   e.target.title = opt?.title || opt?.textContent || "";
+  // 换后端 = 换一批可用模型：还留着上一个后端的模型名，等于埋一个 404
+  $("genModelSel").value = "";
+  syncGenModelOptions();
+  saveAdv();
   renderCfgSummary();
 });
 
@@ -2765,6 +2947,18 @@ $("topKSel").addEventListener("change", () => {
 });
 
 $("deepMode").addEventListener("change", () => renderCfgSummary());
+
+/* 高级参数：任何一处改动都存下来并刷新摘要。逐个绑定而不是委托到整个弹层，
+   是因为这些控件散在 <details> 里，委托容易把 summary 的展开也当成改动。 */
+["optTemp", "optMaxTok", "optStream", "optTurns", "optFusion",
+ "optWdense", "optPool", "optMmr", "optNoRefuse", "genModelSel"].forEach((id) => {
+  const el = $(id);
+  if (el) el.addEventListener("change", () => { saveAdv(); renderCfgSummary(); });
+});
+$("noKbMode").addEventListener("change", () => {
+  saveAdv(); syncNoKbRow(); renderCfgSummary();
+});
+$("btnAdvReset").onclick = resetAdv;
 
 /* ------------------------------------------------------------ 参数抽屉 */
 
@@ -5323,6 +5517,8 @@ async function newKbWizard() {
     if (savedProvider && [...$("providerSel").options].some((o) => o.value === savedProvider)) {
       $("providerSel").value = savedProvider;
     }
+    restoreAdv();
+    syncGenModelOptions();   // 选项依赖当前后端，必须在 restoreAdv 之后
     const savedK = localStorage.getItem("ragkb.topk");
     if (savedK && [...$("topKSel").options].some((o) => o.value === savedK)) {
       $("topKSel").value = savedK;

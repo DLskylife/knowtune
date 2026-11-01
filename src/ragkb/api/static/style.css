@@ -1793,6 +1793,27 @@ input[type=number].num::-webkit-outer-spin-button { -webkit-appearance: none; ma
   padding-top: 9px; border-top: 1px solid var(--line-soft);
 }
 .cfg-foot .mini { flex: 1 1 0; }
+/* 高级参数：默认收起。真正的常用项只有三个（库/后端/条数），把融合权重、
+   温度这些调优旋钮全摊开，等于让每次提问都先做一遍参数决策。 */
+.cfg-adv { border-top: 1px solid var(--line-soft); padding-top: 8px; }
+.cfg-adv > summary {
+  cursor: pointer; list-style: none; display: flex; align-items: baseline; gap: 6px;
+  font-size: 12px; color: var(--text-2); user-select: none;
+}
+.cfg-adv > summary::-webkit-details-marker { display: none; }
+.cfg-adv > summary::before {
+  content: "▸"; font-size: 9px; color: var(--text-3); transition: transform .15s;
+}
+.cfg-adv[open] > summary::before { transform: rotate(90deg); }
+.cfg-adv[open] > summary { margin-bottom: 8px; }
+.cfg-adv .cfg-sec { gap: 7px; padding: 7px 0 0; }
+.cfg-adv .cfg-label { font-size: 11px; color: var(--text-3); }
+.cfg-pop input[type="number"] {
+  width: 100%; min-width: 72px; padding: 5px 7px; font-size: 12px;
+  border: 1px solid var(--line); border-radius: 7px;
+  background: var(--surface-2, transparent); color: var(--text);
+}
+.cfg-pop input[type="number"]:focus { outline: none; border-color: var(--accent); }
 
 /* 没配模型时的引导卡：不是错误页，是"下一步做什么" */
 .empty-state.gate .es-mark {

@@ -140,11 +140,27 @@
           <div class="cfg-label">挂载知识库<span class="cfg-note" id="kbMountNote"></span></div>
           <select id="kbSel"></select>
           <div class="cfg-hint" id="kbSelHint">这次提问只在选中的库里检索。</div>
+          <div class="cfg-row" id="noKbRow" hidden>
+            <label class="field">
+              <span class="field-label">不挂载时</span>
+              <select id="noKbMode" title="不选知识库时这一问怎么走">
+                <option value="direct">直接问模型（不检索）</option>
+                <option value="all">跨全部知识库检索</option>
+              </select>
+            </label>
+          </div>
+          <div class="cfg-hint" id="noKbHint" hidden></div>
         </div>
         <div class="cfg-sec">
           <div class="cfg-label">生成后端</div>
           <select id="providerSel" title="生成后端"></select>
           <div class="cfg-hint" id="providerHint"></div>
+          <div class="cfg-row">
+            <label class="field">
+              <span class="field-label">生成模型</span>
+              <select id="genModelSel" title="只覆盖这一问用的模型，留空=跟随后端默认"></select>
+            </label>
+          </div>
         </div>
         <div class="cfg-sec">
           <div class="cfg-label">本次提问的检索参数</div>
@@ -172,6 +188,74 @@
             </label>
           </div>
         </div>
+
+        <details class="cfg-adv" id="cfgAdv">
+          <summary>高级参数<span class="cfg-note">本次提问临时生效，不写入配置</span></summary>
+          <div class="cfg-sec">
+            <div class="cfg-label">生成</div>
+            <div class="cfg-row">
+              <label class="field">
+                <span class="field-label">温度</span>
+                <input type="number" id="optTemp" min="0" max="2" step="0.05" placeholder="跟随">
+              </label>
+              <label class="field">
+                <span class="field-label">最大输出</span>
+                <input type="number" id="optMaxTok" min="64" max="8192" step="64" placeholder="跟随">
+              </label>
+              <label class="toggle" title="关掉则等服务端生成完一次性返回">
+                <input type="checkbox" id="optStream" checked>
+                <span class="sw" aria-hidden="true"></span>
+                <span class="toggle-label">流式</span>
+              </label>
+            </div>
+            <div class="cfg-row">
+              <label class="field">
+                <span class="field-label">带历史轮数</span>
+                <input type="number" id="optTurns" min="0" max="20" step="1" placeholder="跟随">
+              </label>
+            </div>
+          </div>
+          <div class="cfg-sec">
+            <div class="cfg-label">检索</div>
+            <div class="cfg-row">
+              <label class="field">
+                <span class="field-label">融合方式</span>
+                <select id="optFusion">
+                  <option value="">跟随配置</option>
+                  <option value="rrf">RRF</option>
+                  <option value="weighted">加权</option>
+                </select>
+              </label>
+              <label class="field">
+                <span class="field-label">语义权重</span>
+                <input type="number" id="optWdense" min="0" max="1" step="0.05" placeholder="跟随">
+              </label>
+            </div>
+            <div class="cfg-row">
+              <label class="field">
+                <span class="field-label">候选池</span>
+                <input type="number" id="optPool" min="5" max="100" step="5" placeholder="跟随">
+              </label>
+              <label class="field">
+                <span class="field-label">多样性 MMR</span>
+                <select id="optMmr">
+                  <option value="">跟随配置</option>
+                  <option value="1">开</option>
+                  <option value="0">关</option>
+                </select>
+              </label>
+              <label class="toggle" title="关掉后不再因相关度不足而拒答">
+                <input type="checkbox" id="optNoRefuse">
+                <span class="sw" aria-hidden="true"></span>
+                <span class="toggle-label">不拒答</span>
+              </label>
+            </div>
+          </div>
+          <div class="cfg-row cfg-foot">
+            <button class="mini" id="btnAdvReset">重置为跟随配置</button>
+          </div>
+        </details>
+
         <div class="cfg-foot">
           <button class="mini" id="btnKbConfigQuick">库参数</button>
           <button class="mini" id="btnSettings">全局参数</button>

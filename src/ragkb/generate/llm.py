@@ -209,6 +209,7 @@ class LLMClient:
         messages: list[dict],
         *,
         provider: str | None = None,
+        model: str | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
         reasoning: str | None = None,
@@ -226,7 +227,7 @@ class LLMClient:
 
         prepared = self._prepare(messages, name, prov)
         payload = self._payload(
-            prepared, prov.model, stream=True, temperature=temperature,
+            prepared, model or prov.model, stream=True, temperature=temperature,
             max_tokens=max_tokens, reasoning=reasoning,
         )
         headers = {"Content-Type": "application/json"}
@@ -313,6 +314,7 @@ class LLMClient:
         messages: list[dict],
         *,
         provider: str | None = None,
+        model: str | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
         reasoning: str | None = None,
@@ -327,7 +329,7 @@ class LLMClient:
 
         prepared = self._prepare(messages, name, prov)
         payload = self._payload(
-            prepared, prov.model, stream=False, temperature=temperature,
+            prepared, model or prov.model, stream=False, temperature=temperature,
             max_tokens=max_tokens, reasoning=reasoning,
         )
         headers = {"Content-Type": "application/json"}

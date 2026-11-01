@@ -732,6 +732,94 @@ class TestDashboard:
         assert data["kbs"][0]["name"] == "a"
 
 
+class TestPerCallOverrides:
+    """对话页「高级参数」必须真的落到模型请求里。
+
+    界面上多一排输入框很容易，难的是它们真的生效。model / temperature 这类
+    per-call 覆盖在 payload 组装处漏接的话，界面看着调了、实际一直用默认值，
+    而且没有任何报错——只能靠这条测试钉住。
+    """
+
+    @staticmethod
+    def _llm(monkeypatch, captured):
+        import json
+
+        from ragkb.config import Config, ProviderCfg
+        from ragkb.generate.llm import LLMClient
+        import ragkb.generate.llm as llm_mod
+
+        cfg = Config()
+        cfg.generation.providers["fake"] = ProviderCfg(
+            base_url="http://127.0.0.1:9999/v1", model="default-model", kind="openai")
+        cfg.generation.provider = "fake"
+        cfg.generation.temperature = 0.1
+        cfg.generation.max_tokens = 1024
+
+        lines = ["data: " + json.dumps({"choices": [{"delta": {"content": "好"}}]}),
+                 "data: [DONE]"]
+
+        class FakeResp:
+            status_code = 200
+            def read(self): return b""
+            def iter_lines(self): return iter(lines)
+
+        class FakeStream:
+            def __enter__(self): return FakeResp()
+            def __exit__(self, *a): return False
+
+        class FakeClient:
+            def __init__(self, *a, **k): pass
+            def stream(self, method, url, json=None, headers=None):
+                captured.append(json)
+                return FakeStream()
+            def close(self): pass
+
+        monkeypatch.setattr(llm_mod.httpx, "Client", FakeClient)
+        return LLMClient(cfg)
+
+    def test_model_and_sampling_reach_payload(self, monkeypatch):
+        captured = []
+        llm = self._llm(monkeypatch, captured)
+        "".join(llm.stream([{"role": "user", "content": "hi"}],
+                           model="Qwen/Qwen2.5-72B-Instruct",
+                           temperature=0.9, max_tokens=512))
+        assert captured, "请求没发出去，桩没接上"
+        p = captured[0]
+        assert p["model"] == "Qwen/Qwen2.5-72B-Instruct"
+        assert p["temperature"] == 0.9
+        assert p["max_tokens"] == 512
+
+    def test_blank_overrides_fall_back_to_config(self, monkeypatch):
+        captured = []
+        llm = self._llm(monkeypatch, captured)
+        "".join(llm.stream([{"role": "user", "content": "hi"}]))
+        p = captured[0]
+        # 不传就用后端那份配置，而不是变成 0 / 空
+        assert p["model"] == "default-model"
+        assert p["temperature"] == 0.1
+        assert p["max_tokens"] == 1024
+
+
+class TestDirectAskNoKb:
+    """不挂载知识库时走的是另一条提示词。
+
+    复用带引用的那份系统提示词会让模型拿着空的【资料】段去执行"只准依据资料"，
+    结果用户选了直问模型却收到"资料中未找到依据"——界面在骗人。
+    """
+
+    def test_direct_has_no_citation_and_no_source_rule(self):
+        from ragkb.generate.prompt import build_direct
+
+        b = build_direct("太阳病是什么？")
+        assert b.citations == []
+        assert b.used_texts == []
+        # 这两句是 RAG 那份提示词的骨架，直问模式下一条都不能留
+        assert "【资料】" not in b.user_prompt
+        assert "禁止使用任何外部知识" not in b.system_prompt
+        msgs = b.messages("太阳病是什么？", [{"role": "user", "content": "上一轮"}])
+        assert len(msgs) == 3 and msgs[0]["role"] == "system"
+
+
 class TestChatContext:
     """上下文占用核算：满了要能说清"满在哪"，不能只报一句"已满"。"""
 
