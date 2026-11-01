@@ -89,6 +89,81 @@ function esc(s) {
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
+/* 行内标记：代码 → 粗体 → 引用编号。
+   顺序有讲究：先把 `code` 抽成占位符，否则代码里的 ** 会被当粗体；
+   而引用编号必须在 esc 之后替换（esc 不动方括号，但 span 一旦先插进去，
+   后面的正则就会把 span 里的数字也当成引用）。 */
+function inlineMd(raw) {
+  const codes = [];
+  let s = String(raw).replace(/`([^`\n]+)`/g, (_m, code) => {
+    codes.push(code);
+    return `\u0000${codes.length - 1}\u0000`;
+  });
+  s = esc(s);
+  // 只吃成对的、单行内的 **…**：古籍资料里常有孤立星号，贪婪匹配会把整段吃掉
+  s = s.replace(/\*\*([^*\n]{1,160})\*\*/g, "<strong>$1</strong>");
+  s = s.replace(/\[(\d{1,2})\]/g, (_m, n) => `<span class="cite-chip" data-n="${n}">${n}</span>`);
+  s = s.replace(/\u0000(\d+)\u0000/g, (_m, i) => `<code>${esc(codes[Number(i)])}</code>`);
+  return s;
+}
+
+/* 块级：标题 / 有序列表 / 无序列表 / 段落。
+   模型（尤其 7B 这一档）几乎一律用 Markdown 分点作答，只换行不解析的话，
+   用户看到的就是"1. **使用硝石**：……"这种带星号的原始字符串——答案内容
+   没变，观感直接掉一个档次。 */
+function mdBlocks(src) {
+  const lines = String(src).replace(/\r/g, "").split("\n");
+  const out = [];
+  let para = [];
+  let list = null;
+
+  const flushPara = () => {
+    if (para.length) {
+      out.push(`<p>${para.map(inlineMd).join("<br>")}</p>`);
+      para = [];
+    }
+  };
+  const flushList = () => {
+    if (list) {
+      const tag = list.type;
+      out.push(`<${tag}>${list.items.map((i) => `<li>${inlineMd(i)}</li>`).join("")}</${tag}>`);
+      list = null;
+    }
+  };
+
+  for (const raw of lines) {
+    const t = raw.trim();
+    if (!t) { flushPara(); flushList(); continue; }
+
+    const h = t.match(/^(#{1,4})\s+(.+)$/);
+    if (h) {
+      flushPara(); flushList();
+      const lv = Math.min(h[1].length + 2, 6);
+      out.push(`<h${lv}>${inlineMd(h[2])}</h${lv}>`);
+      continue;
+    }
+    const ul = t.match(/^[-*•]\s+(.+)$/);
+    if (ul) {
+      flushPara();
+      if (!list || list.type !== "ul") { flushList(); list = { type: "ul", items: [] }; }
+      list.items.push(ul[1]);
+      continue;
+    }
+    const ol = t.match(/^(\d{1,2})[.、)]\s+(.+)$/);
+    if (ol) {
+      flushPara();
+      if (!list || list.type !== "ol") { flushList(); list = { type: "ol", items: [] }; }
+      list.items.push(ol[2]);
+      continue;
+    }
+    // 列表项之间的普通行，说明列表结束了，别再往里塞
+    flushList();
+    para.push(t);
+  }
+  flushPara(); flushList();
+  return out.join("");
+}
+
 function renderBody(text) {
   if (!text) return "";
   const parts = text.split(/```/);
@@ -98,13 +173,7 @@ function renderBody(text) {
       const body = part.replace(/^[\w-]*\n/, "");
       html += `<pre class="src-text" style="margin:8px 0">${esc(body.trim())}</pre>`;
     } else {
-      let chunk = esc(part);
-      chunk = chunk.replace(/`([^`\n]+)`/g, "<code>$1</code>");
-      chunk = chunk.replace(/\[(\d{1,2})\]/g, (m, n) =>
-        `<span class="cite-chip" data-n="${n}">${n}</span>`);
-      chunk = chunk.split(/\n{2,}/).map((p) => p.trim()).filter(Boolean)
-        .map((p) => `<p>${p.replace(/\n/g, "<br>")}</p>`).join("");
-      html += chunk;
+      html += mdBlocks(part);
     }
   });
   return html;

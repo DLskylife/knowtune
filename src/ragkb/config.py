@@ -218,8 +218,10 @@ class GenerationCfg(BaseModel):
     # 角色分工：{"translate": "hunyuan", "generate": "local-qwen"}。
     # 留空 = 所有活儿都由 provider 干（老行为），配了才分工。
     roles: dict[str, str] = {}
-    temperature: float = 0.1
-    max_tokens: int = 1024
+    # 0.1 会让 7B 这一档的输出高度模板化（三条短句 + 一句空话收尾），
+    # 事实约束靠下方【资料】与引用校验，不靠把温度压到接近贪心。
+    temperature: float = 0.3
+    max_tokens: int = 3072
     context_token_budget: int = 6000
     # 装填时的地板：预算被历史吃光后仍至少留这么多字符给资料，否则模型拿到
     # 的是一个空【资料】段。原先 prompt.py 和 chatctx.py 各自写死 200，

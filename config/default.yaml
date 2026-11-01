@@ -136,7 +136,10 @@ generation:
       api_key_env: null
       model: "mock"
       kind: mock
-  temperature: 0.1
+  # 0.1 太死板：实测同一个问题连问三次，回答措辞几乎逐字相同，"1. … 2. … 3. …"
+  # 的条目式模板一用到底。0.3 仍远低于自由发挥的区间（RAG 靠资料约束事实，
+  # 不靠低温压住），但能让措辞有变化、愿意把话说完整。
+  temperature: 0.3
   # 这是"一次回答能吃多少 token"的天花板，**含推理模型的思考部分**。
   # 1024 对推理型后端（deepseek-flash）是不够的：实测一次翻译里
   # reasoning_tokens 就占 784，正文只剩两百来个，长一点的答案直接被

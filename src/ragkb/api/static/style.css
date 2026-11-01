@@ -570,6 +570,34 @@ option:checked { color: var(--text); }
 }
 .msg.assistant .bubble p { margin: 0 0 10px; }
 .msg.assistant .bubble p:last-child { margin-bottom: 0; }
+
+/* Markdown 块：模型几乎一律用「1. **药名**：用法」这种结构作答。
+   列表不设样式的话，行号与药名会挤成一段连续文本，读起来比纯段落更累。 */
+.msg.assistant .bubble ul,
+.msg.assistant .bubble ol {
+  margin: 0 0 10px;
+  padding-left: 22px;
+}
+.msg.assistant .bubble li { margin: 0 0 6px; }
+.msg.assistant .bubble li:last-child { margin-bottom: 0; }
+.msg.assistant .bubble li::marker { color: var(--text-3); }
+.msg.assistant .bubble strong { color: #f0f4fa; font-weight: 600; }
+.msg.assistant .bubble h3,
+.msg.assistant .bubble h4,
+.msg.assistant .bubble h5 {
+  font-size: 14px;
+  font-weight: 600;
+  color: #f0f4fa;
+  margin: 2px 0 8px;
+}
+.msg.assistant .bubble h3:not(:first-child),
+.msg.assistant .bubble h4:not(:first-child) { margin-top: 12px; }
+.msg.assistant .bubble blockquote {
+  margin: 0 0 10px;
+  padding: 2px 0 2px 10px;
+  border-left: 2px solid var(--line);
+  color: var(--text-2);
+}
 .msg.assistant .bubble code {
   font-family: var(--mono);
   background: var(--surface-2);
