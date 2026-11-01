@@ -5,6 +5,10 @@
 
 from __future__ import annotations
 
+import time
+
+import time
+
 import pytest
 
 from ragkb.config import ChunkingCfg, defaults_config, load_config
@@ -155,6 +159,41 @@ class TestVerbatim:
 
     def test_no_sources_means_zero(self):
         assert verbatim_ratio("随便一句回答内容足够长以便进入统计。", []) == 0.0
+
+
+class TestProbeCacheKeyBinding:
+    """探测结论必须绑定"探它时用的那把钥匙"。
+
+    踩过（2026-11-01）：密钥默认只在内存、重启即失效，而探测结果落在
+    data/probe_cache.json 里跨重启保留——界面一片绿灯（"测试通过"），
+    一提问却 401。缓存只按时间过期，认不出钥匙已经不是同一把。
+    """
+
+    def _prov(self, key: str):
+        from ragkb.config import ProviderCfg
+        p = ProviderCfg(base_url="https://example.invalid/v1", model="m", kind="custom")
+        if key:
+            p.set_inline_key(key)
+        return p
+
+    def test_cache_dropped_when_key_changes(self):
+        from ragkb import services
+
+        services._CACHE.clear()
+        item = {"name": "x", "checked_at": time.time(), "status": "ok",
+                "key_fp": services._key_fp(self._prov("key-A"))}
+        services._CACHE["x"] = item
+        assert services.cached("x", provider=self._prov("key-A")) is item
+        assert services.cached("x", provider=self._prov("key-B")) is None
+
+    def test_cache_dropped_when_key_gone(self):
+        """重启后内存密钥没了（默认不落盘），旧绿灯必须作废。"""
+        from ragkb import services
+
+        services._CACHE.clear()
+        services._CACHE["x"] = {"name": "x", "checked_at": time.time(), "status": "ok",
+                                "key_fp": services._key_fp(self._prov("key-A"))}
+        assert services.cached("x", provider=self._prov("")) is None
 
 
 class TestLoader:
@@ -3061,6 +3100,28 @@ class TestFormerlyHardcodedParams:
         )
         assert bundle.citations[0].preview == text[:160]
         assert text in bundle.user_prompt, "地板 300 应容得下整条 212 字的片段"
+
+    def test_used_texts_available_for_verbatim_check(self):
+        """照抄检测要用块原文，而 bundle.used 只是**个数**（int）。
+
+        踩过：拿 used 当列表解包 [c.text for _, c in bundle.used]，
+        线上直接 TypeError 把整条问答打挂。这里把契约钉住。
+        """
+        from ragkb.generate.prompt import build_context
+        from ragkb.models import Candidate
+
+        cands = [
+            Candidate(chunk_id=i, doc_id=1, doc_title="t", source_uri="u",
+                      page_no=None, heading_path=None, text=f"资料正文{i}" * 30)
+            for i in range(3)
+        ]
+        cfg = self._cfg()
+        bundle = build_context(
+            cands, question="问", token_budget=4000, prompt_version=cfg.prompt_version,
+        )
+        assert isinstance(bundle.used, int)
+        assert len(bundle.used_texts) == bundle.used
+        assert bundle.used_texts[0] == cands[0].text
 
     def test_cross_checks_for_new_params(self):
         from ragkb import settings

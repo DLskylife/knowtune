@@ -41,6 +41,10 @@ class ContextBundle:
     used: int = 0
     dropped: int = 0
     tokens_used: int = 0
+    # 真正装进【资料】的块原文。used 是**个数**（int），拿不到内容——照抄检测
+    # 要逐句比对原文，只能另存一份。别改成把 used 变成列表：它的 int 语义
+    # 已经写进 done 事件的 context_used，前端按数字渲染。
+    used_texts: list[str] = field(default_factory=list)
 
     def messages(self, question: str, history: list[dict] | None = None) -> list[dict]:
         msgs: list[dict] = [{"role": "system", "content": self.system_prompt}]
@@ -155,6 +159,7 @@ def build_context(
         used=len(used),
         dropped=dropped,
         tokens_used=spent,
+        used_texts=[cand.text for _, cand in used],
     )
 
 

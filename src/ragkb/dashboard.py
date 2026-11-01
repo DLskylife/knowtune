@@ -180,7 +180,7 @@ def build(
     # 服务状态只给"上次探到什么"，不在这里发请求。前端渲染完首屏再强制探一次。
     svc = []
     for name, p in cfg.generation.providers.items():
-        cached = services_mod.cached(name) or {}
+        cached = services_mod.cached(name, provider=p) or {}
         svc.append({
             "name": name,
             "kind": p.kind,

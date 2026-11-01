@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import ipaddress
 import json
 import threading
@@ -66,6 +67,24 @@ _NON_CHAT_HINTS = (
     # 反而"一直找不到"。
     "t2v", "i2v", "text-to-video", "image-to-video", "kolors", "bge",
 )
+
+
+def _key_fp(prov: ProviderCfg | None) -> str:
+    """这把密钥的指纹（不存密钥本体，只存够区分"换没换"的一小段哈希）。
+
+    探测结论是**对某把钥匙而言**的：密钥换了、或者重启后内存里的密钥没了
+    （默认不落盘）而盘上缓存还在，旧绿灯就成了过期结论——用户看到"测试通过"，
+    一提问却 401。缓存里带上指纹，换钥匙就自动作废。
+    """
+    if prov is None:
+        return "unknown"
+    try:
+        key = prov.api_key() or ""
+    except Exception:  # noqa: BLE001 - 取不到就当"没密钥"，不拖累探测
+        key = ""
+    if not key.strip():
+        return "no_key"
+    return hashlib.sha256(key.strip().encode("utf-8", "ignore")).hexdigest()[:12]
 
 
 def split_chat_models(ids: list[str]) -> tuple[list[str], int]:
@@ -140,6 +159,7 @@ def probe_one(
         "base_url": p.base_url,
         "model": p.model,
         "checked_at": time.time(),
+        "key_fp": _key_fp(p),
     }
 
     if p.kind == "mock" or not p.base_url:
@@ -284,14 +304,26 @@ def probe_all(cfg: Config, *, force: bool = True) -> dict[str, dict[str, Any]]:
     return {name: _CACHE[name] for name in names if name in _CACHE}
 
 
-def cached(name: str, *, max_age_s: float = 24 * 3600) -> dict[str, Any] | None:
+def cached(name: str, *, max_age_s: float = 24 * 3600,
+           provider: ProviderCfg | None = None) -> dict[str, Any] | None:
     """上次探测结果。窗口给到 24h：这是"最近一次的结论"而不是"实时状态"，
     前端会显示探测时间；真要新数据走强制探测。之前窗口只有 300s，服务重启
-    后模型页整页"还没探测"，看起来像数据全丢了。"""
+    后模型页整页"还没探测"，看起来像数据全丢了。
+
+    `provider` 给进来时会比对密钥指纹：24h 的窗口是给"同一把钥匙"的宽容度，
+    换了钥匙（或重启后内存密钥没了、只剩盘上的旧缓存）就必须重新探测——
+    否则界面会拿着上一把钥匙的绿灯说"可用"，一调用却 401。
+    """
     item = _CACHE.get(name)
-    if item and time.time() - item["checked_at"] < max_age_s:
-        return item
-    return None
+    if not item:
+        return None
+    if time.time() - item.get("checked_at", 0) >= max_age_s:
+        return None
+    if provider is not None:
+        fp = _key_fp(provider)
+        if fp != "unknown" and item.get("key_fp") and item["key_fp"] != fp:
+            return None
+    return item
 
 
 def invalidate(name: str | None = None) -> None:

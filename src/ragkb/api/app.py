@@ -595,7 +595,8 @@ def probe_services(name: str | None = None) -> dict:
 def list_models() -> dict:
     data = modelcfg.listing(state.cfg)
     for p in data["providers"]:
-        probe = services_mod.cached(p["name"]) or {}
+        probe = services_mod.cached(
+            p["name"], provider=state.cfg.generation.providers.get(p["name"])) or {}
         p["status"] = probe.get("status", "unknown")
         p["latency_ms"] = probe.get("latency_ms")
         p["message"] = probe.get("message", "还没探测")
@@ -2704,6 +2705,10 @@ def ask(req: AskRequest) -> Response:
             hint = llm_mod.human_hint(exc, kb_cfg.generation.provider)
             if hint:
                 error = f"{error}\n\n{hint}"
+            # 调用被拒 = 探测时那把钥匙已经不作数了（换过、或重启后内存里没了）。
+            # 缓存不作废的话，模型页会继续显示上一把钥匙探出来的绿灯。
+            if getattr(exc, "status", None) in (401, 403):
+                services_mod.invalidate(kb_cfg.generation.provider)
         except Exception as exc:
             error = f"{type(exc).__name__}: {exc}"
         gen_ms = int((time.perf_counter() - gen_started) * 1000)
@@ -2718,7 +2723,7 @@ def ask(req: AskRequest) -> Response:
         report = cite_mod.verify(answer, len(bundle.citations))
         # 照抄检测：拿本次真正装进提示词的那几块原文比对（bundle.used 才是
         # 模型看到的资料，用它而不是全库，避免"抄了别的块"也算进比例）。
-        vr = cite_mod.verbatim_ratio(answer, [c.text for _, c in bundle.used])
+        vr = cite_mod.verbatim_ratio(answer, bundle.used_texts)
         if vr >= 0.6 and not report.blanket:
             report.blanket = f"疑似照抄原文：{vr:.0%} 的句子与资料逐字相同，未归纳作答"
         citations = [asdict(c) for c in bundle.citations]
