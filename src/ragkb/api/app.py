@@ -298,7 +298,13 @@ def _sweep_orphan_imports() -> None:
 async def lifespan(app: FastAPI):
     # 只有之前勾过"记住密钥"才会有这个文件；没有就是纯内存，重启即清空。
     if secrets_mod.attach(state.cfg.storage.data_dir):
-        logbus.note("已从本机文件恢复密钥（你之前勾了『记住密钥』）", source="models")
+        logbus.note(
+            f"已从本机密文文件恢复密钥（{secrets_mod.backend_label()}；你之前勾了『记住密钥』）",
+            source="models")
+        # 换账户/换机器后密文解不开：这时候界面上"密钥已记住"是假的，
+        # 提示"去模型页重填"才是有用的信息。
+        if secrets_mod.last_error():
+            logbus.note(secrets_mod.last_error(), level="WARNING", source="models")
     _sweep_orphan_imports()
     stale = _sweep_stale_parts()
     if stale:
@@ -712,9 +718,11 @@ def upsert_model(name: str, req: ModelUpsert) -> dict:
     if req.remember is not None:
         if req.remember:
             ok = secrets_mod.save()
-            logbus.note(f"密钥已记到本机：{state.cfg.storage.data_dir / 'secrets.json'}"
-                        if ok else "记住密钥失败（无法写入 data 目录）",
-                        level="WARNING", source="models")
+            logbus.note(
+                (f"密钥已加密记到本机（{secrets_mod.backend_label()}）："
+                 f"{state.cfg.storage.data_dir / 'secrets.json'}")
+                if ok else f"记住密钥失败：{secrets_mod.last_error() or '无法写入 data 目录'}",
+                level="WARNING", source="models")
         else:
             secrets_mod.forget()
     return {"ok": True, **result, "listing": modelcfg.listing(state.cfg)}

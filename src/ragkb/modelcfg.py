@@ -449,5 +449,8 @@ def listing(cfg: Config) -> dict[str, Any]:
         "kinds": kinds(cfg),
         # 密钥是否被"记住到本机"（默认 False = 纯内存，重启即清空）
         "keys_persisted": secrets_mod.persisted(),
+        # 落盘用的是哪种保护（Windows 账户加密 / 不支持）。界面要如实写，
+        # 别让人以为"记住"等于明文躺在一个文件里。
+        "key_cipher": secrets_mod.backend_label(),
         "file": {"path": str(MODELS_CONFIG), "exists": MODELS_CONFIG.exists()},
     }

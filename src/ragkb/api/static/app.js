@@ -4822,8 +4822,9 @@ async function renderModels() {
     <p class="hint" style="margin-bottom:12px">
       所有后端都走 OpenAI 兼容协议（<code>/v1/chat/completions</code>），所以本地起什么服务都行：
       vLLM、LM Studio、Ollama、llama.cpp、one-api……只要填对 <code>base_url</code> 与模型名。
-      密钥直接填在新增/编辑弹窗里，<b>只存在服务进程内存</b>——不落任何配置文件，
-      服务一停就清空，重启后要重新填。
+      密钥直接填在新增/编辑弹窗里，<b>只存在服务进程内存</b>——不写进任何配置文件，
+      服务一停就清空，重启后要重新填。想省掉这一步就勾「记住密钥」：写下去的是
+      <b>密文</b>（${esc(d.key_cipher || "系统级加密")}），换账户或换机器即失效。
     </p>
     <div class="kb-actions">
       <button class="primary-btn" id="modelsAdd">＋ 新增后端</button>
@@ -5061,7 +5062,8 @@ async function openModelEditor(name) {
           ? "已有一个密钥在内存里。留空保存 = 保持不变。"
           : "密钥只存在服务进程内存里，<b>不写任何配置文件</b>；服务一停就清空，重启后要重新填。"}</span>
         <label class="remember-row"><input type="checkbox" id="mRemember"${d.keys_persisted ? " checked" : ""}>
-          记住密钥到本机（明文存在 data/secrets.json，勾了重启才不用重填）</label></div>
+          记住密钥到本机（<b>以密文</b>存 data/secrets.json，用 ${esc(d.key_cipher || "系统级加密")}
+          保护，换账户或换机器即失效；勾了重启才不用重填）</label></div>
       <div class="form-row" style="grid-column: span 2"><label>默认模型</label>
         <div class="input-row">
           <select id="mModel"></select>

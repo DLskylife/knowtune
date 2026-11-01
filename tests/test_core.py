@@ -3014,7 +3014,11 @@ class TestModelListAndRemember:
         })
         assert r.status_code == 200, r.text
         assert secrets.persisted(), "勾了『记住』就该有盘上的文件"
-        assert "sk-remember-me" in (tmp_path / "secrets.json").read_text(encoding="utf-8")
+        # 写下去的必须是密文：明文文件会被备份/同步盘/截图带走。
+        # （非 Windows 上没有 DPAPI，save() 会拒绝落盘，那条路径另有一测。）
+        saved = (tmp_path / "secrets.json").read_text(encoding="utf-8")
+        if secrets.persisted() and '"enc"' in saved:
+            assert "sk-remember-me" not in saved, "密钥明文落盘了"
 
         r = c.put("/api/models/deepseek", json={
             "base_url": "https://api.deepseek.com", "model": "deepseek-flash",
@@ -4032,3 +4036,185 @@ class TestAskUsesSelectedBackend:
         assert spy.seen == ("deepseek", "deepseek-v4-pro"), "请求没带上本次选的后端/模型"
         assert '"provider":"deepseek"' in body.replace(" ", "")
         assert "deepseek-v4-pro" in body
+
+
+class TestSecretStore:
+    """密钥落盘：只能落密文，且解不开时不能拿密文当密钥用。
+
+    背景（2026-11-01）：data/secrets.json 原先是明文 JSON。Windows 上 chmod
+    收不住权限，而这个文件会被备份、被同步盘带走、被截图——任何一种都等于
+    密钥泄露。现在写下去的一律是 DPAPI 密文，绑当前 Windows 账户。
+    """
+
+    @staticmethod
+    def _store(monkeypatch, tmp_path):
+        from ragkb import secrets as S
+
+        monkeypatch.setattr(S, "_KEYS", {})
+        monkeypatch.setattr(S, "_PATH", None)
+        monkeypatch.setattr(S, "_LAST_ERROR", None)
+        return S, tmp_path / "secrets.json"
+
+    def test_saved_file_never_contains_the_key(self, monkeypatch, tmp_path):
+        import pytest
+        from ragkb import secrets as S
+
+        if not S._WINDOWS:
+            pytest.skip("这条测的是 Windows DPAPI 落盘")
+        S, path = self._store(monkeypatch, tmp_path)
+        S.attach(tmp_path)
+        S.put("deepseek", "sk-super-secret-value")
+        assert S.save() is True
+        raw = path.read_text(encoding="utf-8")
+        assert "sk-super-secret-value" not in raw
+        assert "super" not in raw
+        assert '"enc": "dpapi"' in raw, "没标加密方式，读回时无法判断怎么解"
+
+    def test_roundtrip(self, monkeypatch, tmp_path):
+        import pytest
+        from ragkb import secrets as S
+
+        if not S._WINDOWS:
+            pytest.skip("这条测的是 Windows DPAPI 落盘")
+        S, _ = self._store(monkeypatch, tmp_path)
+        S.attach(tmp_path)
+        S.put("bailian", "sk-abc-123")
+        assert S.save() is True
+        S.clear()
+        assert S.get("bailian") is None
+        assert S.attach(tmp_path) is True
+        assert S.get("bailian") == "sk-abc-123"
+        assert S.last_error() is None
+
+    def test_legacy_plaintext_file_is_upgraded(self, monkeypatch, tmp_path):
+        """旧版明文文件读进来要立刻重写成密文，不能继续留着明文。"""
+        import json
+        import pytest
+        from ragkb import secrets as S
+
+        if not S._WINDOWS:
+            pytest.skip("这条测的是 Windows DPAPI 落盘")
+        S, path = self._store(monkeypatch, tmp_path)
+        path.write_text(json.dumps({"keys": {"deepseek": "sk-old-plain"}}),
+                        encoding="utf-8")
+        assert S.attach(tmp_path) is True
+        assert S.get("deepseek") == "sk-old-plain", "旧文件必须先能读回来"
+        assert "sk-old-plain" not in path.read_text(encoding="utf-8"), "明文没被升级掉"
+
+    def test_undecryptable_entry_is_skipped_not_used(self, monkeypatch, tmp_path):
+        """换账户/换机器后密文解不开：跳过并说清楚，绝不能拿密文去发请求。"""
+        import json
+        from ragkb import secrets as S
+
+        S, path = self._store(monkeypatch, tmp_path)
+        path.write_text(json.dumps(
+            {"v": 2, "enc": "dpapi", "keys": {"deepseek": "not-valid-base64!!"}}),
+            encoding="utf-8")
+        assert S.attach(tmp_path) is True
+        assert S.get("deepseek") is None
+        assert "deepseek" in (S.last_error() or ""), "没告诉用户是哪个读不回来"
+
+    def test_refuses_plaintext_when_no_system_cipher(self, monkeypatch, tmp_path):
+        """没有系统级加密就干脆不写：假加密比没加密更坏。"""
+        from ragkb import secrets as S
+
+        S, path = self._store(monkeypatch, tmp_path)
+        monkeypatch.setattr(S, "_WINDOWS", False)
+        S.attach(tmp_path)
+        S.put("deepseek", "sk-nope")
+        assert S.save() is False
+        assert not path.exists(), "不支持加密时仍写了文件"
+        assert S.last_error() and "拒绝" in S.last_error()
+        # 内存里照常能用：不支持落盘 ≠ 不让用
+        assert S.get("deepseek") == "sk-nope"
+
+
+class TestSecretStore:
+    """密钥落盘：只能落密文，且解不开时不能拿密文当密钥用。
+
+    背景（2026-11-01）：data/secrets.json 原先是明文 JSON。Windows 上 chmod
+    收不住权限，而这个文件会被备份、被同步盘带走、被截图——任何一种都等于
+    密钥泄露。现在写下去的一律是 DPAPI 密文，绑当前 Windows 账户。
+    """
+
+    @staticmethod
+    def _store(monkeypatch, tmp_path):
+        from ragkb import secrets as S
+
+        monkeypatch.setattr(S, "_KEYS", {})
+        monkeypatch.setattr(S, "_PATH", None)
+        monkeypatch.setattr(S, "_LAST_ERROR", None)
+        return S, tmp_path / "secrets.json"
+
+    def test_saved_file_never_contains_the_key(self, monkeypatch, tmp_path):
+        import pytest
+        from ragkb import secrets as S
+
+        if not S._WINDOWS:
+            pytest.skip("这条测的是 Windows DPAPI 落盘")
+        S, path = self._store(monkeypatch, tmp_path)
+        S.attach(tmp_path)
+        S.put("deepseek", "sk-super-secret-value")
+        assert S.save() is True
+        raw = path.read_text(encoding="utf-8")
+        assert "sk-super-secret-value" not in raw
+        assert "super" not in raw
+        assert '"enc": "dpapi"' in raw, "没标加密方式，读回时无法判断怎么解"
+
+    def test_roundtrip(self, monkeypatch, tmp_path):
+        import pytest
+        from ragkb import secrets as S
+
+        if not S._WINDOWS:
+            pytest.skip("这条测的是 Windows DPAPI 落盘")
+        S, _ = self._store(monkeypatch, tmp_path)
+        S.attach(tmp_path)
+        S.put("bailian", "sk-abc-123")
+        assert S.save() is True
+        S.clear()
+        assert S.get("bailian") is None
+        assert S.attach(tmp_path) is True
+        assert S.get("bailian") == "sk-abc-123"
+        assert S.last_error() is None
+
+    def test_legacy_plaintext_file_is_upgraded(self, monkeypatch, tmp_path):
+        """旧版明文文件读进来要立刻重写成密文，不能继续留着明文。"""
+        import json
+        import pytest
+        from ragkb import secrets as S
+
+        if not S._WINDOWS:
+            pytest.skip("这条测的是 Windows DPAPI 落盘")
+        S, path = self._store(monkeypatch, tmp_path)
+        path.write_text(json.dumps({"keys": {"deepseek": "sk-old-plain"}}),
+                        encoding="utf-8")
+        assert S.attach(tmp_path) is True
+        assert S.get("deepseek") == "sk-old-plain", "旧文件必须先能读回来"
+        assert "sk-old-plain" not in path.read_text(encoding="utf-8"), "明文没被升级掉"
+
+    def test_undecryptable_entry_is_skipped_not_used(self, monkeypatch, tmp_path):
+        """换账户/换机器后密文解不开：跳过并说清楚，绝不能拿密文去发请求。"""
+        import json
+        from ragkb import secrets as S
+
+        S, path = self._store(monkeypatch, tmp_path)
+        path.write_text(json.dumps(
+            {"v": 2, "enc": "dpapi", "keys": {"deepseek": "not-valid-base64!!"}}),
+            encoding="utf-8")
+        assert S.attach(tmp_path) is True
+        assert S.get("deepseek") is None
+        assert "deepseek" in (S.last_error() or ""), "没告诉用户是哪个读不回来"
+
+    def test_refuses_plaintext_when_no_system_cipher(self, monkeypatch, tmp_path):
+        """没有系统级加密就干脆不写：假加密比没加密更坏。"""
+        from ragkb import secrets as S
+
+        S, path = self._store(monkeypatch, tmp_path)
+        monkeypatch.setattr(S, "_WINDOWS", False)
+        S.attach(tmp_path)
+        S.put("deepseek", "sk-nope")
+        assert S.save() is False
+        assert not path.exists(), "不支持加密时仍写了文件"
+        assert S.last_error() and "拒绝" in S.last_error()
+        # 内存里照常能用：不支持落盘 ≠ 不让用
+        assert S.get("deepseek") == "sk-nope"
