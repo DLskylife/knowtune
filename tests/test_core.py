@@ -4217,97 +4217,6 @@ class TestSecretStore:
         assert S.get("deepseek") == "sk-nope"
 
 
-class TestSecretStore:
-    """密钥落盘：只能落密文，且解不开时不能拿密文当密钥用。
-
-    背景（2026-11-01）：data/secrets.json 原先是明文 JSON。Windows 上 chmod
-    收不住权限，而这个文件会被备份、被同步盘带走、被截图——任何一种都等于
-    密钥泄露。现在写下去的一律是 DPAPI 密文，绑当前 Windows 账户。
-    """
-
-    @staticmethod
-    def _store(monkeypatch, tmp_path):
-        from knowtune import secrets as S
-
-        monkeypatch.setattr(S, "_KEYS", {})
-        monkeypatch.setattr(S, "_PATH", None)
-        monkeypatch.setattr(S, "_LAST_ERROR", None)
-        return S, tmp_path / "secrets.json"
-
-    def test_saved_file_never_contains_the_key(self, monkeypatch, tmp_path):
-        import pytest
-        from knowtune import secrets as S
-
-        if not S._WINDOWS:
-            pytest.skip("这条测的是 Windows DPAPI 落盘")
-        S, path = self._store(monkeypatch, tmp_path)
-        S.attach(tmp_path)
-        S.put("deepseek", "sk-super-secret-value")
-        assert S.save() is True
-        raw = path.read_text(encoding="utf-8")
-        assert "sk-super-secret-value" not in raw
-        assert "super" not in raw
-        assert '"enc": "dpapi"' in raw, "没标加密方式，读回时无法判断怎么解"
-
-    def test_roundtrip(self, monkeypatch, tmp_path):
-        import pytest
-        from knowtune import secrets as S
-
-        if not S._WINDOWS:
-            pytest.skip("这条测的是 Windows DPAPI 落盘")
-        S, _ = self._store(monkeypatch, tmp_path)
-        S.attach(tmp_path)
-        S.put("bailian", "sk-abc-123")
-        assert S.save() is True
-        S.clear()
-        assert S.get("bailian") is None
-        assert S.attach(tmp_path) is True
-        assert S.get("bailian") == "sk-abc-123"
-        assert S.last_error() is None
-
-    def test_legacy_plaintext_file_is_upgraded(self, monkeypatch, tmp_path):
-        """旧版明文文件读进来要立刻重写成密文，不能继续留着明文。"""
-        import json
-        import pytest
-        from knowtune import secrets as S
-
-        if not S._WINDOWS:
-            pytest.skip("这条测的是 Windows DPAPI 落盘")
-        S, path = self._store(monkeypatch, tmp_path)
-        path.write_text(json.dumps({"keys": {"deepseek": "sk-old-plain"}}),
-                        encoding="utf-8")
-        assert S.attach(tmp_path) is True
-        assert S.get("deepseek") == "sk-old-plain", "旧文件必须先能读回来"
-        assert "sk-old-plain" not in path.read_text(encoding="utf-8"), "明文没被升级掉"
-
-    def test_undecryptable_entry_is_skipped_not_used(self, monkeypatch, tmp_path):
-        """换账户/换机器后密文解不开：跳过并说清楚，绝不能拿密文去发请求。"""
-        import json
-        from knowtune import secrets as S
-
-        S, path = self._store(monkeypatch, tmp_path)
-        path.write_text(json.dumps(
-            {"v": 2, "enc": "dpapi", "keys": {"deepseek": "not-valid-base64!!"}}),
-            encoding="utf-8")
-        assert S.attach(tmp_path) is True
-        assert S.get("deepseek") is None
-        assert "deepseek" in (S.last_error() or ""), "没告诉用户是哪个读不回来"
-
-    def test_refuses_plaintext_when_no_system_cipher(self, monkeypatch, tmp_path):
-        """没有系统级加密就干脆不写：假加密比没加密更坏。"""
-        from knowtune import secrets as S
-
-        S, path = self._store(monkeypatch, tmp_path)
-        monkeypatch.setattr(S, "_WINDOWS", False)
-        S.attach(tmp_path)
-        S.put("deepseek", "sk-nope")
-        assert S.save() is False
-        assert not path.exists(), "不支持加密时仍写了文件"
-        assert S.last_error() and "拒绝" in S.last_error()
-        # 内存里照常能用：不支持落盘 ≠ 不让用
-        assert S.get("deepseek") == "sk-nope"
-
-
 class TestModelCatalogAndActiveModel:
     """模型模块的结构契约（2026-11-01）。
 
@@ -4415,3 +4324,64 @@ class TestModelCatalogAndActiveModel:
         assert r["ok"] is True
         assert r["message"] == "连通", "探测成功只说结论，模型数量不该出现在状态行里"
         assert len(r["models"]) == 37, "模型清单本身还得带出去，只是别塞进提示里"
+
+
+class TestVectorStoreLoad:
+    """`_load` 的批量拼接路径（2026-11-01 优化：join + 一次 frombuffer，10 万行 408ms→57ms）。
+
+    这条路径容易出事的地方不是速度，是**对齐**：矩阵行、chunk_id、doc_id、kb_id
+    必须严格一一对应，一旦某行被跳过而 id 数组没跟着跳过，检索就会把 A 的分
+    算到 B 头上——症状是"答案引了一段完全无关的文本"，极难排查。所以这里用
+    假连接直接把"脏行"塞进结果集，验跳过语义与顺序。
+    """
+
+    class _Cur:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def fetchall(self):
+            return self.rows
+
+    class _Conn:
+        def __init__(self, rows, docs):
+            self.rows, self.docs = rows, docs
+
+        def execute(self, sql, params=()):
+            return TestVectorStoreLoad._Cur(
+                self.rows if "FROM chunk" in sql else self.docs
+            )
+
+    def test_skips_bad_rows_without_losing_alignment(self):
+        import numpy as np
+
+        from knowtune.config import defaults_config
+        from knowtune.index.vectors import VectorStore
+
+        cfg = defaults_config()
+        dim = cfg.embedding.dim
+
+        def row(chunk_id, vec, dim_claimed=None):
+            return {"chunk_id": chunk_id, "doc_id": 100 + chunk_id, "kb_id": 1,
+                    "vec": vec.astype(np.float32).tobytes(),
+                    "dim": dim if dim_claimed is None else dim_claimed}
+
+        good_a = np.ones(dim, dtype=np.float32)
+        good_b = np.zeros(dim, dtype=np.float32)
+        rows = [
+            row(1, good_a),
+            row(2, np.ones(dim + 3, dtype=np.float32)),      # 向量长度与 dim 不符
+            row(3, good_b, dim_claimed=dim * 2),             # 声明的 dim 不符
+            row(4, good_b),
+        ]
+        docs = [{"id": 100 + i, "source_type": "md", "imported_at": "2026-11-01"}
+                for i in (1, 2, 3, 4)]
+
+        vs = VectorStore(cfg)
+        vs.ensure(self._Conn(rows, docs))
+
+        assert vs.stats["vectors"] == 2, "脏行没被挡住"
+        assert vs.stats["skipped_dim_mismatch"] == 2
+
+        hits = vs.search(self._Conn(rows, docs), np.ones(dim, dtype=np.float32), top_k=5)
+        assert [h.chunk_id for h in hits] == [1, 4], "矩阵行与 chunk_id 错位了"
+        assert hits[0].score > hits[1].score, "全 1 向量该比全 0 向量更相似"

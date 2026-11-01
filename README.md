@@ -283,7 +283,7 @@ src/knowtune/      全部 Python 源码 + 两套前端静态文件
 config/            default / local / models / instances / prompts
 data/              library.db、上传原件、模型权重、密钥、标定结果
 evals/             题集与基线
-tests/             255 条单测
+tests/             259 条单测
 scripts/           截图、冒烟、模型下载、WBS 生成
 docs/              架构文档、项目地图、WBS
 ```
