@@ -723,34 +723,45 @@ def upsert_model(name: str, req: ModelUpsert) -> dict:
     if sig_before != sig_after:
         services_mod.invalidate(name)
 
-    # 密钥只在内存里：写进注册表随即丢掉引用，任何落盘路径都碰不到它。
-    if req.api_key is not None:
-        from .. import secrets as secrets_mod
+    # 密钥不写进 models.yaml：注册表里永远没有它。
+    from .. import secrets as secrets_mod
 
+    if req.api_key is not None:
         key = req.api_key.strip()
         if key:
             secrets_mod.put(name, key)
             services_mod.invalidate(name)     # 换了密钥，之前的探测结论作废
-            logbus.note(f"后端 {name} 的密钥已更新（仅内存）", source="models")
+            logbus.note(f"后端 {name} 的密钥已更新", source="models")
         else:
             secrets_mod.drop(name)
             services_mod.invalidate(name)
             logbus.note(f"后端 {name} 的密钥已清空", source="models")
+
+    if req.remember is not None:
+        secrets_mod.set_autosave(bool(req.remember))
+
     logbus.note(
         f"后端 {name} 已保存：{req.model} @ {req.base_url or '-'}", source="models"
     )
-    from .. import secrets as secrets_mod
 
-    if req.remember is not None:
-        if req.remember:
-            ok = secrets_mod.save()
-            logbus.note(
-                (f"密钥已加密记到本机（{secrets_mod.backend_label()}）："
-                 f"{state.cfg.storage.data_dir / 'secrets.json'}")
-                if ok else f"记住密钥失败：{secrets_mod.last_error() or '无法写入 data 目录'}",
-                level="WARNING", source="models")
+    # 密钥一变就同步落盘（默认就是这个行为）。日志必须把"存了 / 只在内存"
+    # 说清楚——否则用户只能靠重启一次去猜，而那就是他重填十遍的原因。
+    # 注意这里不判 `names()` 非空：把最后一个密钥清掉时，恰恰需要写一次
+    # 才能删掉盘上的旧文件（save() 在内存为空时走 forget 分支）。
+    if req.api_key is not None or req.remember is not None:
+        if not secrets_mod.autosave():
+            logbus.note("密钥只保留在本次会话：不落盘，重启后需重填", source="models")
+        elif secrets_mod.autosync():
+            if secrets_mod.names():
+                logbus.note(
+                    f"密钥已以密文记到本机（{secrets_mod.backend_label()}）："
+                    f"{state.cfg.storage.data_dir / 'secrets.json'}", source="models")
+            else:
+                logbus.note("已没有需要保存的密钥，本机密钥文件已清除", source="models")
         else:
-            secrets_mod.forget()
+            logbus.note(
+                f"记住密钥失败：{secrets_mod.last_error() or '无法写入 data 目录'}",
+                level="WARNING", source="models")
     return {"ok": True, **result, "listing": modelcfg.listing(state.cfg)}
 
 

@@ -2973,10 +2973,10 @@ class TestChatModelFilter:
 
 
 class TestModelListAndRemember:
-    """模型清单 + 可选"记住密钥"（2026-10-28，参考 ccswitch 的配法）。
+    """模型清单 + 密钥保存策略（2026-10-28 起，2026-11-01 反转默认值）。
 
-    要点：清单是**人维护的候选表**，不是探测返回的原始列表；密钥默认不落盘，
-    只有显式勾了才写 data/secrets.json。
+    清单是**人维护的候选表**，不是探测返回的原始列表。
+    密钥默认落盘（DPAPI 密文），显式取消勾选才是"只保留本次会话"。
     """
 
     def setup_method(self):
@@ -3054,8 +3054,12 @@ class TestModelListAndRemember:
         assert not secrets.persisted(), "取消勾选要删掉盘上的文件"
         assert secrets.get("deepseek") == "sk-remember-me", "内存里那份不该被顺手清掉"
 
-    def test_default_does_not_touch_disk(self, tmp_path, monkeypatch):
-        """不传 remember 时绝不能偷偷落盘——默认必须是纯内存。"""
+    def test_default_persists_encrypted(self, tmp_path, monkeypatch):
+        """不传 remember 时默认落盘（2026-11-01 改）。
+
+        原设计是"纯内存，勾了才存"，实测这条是错的：大多数人不会去勾那个框，
+        于是每次重启都要重填密钥。现在反过来——填了就存，存的一律是密文。
+        """
         from fastapi.testclient import TestClient
 
         from knowtune import modelcfg, secrets
@@ -3066,10 +3070,68 @@ class TestModelListAndRemember:
         c = TestClient(app_mod.app)
         c.put("/api/models/deepseek", json={
             "base_url": "https://api.deepseek.com", "model": "deepseek-flash",
-            "kind": "deepseek", "api_key": "sk-memory-only",
+            "kind": "deepseek", "api_key": "sk-default-saved",
         })
-        assert secrets.get("deepseek") == "sk-memory-only"
-        assert not secrets.persisted(), "没勾就落盘 = 违背『停服即清空』"
+        assert secrets.get("deepseek") == "sk-default-saved"
+        if not secrets.persisted():
+            # 非 Windows 没有 DPAPI，save() 会明确拒绝落盘而不是写明文
+            assert "加密" in (secrets.last_error() or "")
+            return
+        saved = (tmp_path / "secrets.json").read_text(encoding="utf-8")
+        assert "sk-default-saved" not in saved, "默认落盘写成了明文"
+
+    def test_opt_out_marks_and_sticks_across_attach(self, tmp_path, monkeypatch):
+        """显式选「仅本次会话」后，重启再进来也不能又悄悄存了。"""
+        from fastapi.testclient import TestClient
+
+        from knowtune import modelcfg, secrets
+        from knowtune.api import app as app_mod
+
+        monkeypatch.setattr(modelcfg, "MODELS_CONFIG", tmp_path / "models.yaml")
+        secrets.attach(tmp_path)
+        c = TestClient(app_mod.app)
+        c.put("/api/models/deepseek", json={
+            "base_url": "https://api.deepseek.com", "model": "deepseek-flash",
+            "kind": "deepseek", "api_key": "sk-session-only", "remember": False,
+        })
+        assert not secrets.persisted(), "选了仅本次会话还留着文件"
+        assert (tmp_path / "secrets.off").exists(), "没留下『别再存』的标记"
+
+        # 模拟重启：清内存、重新 attach 同一个目录
+        secrets.clear()
+        assert secrets.attach(tmp_path) is False
+        assert secrets.autosave() is False, "重启后把用户的『不保存』选择丢了"
+
+    def test_empty_keys_removes_file(self, tmp_path):
+        """把密钥全删干净时，盘上不该留一个空的 secrets.json 骗人。"""
+        from knowtune import secrets
+
+        secrets.attach(tmp_path)
+        secrets.put("a", "sk-1")
+        assert secrets.save()
+        assert secrets.persisted()
+        secrets.clear()
+        assert secrets.save()
+        assert not secrets.persisted(), "没有密钥了还留着空文件"
+
+    def test_api_key_env_fallback(self, monkeypatch):
+        """配了 api_key_env 才读环境变量；内存里有就以内存为准。
+
+        `api_key_env` 曾经在 default.yaml 里写了却没有任何代码读它——声明了
+        但不生效，比不写更坏：用户设了变量还以为能免填。
+        """
+        from knowtune import secrets
+        from knowtune.config import ProviderCfg
+
+        secrets.clear()
+        monkeypatch.setenv("KNOWTUNE_TEST_KEY", "sk-from-env")
+        p = ProviderCfg(base_url="https://x/v1", model="m", api_key_env="KNOWTUNE_TEST_KEY")
+        assert p.api_key("nokey") == "sk-from-env"
+        secrets.put("nokey", "sk-from-memory")
+        assert p.api_key("nokey") == "sk-from-memory", "内存里的应当优先于环境变量"
+
+        q = ProviderCfg(base_url="https://x/v1", model="m")
+        assert q.api_key("nokey2") is None, "没配 api_key_env 就不该乱读别人的变量"
 
 
 class TestSwitchModelKeepsList:

@@ -4942,7 +4942,7 @@ function statusShort(p) {
   return (p.message || "未连通").replace(/^服务在跑，但\s*/, "");
 }
 
-function modelCard(p, total) {
+function modelCard(p, total, d) {
   return `
     <article class="svc-card${p.active ? " active" : ""}" data-card="${esc(p.name)}">
       <header>
@@ -4962,7 +4962,8 @@ function modelCard(p, total) {
       </header>
       <div class="url" title="${esc(p.base_url || "")}">${esc(
         p.base_url || (p.kind === "mock" ? "（不联网，只验证链路）" : "（无地址）"))}</div>
-      ${p.local || !p.key_present ? "" : `<div class="url">密钥 已填（内存）</div>`}
+      ${p.local || !p.key_present ? "" : `<div class="url">密钥 ${
+        d && d.keys_persisted ? "已存本机（密文）" : "仅本次会话"}</div>`}
       ${modelPick(p)}
       <div class="msg"><i class="dot ${dotOf(p.status)}"></i>
         <span class="txt">${esc(statusShort(p))}</span>
@@ -4975,7 +4976,7 @@ function modelCard(p, total) {
 }
 
 function modelCards(d) {
-  return d.providers.map((p) => modelCard(p, d.providers.length)).join("");
+  return d.providers.map((p) => modelCard(p, d.providers.length, d)).join("");
 }
 
 /* 顶部「当前使用」条。
@@ -5076,9 +5077,10 @@ async function renderModels() {
     return;
   }
   $("pageSub").textContent = `${d.active} · ${shortModel(d.active_model) || "没配模型"}`;
-  // 密钥只活在内存里，那就得有个"立刻全抹掉"的出口，而不是只能靠重启进程
+  // 密钥现在默认落盘了（密文），所以这个按钮的职责是"内存 + 盘上一起抹掉"，
+  // 而不是像以前那样只能靠重启进程把内存清空。
   $("pageActions").innerHTML = d.providers.some((p) => p.key_present)
-    ? `<button class="ghost-btn" id="keysClear" title="清空所有只存在内存里的 API 密钥">清空密钥</button>`
+    ? `<button class="ghost-btn" id="keysClear" title="清空所有 API 密钥：内存里的、以及 data/secrets.json 里的密文">清空密钥</button>`
     : "";
   if ($("keysClear")) {
     $("keysClear").onclick = async () => {
@@ -5325,11 +5327,9 @@ async function openModelEditor(name) {
           ${cur && cur.key_present ? `<button class="ghost-btn" id="mKeyClear" type="button">清空</button>` : ""}
         </div>
         <span class="hint" id="mKeyTip">${cur && cur.key_present
-          ? "已有一个密钥在内存里。留空保存 = 保持不变。"
-          : "密钥只存在服务进程内存里，<b>不写任何配置文件</b>；服务一停就清空，重启后要重新填。"}</span>
-        <label class="remember-row"><input type="checkbox" id="mRemember"${d.keys_persisted ? " checked" : ""}>
-          记住密钥到本机（<b>以密文</b>存 data/secrets.json，用 ${esc(d.key_cipher || "系统级加密")}
-          保护，换账户或换机器即失效；勾了重启才不用重填）</label></div>
+          ? "已有密钥。留空保存 = 保持不变。"
+          : "云端后端需要密钥。填完保存即可，<b>默认记到本机</b>，下次启动不用重填。"}</span>
+        <label class="remember-row"><input type="checkbox" id="mRemember"${d.key_autosave === false ? "" : " checked"}><span>保存到本机（<b>密文</b>存 data/secrets.json，用 ${esc(d.key_cipher || "系统级加密")} 保护，换账户或换机器即失效。不勾 = 只保留本次会话，重启后要重填）</span></label></div>
       <div class="form-row" style="grid-column: span 2"><label>默认模型</label>
         <div class="input-row">
           <select id="mModel"></select>

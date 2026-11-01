@@ -90,7 +90,7 @@ KINDS: tuple[dict[str, Any], ...] = (
         "default_model": "",
         "launch": {},
         "launch_note": "",
-        "hint": "密钥在弹窗里直接填（只存内存，服务重启后需重填）。"
+        "hint": "密钥在弹窗里直接填，保存后以密文记到本机，重启不用重填。"
                 "填完点「探测」，从返回的模型列表里点选一个。",
     },
     {
@@ -104,7 +104,7 @@ KINDS: tuple[dict[str, Any], ...] = (
         "launch": {},
         "launch_note": "",
         "hint": "百炼的 OpenAI 兼容入口；换成新加坡地域要把地址改成 dashscope-intl。"
-                "密钥在弹窗里直接填，只存内存。",
+                "密钥在弹窗里直接填，保存后以密文记到本机。",
     },
     {
         "id": "openai",
@@ -114,7 +114,7 @@ KINDS: tuple[dict[str, Any], ...] = (
         "default_model": "gpt-4o-mini",
         "launch": {},
         "launch_note": "",
-        "hint": "密钥在弹窗里直接填，只存内存、不落任何配置文件。",
+        "hint": "密钥在弹窗里直接填，保存后以密文记到本机；也可以用 api_key_env 指向环境变量。",
     },
     {
         "id": "custom",
@@ -394,7 +394,7 @@ def readiness(cfg: Config, name: str | None = None) -> dict[str, Any]:
         return {"provider": target, "ready": False, "code": "no_model",
                 "reason": "还没填模型名"}
     # 云端后端要密钥；本地的不强求（自建网关常常不鉴权）。
-    # 判据是"内存里有没有"，不是"环境变量有没有"——密钥现在只活在内存里。
+    # 判据走 api_key() 的三级回落：临时填的 > 内存（含落盘恢复）> 环境变量。
     if not p.api_key(target) and KIND_MAP.get(
             p.kind if p.kind in KIND_MAP else "custom", {}).get("local") is False:
         # 卡片上已经是"缺配置"那一行，说清缺什么就够；"只存内存、重启要重填"
@@ -476,8 +476,10 @@ def listing(cfg: Config) -> dict[str, Any]:
         "providers": items,
         "catalog": catalog,
         "kinds": kinds(cfg),
-        # 密钥是否被"记住到本机"（默认 False = 纯内存，重启即清空）
+        # 密钥是否被"记住到本机"（默认 True：填了就存，DPAPI 密文）
         "keys_persisted": secrets_mod.persisted(),
+        # 保存策略本身：True = 填了就落盘；False = 用户选了"仅本次会话"
+        "key_autosave": secrets_mod.autosave(),
         # 落盘用的是哪种保护（Windows 账户加密 / 不支持）。界面要如实写，
         # 别让人以为"记住"等于明文躺在一个文件里。
         "key_cipher": secrets_mod.backend_label(),

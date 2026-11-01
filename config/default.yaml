@@ -128,7 +128,9 @@ generation:
       kind: lmstudio
     openai:
       base_url: "https://api.openai.com/v1"
-      api_key_env: KNOWTUNE_LLM_API_KEY   # 只读环境变量名，密钥永不落配置文件
+      # 环境变量名，不是密钥本身。配了就在这里读——服务器 / CI 用这条路，
+      # 密钥完全不进 data 目录，也不用每次重启手填。留 null 就只认界面上填的。
+      api_key_env: KNOWTUNE_LLM_API_KEY
       model: "gpt-4o-mini"
       kind: openai
     mock:

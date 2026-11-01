@@ -179,6 +179,9 @@ class ProviderCfg(BaseModel):
     kind: str = "openai"
     # 该后端"我打算用"的模型清单。空 = 没维护过，界面按只有一个 model 处理。
     model_list: list[ModelEntry] = Field(default_factory=list)
+    # 环境变量名（不是密钥本身）。配了就读它，用于"密钥完全不进这个应用"的部署。
+    # 默认 None：不去猜 DEEPSEEK_API_KEY 这类别人也可能在用的通用变量名。
+    api_key_env: str | None = None
     # 探测时用：按"刚敲进去的地址+密钥"试一次，不经过注册表
     _inline_key: str = PrivateAttr(default="")
 
@@ -186,16 +189,23 @@ class ProviderCfg(BaseModel):
         self._inline_key = (key or "").strip()
 
     def api_key(self, name: str | None = None) -> str | None:
-        """取密钥。优先级：本次探测临时填的 > 内存里按后端名存的。
+        """取密钥。优先级：本次探测临时填的 > 内存里（含落盘恢复）的 > 环境变量。
 
-        没有第三级：环境变量那条路已经删干净了——密钥只在内存里，服务停就没了。
+        第三级是给服务器 / CI 用的：把密钥放进 `api_key_env` 指向的环境变量，
+        这个应用就永远不需要人手填，也不会有密钥落在 data 目录里。
+        `api_key_env` 为空就跳过，不去猜 `DEEPSEEK_API_KEY` 那种通用变量名。
         """
         if self._inline_key:
             return self._inline_key
         if name:
             from . import secrets as secrets_mod
 
-            return secrets_mod.get(name)
+            got = secrets_mod.get(name)
+            if got:
+                return got
+        env_name = (self.api_key_env or "").strip()
+        if env_name:
+            return (os.environ.get(env_name) or "").strip() or None
         return None
 
 
