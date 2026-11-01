@@ -309,6 +309,9 @@ async def lifespan(app: FastAPI):
     stale = _sweep_stale_parts()
     if stale:
         logbus.note(f"清理了 {stale} 份超过 {_PART_TTL_H} 小时的未完成分片", source="ingest")
+    # 上次的探测结论要读回内存：首屏走的是 cached()，它不会去加载文件。
+    # 这一步漏了，模型页重启后就是整页"还没探测"，而盘上明明有记录。
+    services_mod.warm_cache(state.cfg)
     threading.Thread(target=_warmup, args=(state,), daemon=True, name="warmup").start()
     # 标了 autostart 的前台实例随后台一起起来。放在线程外面同步做：它们只是
     # 端口监听，不阻塞，而放到后台线程里会让"启动失败"变得没有反馈。
@@ -623,6 +626,29 @@ def list_models() -> dict:
         # 能显示"4 个模型可用"却点不到任何一个——用户得自己去 LM Studio 抄名字。
         p["models"] = probe.get("models") or []
         p["model_listed"] = probe.get("model_listed")
+
+    # 探测到的模型并进扁平目录：那些是"服务上真实存在、只是我还没加进清单"的，
+    # 恰恰是用户最想选的一批。缺了它们，下拉看着就像"少了一大截"。
+    meta = {p["name"]: p for p in data["providers"]}
+    seen = {(c["provider"], c["model"]) for c in data["catalog"]}
+    for p in data["providers"]:
+        for mid in p["models"]:
+            if (p["name"], mid) in seen:
+                continue
+            seen.add((p["name"], mid))
+            data["catalog"].append({
+                "provider": p["name"], "model": mid,
+                "current": False, "provider_active": bool(p["active"]),
+                "ready": bool(p["ready"]),
+            })
+    for c in data["catalog"]:
+        m = meta.get(c["provider"]) or {}
+        c["provider_label"] = m.get("kind_label") or c["provider"]
+        c["local"] = bool(m.get("local"))
+        # "当前"= 后端是当前后端 + 模型是这个后端的当前模型，缺一不可
+        c["active"] = bool(c.get("provider_active") and c.get("current"))
+    data["catalog"].sort(key=lambda c: (
+        not c["active"], not c["local"], c["provider"], c["model"]))
     return data
 
 
@@ -781,11 +807,15 @@ def clear_all_keys() -> dict:
 
 class ActiveModel(BaseModel):
     name: str = Field(min_length=1, max_length=64)
+    # 可选：同时指定这个后端用哪个模型。"当前用什么"其实有两段——哪个后端、
+    # 这个后端的哪个模型。以前只切后端，模型停在旧值上，用户改完发现"还是
+    # 原来那个模型"，因为模型藏在后端的配置字段里，不像"当前"的一部分。
+    model: str | None = None
 
 
 @app.post("/api/models/active")
 def set_active_model(req: ActiveModel) -> dict:
-    """切换当前后端，并立刻落盘。
+    """切换当前后端（可同时切模型），并立刻落盘。
 
     "设为当前"是一个明确的决定，不该像滑杆那样停在内存里等用户去点保存——
     重启一次又变回旧后端，人会以为是 bug。
@@ -794,10 +824,22 @@ def set_active_model(req: ActiveModel) -> dict:
         settings_mod.apply(state.cfg, {"generation.provider": req.name})
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+    picked = ""
+    if req.model is not None:
+        prov = state.cfg.generation.providers.get(req.name)
+        want = (req.model or "").strip()
+        if prov is not None and want and prov.model != want:
+            prov.model = want
+            picked = want
+            modelcfg.persist(state.cfg)   # 模型名写进 models.yaml，重启后仍是它
     saved = settings_mod.save_local(state.cfg)
     state.invalidate_kb_cfg()
-    logbus.note(f"当前生成后端切换为 {req.name}", source="models")
-    return {"ok": True, "active": req.name, "saved": saved}
+    # 换了后端/模型，上一次的探测结论不再代表"现在这套能不能用"
+    services_mod.invalidate(req.name)
+    logbus.note(
+        f"当前生成后端切换为 {req.name}" + (f" · 模型 {picked}" if picked else ""),
+        source="models")
+    return {"ok": True, "active": req.name, "model": picked, "saved": saved}
 
 
 # ------------------------------------------------------------------- 参数面板

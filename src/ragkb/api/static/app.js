@@ -933,7 +933,8 @@ function saveAdv() {
   const el = advEls();
   try {
     localStorage.setItem(ADV_KEY, JSON.stringify({
-      model: el.model.value || "", temp: el.temp.value, maxTok: el.maxTok.value,
+      model: el.model.value || "", modelCustom: $("genModelCustom")?.value || "",
+      temp: el.temp.value, maxTok: el.maxTok.value,
       stream: el.stream.checked, turns: el.turns.value, fusion: el.fusion.value,
       wdense: el.wdense.value, pool: el.pool.value, mmr: el.mmr.value,
       noRefuse: el.noRefuse.checked, noKbMode: el.noKbMode.value,
@@ -955,6 +956,8 @@ function restoreAdv() {
   el.mmr.value = saved.mmr ?? "";
   el.noRefuse.checked = Boolean(saved.noRefuse);
   el.noKbMode.value = saved.noKbMode || "direct";
+  const ci = $("genModelCustom");
+  if (ci) ci.value = saved.modelCustom || "";
   // 生成模型要等后端下拉填完才有选项，这里先记下，syncGenModelOptions 里回填
   el.model.dataset.want = saved.model || "";
 }
@@ -965,27 +968,82 @@ function resetAdv() {
   el.wdense.value = ""; el.pool.value = "";
   el.fusion.value = ""; el.mmr.value = "";
   el.noRefuse.checked = false; el.stream.checked = true;
+  const ci = $("genModelCustom");
+  if (ci) ci.value = "";
   saveAdv();
   renderCfgSummary();
 }
 
-/* 生成模型下拉：选项来自该后端探测回来的可用模型 + 它自己填的默认模型。
-   没有探测结果时至少还能选到默认那个，不至于手打。 */
+/* 对话页的生成模型下拉 = 全部后端 × 全部已知模型，一层平铺。
+   以前它只列"当前后端"的候选，用户想用另一个后端上的模型，得先去上面切后端、
+   再回来切模型——两层嵌套，而第二层还常常是空的（探测缓存被清过）。看起来
+   就是"我加过的模型根本选不到"。现在按后端分组，选哪个模型就自动带上哪个
+   后端，不用再分两步。 */
+const GEN_CUSTOM = "__custom__";
+const GEN_SEP = "\u001f";
+
+function genValue(provider, model) {
+  return model ? `${provider}${GEN_SEP}${model}` : "";
+}
+
+function parseGenPick() {
+  const sel = $("genModelSel");
+  if (!sel || !sel.value || sel.value === GEN_CUSTOM) return { provider: null, model: null };
+  const [p, m] = sel.value.split(GEN_SEP);
+  return { provider: p || null, model: m || null };
+}
+
+function toggleGenCustom(on) {
+  const inp = $("genModelCustom");
+  if (!inp) return;
+  inp.hidden = !on;
+  if (on) setTimeout(() => inp.focus(), 0);
+}
+
 function syncGenModelOptions() {
   const sel = $("genModelSel");
   if (!sel) return;
-  const p = providerNow();
-  const ids = [...new Set([
-    ...((p && p.models) || []),
-    ...((p && p.model_list) || []).map((m) => (typeof m === "string" ? m : m?.id)).filter(Boolean),
-    p?.model,
-  ].filter(Boolean))];
+  const d = state.models || {};
+  const cat = d.catalog || [];
+  const curName = d.active || "";
+  const curModel = d.active_model || "";
   const want = sel.dataset.want || sel.value;
+
+  const byProv = new Map();
+  cat.forEach((c) => {
+    if (!byProv.has(c.provider)) byProv.set(c.provider, []);
+    byProv.get(c.provider).push(c);
+  });
+  // 当前后端排第一：多数时候人就在它里面挑
+  const names = [...byProv.keys()].sort((a, b) =>
+    (a === curName ? -1 : b === curName ? 1 : a.localeCompare(b)));
+
+  const groups = names.map((n) => {
+    const items = byProv.get(n);
+    const body = items.map((c) => {
+      const v = genValue(c.provider, c.model);
+      const star = c.active ? " ✓" : "";
+      return `<option value="${esc(v)}">${esc(c.model)}${star}</option>`;
+    }).join("");
+    return `<optgroup label="${esc(n)}${n === curName ? " · 当前" : ""}">${body}</optgroup>`;
+  }).join("");
+
+  // "留空"到底跟谁：跟上面那个后端下拉选中的后端，而不是全局——用户在对话页
+  // 把后端切成 B 却看到"跟随全局（A）"，选了等于没选，是最容易踩的坑。
+  const pv = providerNow();
+  const baseName = pv?.name || curName;
+  const baseModel = pv?.model || (pv?.name === curName ? curModel : "");
+  const follow = baseName === curName ? "跟随全局" : "跟随后端";
+
   sel.innerHTML =
-    `<option value="">跟随后端（${esc(shortModel(p?.model)) || "未配置"}）</option>`
-    + ids.map((m) => `<option value="${esc(m)}">${esc(m)}</option>`).join("");
-  sel.value = ids.includes(want) ? want : "";
+    `<option value="">${follow}（${esc(baseName || "未配置")} · ${esc(shortModel(baseModel) || "没配模型")}）</option>`
+    + groups
+    + `<option value="${GEN_CUSTOM}">＋ 手动输入模型名…</option>`;
+
+  const has = (v) => [...sel.options].some((o) => o.value === v);
+  sel.value = want === GEN_CUSTOM ? GEN_CUSTOM : (has(want) ? want : "");
   sel.dataset.want = "";
+  toggleGenCustom(sel.value === GEN_CUSTOM);
 }
 
 function syncNoKbRow() {
@@ -1004,6 +1062,13 @@ function renderCfgSummary() {
   const prov = providerNow();
   const bits = [kb ? kb.name : (state.kbs.length ? "不挂载知识库" : "未挂载知识库")];
   bits.push(prov ? prov.name : "未配模型");
+  // 这一问用的模型也是"当前配置"的一部分：只显示后端名时，用户看不出
+  // 自己刚才选的是 A 后端的 qwen 还是 B 后端的 deepseek。
+  const gm = parseGenPick();
+  const typed = ($("genModelCustom")?.value || "").trim();
+  const mSel = $("genModelSel")?.value;
+  if (gm.model) bits.push(shortModel(gm.model));
+  else if (mSel === GEN_CUSTOM && typed) bits.push(shortModel(typed));
   if (!kb && $("noKbMode")?.value === "direct") bits.push("直问模型");
   if ($("deepMode").checked) bits.push("深度");
   if ($("topKSel").value) bits.push(`Top${$("topKSel").value}`);
@@ -1282,16 +1347,21 @@ async function ask(question) {
   };
 
   const opt = advEls();
+  // 模型这一项可能来自"手动输入"：值不在下拉里时以输入框为准。
+  const gm = parseGenPick();
+  const typed = ($("genModelCustom")?.value || "").trim();
+  const pickModel = gm.model || (opt.model.value === GEN_CUSTOM ? typed : null);
   const payload = {
     question,
     // 不挂载知识库时 kb_id 必须是 null（不是 0 / ""）：0 会被当成"查一个不存在的库"
     kb_id: state.kbId || null,
     session_id: state.sessionId,
-    provider: $("providerSel").value || null,
+    // 平铺目录里选了某个后端的模型 → 后端跟着它走，而不是停在上面那个下拉
+    provider: gm.provider || $("providerSel").value || null,
     top_k: $("topKSel").value ? Number($("topKSel").value) : null,
     rerank: $("deepMode").checked ? true : null,
     rerank_model: $("deepMode").checked ? "BAAI/bge-reranker-v2-m3" : null,
-    model: opt.model.value || null,
+    model: pickModel || null,
     temperature: advNum(opt.temp.value),
     max_tokens: advNum(opt.maxTok.value),
     stream: opt.stream.checked ? null : false,   // 默认流式，只有关掉才需要显式传
@@ -3042,8 +3112,7 @@ $("providerSel").addEventListener("change", (e) => {
   e.target.title = opt?.title || opt?.textContent || "";
   // 换后端 = 换一批可用模型：还留着上一个后端的模型名，等于埋一个 404
   $("genModelSel").value = "";
-  syncGenModelOptions();
-  saveAdv();
+  syncGenModelOptions();  saveAdv();
   renderCfgSummary();
 });
 
@@ -3082,10 +3151,24 @@ $("deepMode").addEventListener("change", () => renderCfgSummary());
 /* 高级参数：任何一处改动都存下来并刷新摘要。逐个绑定而不是委托到整个弹层，
    是因为这些控件散在 <details> 里，委托容易把 summary 的展开也当成改动。 */
 ["optTemp", "optMaxTok", "optStream", "optTurns", "optFusion",
- "optWdense", "optPool", "optMmr", "optNoRefuse", "genModelSel"].forEach((id) => {
+ "optWdense", "optPool", "optMmr", "optNoRefuse"].forEach((id) => {
   const el = $(id);
   if (el) el.addEventListener("change", () => { saveAdv(); renderCfgSummary(); });
 });
+// 生成模型：选到"手动输入"就露出输入框；选到某个后端的模型，把上面的后端
+// 下拉一起带过去——否则界面显示"用 A 后端"，实际却拿 B 后端的模型名去请求。
+$("genModelSel").addEventListener("change", () => {
+  const v = $("genModelSel").value;
+  toggleGenCustom(v === GEN_CUSTOM);
+  const gm = parseGenPick();
+  if (gm.provider && $("providerSel").value !== gm.provider) {
+    $("providerSel").value = gm.provider;
+    localStorage.setItem("ragkb.provider", gm.provider);
+  }
+  saveAdv();
+  renderCfgSummary();
+});
+$("genModelCustom")?.addEventListener("input", () => saveAdv());
 $("noKbMode").addEventListener("change", () => {
   saveAdv(); syncNoKbRow(); renderCfgSummary();
 });
@@ -3173,7 +3256,9 @@ function setView(name, opts = {}) {
   let pending = null;
   if (name === "chat") {
     renderCfgSummary();
-    maybeWarnNoModel();
+    // 不在这里弹「还没有可用的模型」：对话区本来就有引导卡说得清清楚楚，
+    // 进站先糊一个模态框，等于每次打开都要先点掉一次。只有真的点发送
+    // （submit / ask）时才弹，那是用户确实要提问的时刻。
     // 刚在模型页配好再切回来，别让"还没配模型"的引导卡赖在屏幕上。
     if (document.querySelector(".empty-state.gate") && canChat().ok) {
       renderEmptyChat();
@@ -4822,36 +4907,157 @@ async function prRollback(name) {
   }
 }
 
-function modelCards(d) {
-  return d.providers.map((p) => `
+/* 卡片上的模型下拉。候选 = 清单里的 + 探测回来的 + 当前值，三个来源缺一不可：
+   只看清单时，刚探测出来还没加进清单的模型就选不到（"我明明看见有，就是点不着"）；
+   只看探测时，服务没起、探测缓存被清掉后连当前值都会丢。 */
+function modelPick(p) {
+  const ids = [...new Set([
+    ...((p.model_list || []).map((m) => m.id)),
+    ...((p.models || [])),
+    p.model,
+  ].filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  const stray = Boolean(p.model) && !ids.includes(p.model);
+  const opts = stray ? [p.model, ...ids] : ids;
+  const value = p.model || "";
+  const more = ids.length > 1 ? ` · ${ids.length} 个` : "";
+  return `<label class="pick" title="这个后端用哪个模型。切换会改掉它的默认模型，不影响别的后端">
+      <span>模型${more}</span>
+      <select data-mpick="${esc(p.name)}">
+        ${opts.map((id) => `<option value="${esc(id)}"${id === value ? " selected" : ""}>${esc(id)}</option>`).join("")}
+        <option value="__custom__">＋ 手动输入…</option>
+      </select>
+    </label>`;
+}
+
+function statusShort(p) {
+  if (p.status === "mock") return "不联网";
+  if (!p.status || p.status === "unknown") return "还没测";
+  if (p.status === "ok") {
+    // 只说通不通 + 耗时。以前这里还跟一句"N 个模型可用（另有 M 个已隐藏）"，
+    // 每测一次就被灌一遍和"能不能用"无关的统计。
+    return `连通${p.latency_ms ? ` · ${p.latency_ms}ms` : ""}`;
+  }
+  if (p.status === "unset") return "还没填地址";
+  if (p.status === "no_key") return "缺密钥";
+  return (p.message || "未连通").replace(/^服务在跑，但\s*/, "");
+}
+
+function modelCard(p, total) {
+  return `
     <article class="svc-card${p.active ? " active" : ""}" data-card="${esc(p.name)}">
       <header>
         <i class="dot ${dotOf(p.status)}"></i>
         <b class="ell">${esc(p.name)}</b>
         <span class="badge ${p.local ? "local" : "cloud"}">${p.local ? "本地" : "云端"}</span>
         ${p.active ? `<span class="badge">当前</span>` : ""}
+        <span class="sp"></span>
+        <button class="icon-btn" data-mact="probe" data-name="${esc(p.name)}"
+          title="测试联通：先拉 /models，再真发一次一句话，能出字才算通">⟳</button>
+        <button class="icon-btn" data-mact="prompt" data-name="${esc(p.name)}"
+          title="给这个后端单独配提示词（小模型要拆成条款，云端强模型一句话就够）">Aa</button>
+        <button class="icon-btn" data-mact="edit" data-name="${esc(p.name)}" title="编辑地址 / 密钥 / 模型清单">✎</button>
+        ${total > 1
+          ? `<button class="icon-btn danger" data-mact="del" data-name="${esc(p.name)}" title="删除这个后端">✕</button>`
+          : `<button class="icon-btn" disabled title="至少要留一个后端：先新增一个，再删这个">✕</button>`}
       </header>
-      <div class="url" title="${esc(p.base_url || "")}">${esc(p.base_url || "（无地址）")}</div>
-      <div class="model" title="${esc(p.model)}">${esc(p.model)}</div>
-      ${p.local ? "" : `<div class="model" title="密钥只存在服务进程内存里，重启即清空">密钥：${
-        p.key_present ? "已填（内存）" : "未填"}</div>`}
+      <div class="url" title="${esc(p.base_url || "")}">${esc(
+        p.base_url || (p.kind === "mock" ? "（不联网，只验证链路）" : "（无地址）"))}</div>
+      ${p.local || !p.key_present ? "" : `<div class="url">密钥 已填（内存）</div>`}
       ${modelPick(p)}
-      <div class="msg"><i class="dot ${dotOf(p.status)}"></i><span class="txt">${
-        esc(p.message || statusText(p.status))}${p.latency_ms ? ` · ${p.latency_ms}ms` : ""}${
-        p.checked_at ? ` · 探测于 ${agoText(p.checked_at)}` : ""}</span></div>
-      ${p.ready ? "" : `<div class="miss">缺配置：${esc(p.ready_reason || "字段不全")}</div>`}
-      <footer>
-        <button class="mini test" data-mact="probe" data-name="${esc(p.name)}"
-          title="验证 /models，再发一次 1 token 的对话确认模型真能出字——只有 /models 通不算联通（网关类服务永远返回列表）">测试联通</button>
-        ${p.active ? "" : `<button class="mini" data-mact="use" data-name="${esc(p.name)}">设为当前</button>`}
-        <button class="mini" data-mact="prompt" data-name="${esc(p.name)}"
-          title="单独给这个后端配提示词：小模型需要把约束拆成条款，云端强模型一句话就够，两套并存才是常态">提示词</button>
-        <button class="mini" data-mact="edit" data-name="${esc(p.name)}">编辑</button>
-        ${d.providers.length > 1
-          ? `<button class="mini" data-mact="del" data-name="${esc(p.name)}">删除</button>`
-          : `<button class="mini" disabled title="至少要留一个后端：先新增一个，再删这个">删除</button>`}
-      </footer>
-    </article>`).join("");
+      <div class="msg"><i class="dot ${dotOf(p.status)}"></i>
+        <span class="txt">${esc(statusShort(p))}</span>
+        ${p.checked_at ? `<span class="ago">${agoText(p.checked_at)}</span>` : ""}</div>
+      ${p.ready ? "" : `<div class="miss">${esc(p.ready_reason || "字段不全")}</div>`}
+      ${p.active
+        ? `<span class="cur-tag">当前使用中</span>`
+        : `<button class="mini use-btn" data-mact="use" data-name="${esc(p.name)}">设为当前使用</button>`}
+    </article>`;
+}
+
+function modelCards(d) {
+  return d.providers.map((p) => modelCard(p, d.providers.length)).join("");
+}
+
+/* 顶部「当前使用」条。
+   全局只有一套"现在用谁"，但它由两段组成：哪个后端 + 这个后端的哪个模型。
+   以前页面上只有卡片角上一个小小的「当前」徽标，模型名散落在卡片里，用户
+   根本看不出"现在到底在跑什么"，更找不到地方改。这条把两段提到最上面，
+   改完立刻生效并落盘。 */
+function curBar(d) {
+  const p = d.providers.find((x) => x.active) || d.providers[0] || null;
+  if (!p) return "";
+  const ids = [...new Set([
+    ...((p.model_list || []).map((m) => m.id)),
+    ...((p.models || [])),
+    p.model,
+  ].filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  const stray = p.model && !ids.includes(p.model);
+  const opts = stray ? [p.model, ...ids] : ids;
+  return `<section class="cur-bar">
+    <div class="cur-main">
+      <span class="cur-label">当前使用</span>
+      <select id="curProv" title="全局默认后端。改了立刻生效，重启后仍是它">
+        ${d.providers.map((x) =>
+          `<option value="${esc(x.name)}"${x.active ? " selected" : ""}>${esc(x.name)}</option>`).join("")}
+      </select>
+      <span class="cur-sep">/</span>
+      <select id="curModel" title="全局默认模型。切换只改这一个后端的模型，不动别的后端">
+        ${opts.length ? "" : `<option value="">（这个后端还没配模型）</option>`}
+        ${opts.map((id) =>
+          `<option value="${esc(id)}"${id === p.model ? " selected" : ""}>${esc(id)}</option>`).join("")}
+        <option value="__custom__">＋ 手动输入…</option>
+      </select>
+      <i class="dot ${dotOf(p.status)}"></i>
+      <span class="cur-state">${esc(statusShort(p))}</span>
+    </div>
+    <div class="cur-side">
+      <button class="ghost-btn" id="curTest" title="只测现在这一套（地址 + 密钥 + 模型）能不能真的对话">测试这套</button>
+      <button class="ghost-btn" id="curEdit" title="改地址、密钥、模型清单">编辑</button>
+    </div>
+  </section>`;
+}
+
+function bindCurBar(d) {
+  const prov = d.providers.find((x) => x.active) || d.providers[0];
+  if (!prov) return;
+  const provSel = $("curProv");
+  const modelSel = $("curModel");
+  if (provSel) {
+    provSel.onchange = () => useModel(provSel.value, {});
+  }
+  if (modelSel) {
+    modelSel.onchange = async () => {
+      let want = modelSel.value;
+      if (want === "__custom__") {
+        want = (prompt(`给后端 ${prov.name} 输入模型名（服务商文档里的那个 id）`, prov.model || "") || "").trim();
+        if (!want) { modelSel.value = prov.model || ""; return; }
+      }
+      if (!want || want === prov.model) return;
+      await setActiveModel(prov.name, want);
+    };
+  }
+  const t = $("curTest");
+  if (t) t.onclick = () => probeOneModel(prov.name);
+  const e = $("curEdit");
+  if (e) e.onclick = () => openModelEditor(prov.name);
+}
+
+async function setActiveModel(name, model) {
+  try {
+    await api("/api/models/active", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, model }),
+    });
+    state.models = null;
+    await loadProviders();
+    if (state.view === "models") await renderModels();
+    syncGenModelOptions();
+    renderCfgSummary();
+    toast(`当前使用：${name} · ${model}`);
+  } catch (err) {
+    toast(err.message, "err");
+  }
 }
 
 async function renderModels() {
@@ -4869,7 +5075,7 @@ async function renderModels() {
     box.innerHTML = `<div class="page"><p class="empty-tip">${esc(err.message)}</p></div>`;
     return;
   }
-  $("pageSub").textContent = `当前 ${d.active}`;
+  $("pageSub").textContent = `${d.active} · ${shortModel(d.active_model) || "没配模型"}`;
   // 密钥只活在内存里，那就得有个"立刻全抹掉"的出口，而不是只能靠重启进程
   $("pageActions").innerHTML = d.providers.some((p) => p.key_present)
     ? `<button class="ghost-btn" id="keysClear" title="清空所有只存在内存里的 API 密钥">清空密钥</button>`
@@ -4888,23 +5094,20 @@ async function renderModels() {
   const hasAlt = d.kinds.some((k) => k.launch && k.launch_alt);
   const osLabel = (kinds) => (kinds.find((k) => k.launch_os)?.launch_os || "本机");
   box.innerHTML = `<div class="page">
-    <p class="hint" style="margin-bottom:12px">
-      所有后端都走 OpenAI 兼容协议（<code>/v1/chat/completions</code>），所以本地起什么服务都行：
-      vLLM、LM Studio、Ollama、llama.cpp、one-api……只要填对 <code>base_url</code> 与模型名。
-      密钥直接填在新增/编辑弹窗里，<b>只存在服务进程内存</b>——不写进任何配置文件，
-      服务一停就清空，重启后要重新填。想省掉这一步就勾「记住密钥」：写下去的是
-      <b>密文</b>（${esc(d.key_cipher || "系统级加密")}），换账户或换机器即失效。
-    </p>
+    ${curBar(d)}
     <div class="kb-actions">
       <button class="primary-btn" id="modelsAdd">＋ 新增后端</button>
-      <button class="ghost-btn" id="modelsProbe">测试全部联通</button>
-      <span class="hint">共 ${d.providers.length} 个后端 · 当前 ${esc(d.active)}</span>
+      <button class="ghost-btn" id="modelsProbe">全部测试</button>
+      <span class="hint">共 ${d.providers.length} 个后端 · 密钥只存进程内存，想跨重启就勾「记住密钥」（密文）</span>
     </div>
     <div class="svc-grid" id="modelGrid">${modelCards(d)}</div>
-    <section class="card" style="margin-top:12px">
-      <div class="card-head"><h3>本地后端启动命令</h3>
-        <span class="aside">按${esc(osLabel(d.kinds))}给的命令${hasAlt
-          ? "，下面另附其他系统的写法" : ""} · 起完进程，回上面点「测试联通」</span></div>
+    <details class="card launch-fold">
+      <summary>本地后端启动命令 · 所有后端都走 OpenAI 兼容协议（<code>/v1/chat/completions</code>）</summary>
+      <p class="hint" style="margin:8px 0 12px">
+        vLLM、LM Studio、Ollama、llama.cpp、one-api 都行，只要填对 <code>base_url</code> 与模型名。
+        密钥填在编辑弹窗里，<b>只存在服务进程内存</b>，服务一停就清空；勾「记住密钥」才落盘，
+        写下去的是<b>密文</b>（${esc(d.key_cipher || "系统级加密")}），换账户或换机器即失效。
+      </p>
       ${d.kinds.filter((k) => k.launch).map((k) => `
         <div style="margin-bottom:12px">
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px">
@@ -4920,11 +5123,14 @@ async function renderModels() {
             <button class="mini" data-copy="${esc(k.launch_alt)}"
               style="position:absolute;right:6px;top:6px">复制</button></div>` : ""}
         </div>`).join("")}
-    </section>
+      ${hasAlt ? `<p class="hint">以上为${esc(osLabel(d.kinds))}命令，其他系统写法见每类下方的附注。</p>` : ""}
+    </details>
   </div>`;
 
   $("modelsAdd").onclick = () => openModelEditor(null);
   $("modelsProbe").onclick = probeAllModels;
+  bindCurBar(d);
+  bindModelCardActions();
 
   box.querySelectorAll("[data-copy]").forEach((btn) => {
     btn.onclick = async () => {
@@ -4936,42 +5142,30 @@ async function renderModels() {
       }
     };
   });
+}
 
-  box.querySelectorAll("[data-mact]").forEach((btn) => {
-    const name = btn.dataset.name;
-    const act = btn.dataset.mact;
-    btn.onclick = () => {
-      if (act === "probe") return probeOneModel(name);
-      if (act === "use") return useModel(name);
-      if (act === "prompt") return openPromptDrawer(name);
-      if (act === "edit") return openModelEditor(name);
-      if (act === "del") return removeModel(name);
-    };
-  });
+async function reloadModels() {
+  state.models = null;
+  await loadProviders();
+  if (state.view === "models") await renderModels();
+  syncGenModelOptions();
 }
 
 async function probeAllModels() {
   const btn = $("modelsProbe");
-  if (btn) btn.disabled = true;
+  if (btn) { btn.disabled = true; btn.textContent = "测试中…"; }
   try {
     const r = await api("/api/services/probe", { method: "POST" });
-    state.models.providers = state.models.providers.map((p) => {
-      const hit = r.providers[p.name];
-      return hit ? { ...p, status: hit.status, latency_ms: hit.latency_ms,
-        message: hit.message, models: hit.models || [], model_listed: hit.model_listed,
-        checked_at: hit.checked_at } : p;
-    });
-    $("modelGrid").innerHTML = modelCards(state.models);
-    bindModelCardActions();
-    // 探测结果要同步到对话页的下拉：不刷新的话，用户在模型页看到"就绪"，
-    // 回对话页选的还是那个没有状态标记的旧选项。
-    syncProviderOptions();
-    const ok = Object.values(r.providers || {}).filter((p) => p.ok).length;
-    toast(`${ok}/${Object.keys(r.providers || {}).length} 个可用`);
+    await reloadModels();
+    const list = Object.values(r.providers || {});
+    const ok = list.filter((p) => p.ok).length;
+    // 一句话就好：几个通、几个不通。
+    toast(`${ok}/${list.length} 连通`, ok === list.length ? "ok" : "warn");
   } catch (err) {
     alert(err.message);
   } finally {
-    if (btn) btn.disabled = false;
+    const again = $("modelsProbe");
+    if (again) { again.disabled = false; again.textContent = "全部测试"; }
   }
 }
 
@@ -4994,24 +5188,29 @@ function bindModelCardActions() {
     sel.onchange = async () => {
       const p = state.models.providers.find((x) => x.name === sel.dataset.mpick);
       if (!p) return;
+      let want = sel.value;
+      if (want === "__custom__") {
+        want = (prompt(`给后端 ${p.name} 输入模型名（服务商文档里的那个 id）`, p.model || "") || "").trim();
+        if (!want) { sel.value = p.model || ""; return; }
+      }
+      if (!want || want === p.model) return;
       sel.disabled = true;
       try {
         await api(`/api/models/${encodeURIComponent(p.name)}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            base_url: p.base_url || "", model: sel.value, kind: p.kind,
+            base_url: p.base_url || "", model: want, kind: p.kind,
             // 带上清单，别让它因为"没传"而被当成清空
             model_list: p.model_list || [],
           }),
         });
-        state.models = null;
-        await renderModels();
-        toast(`${p.name} 已切到 ${sel.value}`);
+        await reloadModels();
+        toast(`${p.name} 已切到 ${want}`);
       } catch (err) {
         toast(err.message, "err");
         sel.disabled = false;
-        sel.value = p.model;
+        sel.value = p.model || "";
       }
     };
   });
@@ -5020,26 +5219,24 @@ function bindModelCardActions() {
 async function probeOneModel(name) {
   const card = document.querySelector(`.svc-card[data-card="${CSS.escape(name)}"]`);
   const btn = card?.querySelector("[data-mact=probe]");
-  if (btn) { btn.disabled = true; btn.textContent = "测试中…"; card.classList.add("probing"); }
+  if (btn) { btn.disabled = true; btn.textContent = "…"; card.classList.add("probing"); }
+  const curBtn = $("curTest");
+  if (curBtn) { curBtn.disabled = true; curBtn.textContent = "测试中…"; }
   try {
     const r = await api(`/api/services/probe?name=${encodeURIComponent(name)}`, { method: "POST" });
-    const hit = r.providers[name];
-    state.models.providers = state.models.providers.map((p) =>
-      p.name === name ? { ...p, status: hit.status, latency_ms: hit.latency_ms,
-        message: hit.message, models: hit.models || [],
-        model_listed: hit.model_listed, checked_at: hit.checked_at } : p);
-    $("modelGrid").innerHTML = modelCards(state.models);
-    bindModelCardActions();
-    syncProviderOptions();
-    const label = hit.ok
-      ? `${name} 连通：${hit.models?.length || 0} 个模型 · ${hit.latency_ms}ms`
-      : `${name} 不通：${hit.message}`;
-    toast(label, hit.ok ? "ok" : "warn");
+    const hit = r.providers[name] || {};
+    await reloadModels();
+    // 用户原话："我测哪个你说他连上就行"。通就一句，不通才给原因。
+    toast(hit.ok ? `${name} 已连通` : `${name} 不通：${hit.message || "原因未知"}`,
+          hit.ok ? "ok" : "warn");
   } catch (err) {
     toast(`${name} 测试失败：${err.message}`, "err");
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = "测试联通"; }
-    card?.classList.remove("probing");
+    const b = document.querySelector(`.svc-card[data-card="${CSS.escape(name)}"] [data-mact=probe]`);
+    if (b) { b.disabled = false; b.textContent = "⟳"; }
+    const cb = $("curTest");
+    if (cb) { cb.disabled = false; cb.textContent = "测试这套"; }
+    document.querySelector(`.svc-card[data-card="${CSS.escape(name)}"]`)?.classList.remove("probing");
   }
 }
 

@@ -195,6 +195,29 @@ class TestProbeCacheKeyBinding:
                                 "key_fp": services._key_fp(self._prov("key-A"))}
         assert services.cached("x", provider=self._prov("")) is None
 
+    def test_real_store_key_is_bound_by_name(self):
+        """真实路径：密钥按**后端名**存在内存里，不是 inline。
+
+        上面两条全走 set_inline_key，正好绕过了页面真正走的那条路——于是
+        `_key_fp` 不传名字时两边都算成 "no_key"、永远相等，比对从来没拦住
+        过任何东西（2026-11-01 发现）。这条专门走真实路径。
+        """
+        from ragkb import secrets, services
+
+        services._CACHE.clear()
+        secrets.put("realp", "sk-real-A")
+        try:
+            p = self._prov("")          # 不带 inline key，和正常页面调用一致
+            fp = services._key_fp(p, "realp")
+            assert fp not in ("no_key", "unknown"), "按名字存的密钥没被算进指纹"
+            services._CACHE["realp"] = {
+                "name": "realp", "checked_at": time.time(), "status": "ok", "key_fp": fp}
+            assert services.cached("realp", provider=p) is not None
+            secrets.drop("realp")        # 相当于重启：内存清空
+            assert services.cached("realp", provider=p) is None
+        finally:
+            secrets.drop("realp")
+
 
 class TestLoader:
     def test_decode_gbk(self):
@@ -1338,7 +1361,10 @@ class TestProbeChatVerifyAndPersistence:
         r = services.probe_one("fake", ProviderCfg(
             base_url="http://127.0.0.1:9999/v1", model="qwen", kind="openai"))
         assert r["status"] == "ok"
-        assert "对话验证通过" in r["message"]
+        # message 只说结论。原来是"就绪 · 对话验证通过 · N 个可对话模型（另有 M 个
+        # 图像/语音类已隐藏）"，用户每测一次就被灌一遍跟"通不通"无关的统计。
+        assert r["message"] == "连通"
+        assert "个" not in r["message"] and "模型" not in r["message"]
 
     def test_probe_cache_survives_restart(self, tmp_path, monkeypatch):
         import json
@@ -4218,3 +4244,112 @@ class TestSecretStore:
         assert S.last_error() and "拒绝" in S.last_error()
         # 内存里照常能用：不支持落盘 ≠ 不让用
         assert S.get("deepseek") == "sk-nope"
+
+
+class TestModelCatalogAndActiveModel:
+    """模型模块的结构契约（2026-11-01）。
+
+    用户三句话，三条都钉在这里：
+    1. 对话页"选不完模型"——它以前只列当前后端的候选，别的后端的模型根本
+       点不到。现在 /api/models 给一份扁平 catalog，跨全部后端。
+    2. "全局做得不好"——全局当前是「后端 + 模型」两段，以前只能设后端，
+       模型停在旧值上。现在 POST /api/models/active 能一起设。
+    3. "别每次说探测到一堆"——探测结论只报连通与否，不报模型个数。
+    """
+
+    def setup_method(self):
+        import copy
+
+        from ragkb.api import app as app_mod
+
+        self.app = app_mod
+        self.saved = copy.deepcopy(app_mod.state.cfg.generation.providers)
+        self.saved_active = app_mod.state.cfg.generation.provider
+        self.saved_roles = dict(getattr(app_mod.state.cfg.generation, "roles", {}) or {})
+
+    def teardown_method(self):
+        from ragkb.api import app as app_mod
+
+        provs = app_mod.state.cfg.generation.providers
+        provs.clear()
+        provs.update(self.saved)
+        app_mod.state.cfg.generation.provider = self.saved_active
+        app_mod.state.cfg.generation.roles = self.saved_roles
+
+    def test_catalog_lists_models_of_every_backend(self, tmp_path, monkeypatch):
+        from fastapi.testclient import TestClient
+
+        from ragkb import modelcfg
+
+        monkeypatch.setattr(modelcfg, "MODELS_CONFIG", tmp_path / "m.yaml")
+        c = TestClient(self.app.app)
+        for name, models in (
+            ("cata", ["m-one", "m-two"]),
+            ("catb", ["m-three"]),
+        ):
+            r = c.put(f"/api/models/{name}", json={
+                "base_url": "http://127.0.0.1:9/v1", "model": models[0],
+                "kind": "custom",
+                "model_list": [{"id": m} for m in models],
+            })
+            assert r.status_code == 200, r.text
+
+        got = c.get("/api/models").json()
+        pairs = {(x["provider"], x["model"]) for x in got["catalog"]}
+        # 以前对话页只看得到当前后端的候选，catb 的模型是"我加过但选不到"的那批
+        assert ("cata", "m-two") in pairs
+        assert ("catb", "m-three") in pairs
+        assert all(x.get("provider_label") for x in got["catalog"]), "分组名没带出去"
+
+    def test_active_setting_covers_backend_and_model(self, tmp_path, monkeypatch):
+        from fastapi.testclient import TestClient
+
+        from ragkb import modelcfg, settings as settings_mod
+
+        monkeypatch.setattr(modelcfg, "MODELS_CONFIG", tmp_path / "m.yaml")
+        # 切「当前后端」会落盘 local.yaml。不隔离的话，测试会把你机器上真实的
+        # 当前后端改成一个临时编出来的名字，重启后整个服务指向不存在的后端。
+        monkeypatch.setattr(settings_mod, "LOCAL_CONFIG", tmp_path / "local.yaml")
+        c = TestClient(self.app.app)
+        c.put("/api/models/acta", json={
+            "base_url": "http://127.0.0.1:9/v1", "model": "first-model",
+            "kind": "custom", "model_list": [{"id": "first-model"}, {"id": "second-model"}],
+        })
+        assert c.post("/api/models/active", json={
+            "name": "acta", "model": "second-model"}).status_code == 200
+
+        got = c.get("/api/models").json()
+        assert got["active"] == "acta"
+        # 「当前」必须两段都对上：后端是它 + 模型是它，才允许打勾
+        active = [x for x in got["catalog"] if x["active"]]
+        assert [(x["provider"], x["model"]) for x in active] == [("acta", "second-model")]
+        # 落盘：重启后仍是这个模型，不能只在内存里
+        assert "second-model" in (tmp_path / "m.yaml").read_text(encoding="utf-8")
+
+    def test_probe_message_has_no_model_count_noise(self, monkeypatch):
+        from ragkb import services
+        from ragkb.config import ProviderCfg
+
+        class FakeResp:
+            def __init__(self, body): self._b = body
+            def raise_for_status(self): pass
+            def json(self): return self._b
+
+        class FakeClient:
+            def __init__(self, *a, **k): pass
+            def __enter__(self): return self
+            def __exit__(self, *a, **k): return False
+            def get(self, *a, **k):
+                # 40 个模型，其中 3 个是图像类：以前会把这两个数字都念一遍
+                ids = [{"id": f"chat-{i}"} for i in range(37)] + [
+                    {"id": "wan2.2-t2v"}, {"id": "kolors"}, {"id": "bge-m3"}]
+                return FakeResp({"data": ids})
+            def post(self, *a, **k):
+                return FakeResp({"choices": [{"message": {"content": "ok"}}]})
+
+        monkeypatch.setattr(services.httpx, "Client", FakeClient)
+        r = services.probe_one("noisy", ProviderCfg(
+            base_url="http://127.0.0.1:9999/v1", model="chat-0", kind="openai"))
+        assert r["ok"] is True
+        assert r["message"] == "连通", "探测成功只说结论，模型数量不该出现在状态行里"
+        assert len(r["models"]) == 37, "模型清单本身还得带出去，只是别塞进提示里"

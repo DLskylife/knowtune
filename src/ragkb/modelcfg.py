@@ -382,14 +382,14 @@ def readiness(cfg: Config, name: str | None = None) -> dict[str, Any]:
     if p is None:
         return {
             "provider": target, "ready": False, "code": "no_provider",
-            "reason": f"当前指向的后端「{target}」不在注册表里，去模型页重新选一个",
+            "reason": f"后端「{target}」不在注册表里，重新选一个",
         }
     kind = p.kind if p.kind in KIND_MAP else "custom"
     if kind == "mock":
         return {"provider": target, "ready": True, "code": "mock", "reason": ""}
     if not (p.base_url or "").strip():
         return {"provider": target, "ready": False, "code": "no_url",
-                "reason": "还没填 base_url"}
+                "reason": "还没填地址"}
     if not (p.model or "").strip():
         return {"provider": target, "ready": False, "code": "no_model",
                 "reason": "还没填模型名"}
@@ -397,8 +397,10 @@ def readiness(cfg: Config, name: str | None = None) -> dict[str, Any]:
     # 判据是"内存里有没有"，不是"环境变量有没有"——密钥现在只活在内存里。
     if not p.api_key(target) and KIND_MAP.get(
             p.kind if p.kind in KIND_MAP else "custom", {}).get("local") is False:
+        # 卡片上已经是"缺配置"那一行，说清缺什么就够；"只存内存、重启要重填"
+        # 这类通用说明放在页面底部的折叠区，不必每张卡重复一遍。
         return {"provider": target, "ready": False, "code": "no_key",
-                "reason": "云端后端要密钥：在模型页填 API Key（只存内存，重启后需重填）"}
+                "reason": "缺密钥：点编辑填 API Key"}
     return {"provider": target, "ready": True, "code": "ok", "reason": ""}
 
 
@@ -441,11 +443,38 @@ def listing(cfg: Config) -> dict[str, Any]:
     items.sort(key=lambda x: (not x["active"], not x["local"], x["name"]))
     from . import secrets as secrets_mod
 
+    # 扁平目录：所有后端 × 所有已知模型，一条一个可选项。
+    #
+    # 为什么要有它：对话页的"生成模型"以前只能列**当前后端**的候选，用户想用
+    # 另一个后端上的某个模型，得先切后端再切模型——两层嵌套，而且第二层
+    # 常常是空的（探测缓存被失效过）。看起来就是"我加过的模型选不到"。
+    # 这里把两层压成一层，前端的下拉直接照这个渲染。
+    catalog = []
+    for name, p in cfg.generation.providers.items():
+        ready = readiness(cfg, name)
+        ids = [m.id for m in p.model_list]
+        if p.model and p.model not in ids:
+            ids.insert(0, p.model)
+        for mid in ids:
+            if not mid:
+                continue
+            catalog.append({
+                "provider": name,
+                "model": mid,
+                "current": bool(p.model) and mid == p.model,
+                "provider_active": name == cfg.generation.provider,
+                "ready": ready["ready"],
+            })
+
     return {
         "active": cfg.generation.provider,
         "active_ready": readiness(cfg)["ready"],
         "active_reason": readiness(cfg)["reason"],
+        # 全局"当前"是「后端 + 模型」两段，分开给，界面才能一次说清"现在在用哪套"
+        "active_model": (cfg.generation.providers.get(cfg.generation.provider).model
+                         if cfg.generation.provider in cfg.generation.providers else ""),
         "providers": items,
+        "catalog": catalog,
         "kinds": kinds(cfg),
         # 密钥是否被"记住到本机"（默认 False = 纯内存，重启即清空）
         "keys_persisted": secrets_mod.persisted(),

@@ -1390,7 +1390,7 @@ input[type=number].num::-webkit-outer-spin-button { -webkit-appearance: none; ma
 
 .svc-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(272px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
   gap: 10px;
 }
 .svc-card {
@@ -1400,6 +1400,9 @@ input[type=number].num::-webkit-outer-spin-button { -webkit-appearance: none; ma
   padding: 12px 14px 13px;
   display: flex; flex-direction: column; gap: 5px;
   min-width: 0;
+  /* 同一行的卡片等高、动作按钮贴底：卡片内容多少不一（有的多一行"缺配置"），
+     不统一就会看到一排高低不齐的按钮，像没对齐的表格。 */
+  min-height: 152px;
 }
 .svc-card.active {
   border-color: rgba(91, 140, 255, .42);
@@ -1916,6 +1919,65 @@ input[type=number].num::-webkit-outer-spin-button { -webkit-appearance: none; ma
 /* 侧栏知识库行的编辑按钮 */
 .kb-item .act { flex: none; }
 
+/* 顶部「当前使用」条：全局就一套配置，它由「后端 + 模型」两段组成。
+   以前只有卡片角上一个小小的「当前」徽标，模型名散在卡片里，用户看不出
+   现在到底在跑什么，也找不到地方改。 */
+.cur-bar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  justify-content: space-between;
+  padding: 10px 12px; margin-bottom: 10px;
+  background: linear-gradient(180deg, rgba(91, 140, 255, .10), transparent 70%), var(--surface);
+  border: 1px solid rgba(91, 140, 255, .35);
+  border-radius: 12px;
+}
+.cur-main { display: flex; align-items: center; gap: 7px; min-width: 0; flex-wrap: wrap; }
+.cur-label { font-size: 11px; color: var(--text-3); letter-spacing: .04em; }
+.cur-main select {
+  height: 30px; min-width: 0; max-width: 240px;
+  background: var(--surface-2); color: var(--text);
+  border: 1px solid var(--line); border-radius: 8px;
+  font-size: 12px; padding: 0 8px;
+}
+.cur-main select#curModel {
+  font-family: var(--mono); font-size: 11.5px; max-width: 320px;
+}
+.cur-sep { color: var(--text-3); }
+.cur-state { font-size: 11.5px; color: var(--text-3); white-space: nowrap; }
+.cur-side { display: flex; gap: 6px; }
+.cur-bar .ghost-btn { height: 28px; font-size: 11.5px; }
+
+/* 卡片头部的小图标按钮：一颗只做一个动作，比四个中文按钮挤一行清爽，
+   而且中文按钮在窄卡片里会换行，卡片高度就参差了。 */
+.icon-btn {
+  flex: none; width: 22px; height: 22px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid transparent; border-radius: 6px;
+  background: transparent; color: var(--text-3);
+  font-size: 12px; line-height: 1; cursor: pointer;
+  transition: background .12s, color .12s, border-color .12s;
+}
+.icon-btn:hover { background: var(--surface-3); color: var(--text); border-color: var(--line); }
+.icon-btn.danger:hover { color: var(--err); border-color: rgba(230, 90, 90, .5); }
+.icon-btn[disabled] { opacity: .3; cursor: not-allowed; }
+.svc-card header .sp { flex: 1 1 auto; }
+.svc-card .msg .ago { font-size: 10.5px; color: var(--text-3); opacity: .75; }
+.svc-card .use-btn { align-self: flex-start; margin-top: auto; }
+/* 当前卡片没有"设为当前"按钮，用一个同高的静态标签占位，否则这一格的
+   内容会整体缩上去，和旁边几张对不齐。 */
+.svc-card .cur-tag {
+  align-self: flex-start; margin-top: auto;
+  font-size: 11px; color: var(--accent);
+  border: 1px dashed rgba(91, 140, 255, .45);
+  border-radius: 6px; padding: 3px 8px;
+}
+.launch-fold { margin-top: 12px; }
+.launch-fold > summary {
+  cursor: pointer; font-size: 12.5px; color: var(--text-2);
+  list-style-position: outside; padding: 2px 0;
+}
+.launch-fold > summary::marker { color: var(--text-3); }
+.launch-fold[open] > summary { margin-bottom: 8px; }
+
 /* 缺配置的卡片要明说缺什么：和"连接超时"是两种病，重试解决不了缺密钥 */
 .svc-card .miss {
   font-size: 11px; color: var(--warn); line-height: 1.5;
@@ -1977,17 +2039,6 @@ input[type=number].num::-webkit-outer-spin-button { -webkit-appearance: none; ma
   border-color: var(--line);
 }
 
-/* 「测试联通」是这张卡唯一会发网络请求的动作，做成实心描边，别和
-   「设为当前 / 编辑 / 删除」三个被动操作混成一片。 */
-.svc-card footer .mini.test {
-  border-color: rgba(60, 150, 230, .45);
-  color: var(--text);
-  background: rgba(60, 150, 230, .10);
-}
-.svc-card footer .mini.test:hover {
-  background: rgba(60, 150, 230, .20);
-  border-color: var(--accent);
-}
 .svc-card.probing { opacity: .75; }
 .svc-card .msg { display: flex; align-items: center; gap: 6px; }
 .svc-card .msg .txt { flex: 1 1 auto; min-width: 0; }

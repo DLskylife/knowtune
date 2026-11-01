@@ -29,6 +29,9 @@ import httpx
 from .config import Config, ProviderCfg
 
 CACHE_TTL_S = 15.0
+# 缓存格式版本。v1 没有版本号，且 key_fp 恒为 "no_key"（指纹函数没带后端名），
+# 等于没绑钥匙。读到 v1 一律作废重测。
+_CACHE_VERSION = 2
 _CACHE: dict[str, dict[str, Any]] = {}
 _CACHE_LOCK = threading.Lock()
 _CACHE_FILE: Path | None = None
@@ -69,17 +72,21 @@ _NON_CHAT_HINTS = (
 )
 
 
-def _key_fp(prov: ProviderCfg | None) -> str:
+def _key_fp(prov: ProviderCfg | None, name: str = "") -> str:
     """这把密钥的指纹（不存密钥本体，只存够区分"换没换"的一小段哈希）。
 
     探测结论是**对某把钥匙而言**的：密钥换了、或者重启后内存里的密钥没了
     （默认不落盘）而盘上缓存还在，旧绿灯就成了过期结论——用户看到"测试通过"，
     一提问却 401。缓存里带上指纹，换钥匙就自动作废。
+
+    必须传后端名：密钥是按后端名存在内存里的，只调 `api_key()` 拿的是"本次
+    探测临时填的那把"（通常为空），于是两边都算成 "no_key"、永远相等——
+    指纹机制看着在跑，其实一直空转（2026-11-01 发现）。
     """
     if prov is None:
         return "unknown"
     try:
-        key = prov.api_key() or ""
+        key = prov.api_key(name) or ""
     except Exception:  # noqa: BLE001 - 取不到就当"没密钥"，不拖累探测
         key = ""
     if not key.strip():
@@ -159,7 +166,7 @@ def probe_one(
         "base_url": p.base_url,
         "model": p.model,
         "checked_at": time.time(),
-        "key_fp": _key_fp(p),
+        "key_fp": _key_fp(p, name),
     }
 
     if p.kind == "mock" or not p.base_url:
@@ -201,16 +208,14 @@ def probe_one(
         # /models 200 ≠ 联通。追加对话验证：真能出 1 个 token 才算 ok。
         chat_ok, chat_msg = _verify_chat(p, headers=headers, timeout_s=chat_timeout_s)
         if chat_ok:
+            # 只报结论。以前这里写"就绪 · 对话验证通过 · 12 个可对话模型
+            # （另有 3 个图像/语音/实时类已隐藏）"，用户每测一次就被灌一遍
+            # 与"通不通"无关的统计。模型数量在下拉里看得见，状态行不需要复述。
             status = "ok"
-            if ids:
-                msg = f"就绪 · 对话验证通过 · {len(chat_ids)} 个可对话模型"
-                if hidden:
-                    msg += f"（另有 {hidden} 个图像/语音/实时类已隐藏）"
-            else:
-                msg = "就绪 · 对话验证通过（/models 返回空列表）"
+            msg = "连通"
         elif not ids:
             status = "warn"
-            msg = "服务在跑，但 /models 返回空列表、对话也没通 —— 先在服务里加载一个模型"
+            msg = "服务在跑，但 /models 为空、对话也没通 —— 先在服务里加载一个模型"
         else:
             status = "warn"
             extra = "" if listed else f"（且模型列表里没有 {p.model}）"
@@ -260,10 +265,39 @@ def _ensure_cache_file(cfg: Config) -> None:
             if _CACHE_FILE.exists():
                 data = json.loads(_CACHE_FILE.read_text(encoding="utf-8"))
                 if isinstance(data, dict):
+                    ver = data.pop("__v", 1)
+                    if ver != _CACHE_VERSION:
+                        # v1 的缓存里 key_fp 恒为 "no_key"（那时指纹函数没带
+                        # 后端名，比对永远相等），等于没有指纹。继续用它，
+                        # "重启后密钥清空、卡片还亮绿灯"就照旧发生。整批作废，
+                        # 让用户重测一次，好过拿假绿灯骗人。
+                        data = {}
                     _CACHE.update(data)
+                    # 老版本把统计写进了结论（"就绪 · 对话验证通过 · 67 个可对话
+                    # 模型（另有 31 个图像/语音类已隐藏）"）。缓存是落盘的，改了
+                    # 代码却不清一次，界面会一直念旧文案——看起来像没生效。
+                    stale = [k for k, v in _CACHE.items()
+                             if isinstance(v, dict) and v.get("status") == "ok"
+                             and v.get("message") != "连通"]
+                    for k in stale:
+                        _CACHE[k]["message"] = "连通"
+                    if stale or ver != _CACHE_VERSION:
+                        _persist()
         except Exception:  # noqa: BLE001 - 缓存坏了不该挡住探测
             pass
         _CACHE_LOADED = True
+
+
+def warm_cache(cfg: Config) -> int:
+    """启动时把上次的探测结论读回内存。
+
+    不读的话，模型页在「第一次点探测」之前整页都是"还没探测"——盘上明明
+    存着结论，界面上却像数据丢了。以前只有 probe_all 才会触发加载，而首屏
+    走的是 cached()，永远等不到那一步。
+    """
+    _ensure_cache_file(cfg)
+    with _CACHE_LOCK:
+        return len(_CACHE)
 
 
 def _persist() -> None:
@@ -272,7 +306,11 @@ def _persist() -> None:
     try:
         _CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
         tmp = _CACHE_FILE.with_suffix(".tmp")
-        tmp.write_text(json.dumps(_CACHE, ensure_ascii=False), encoding="utf-8")
+        # 版本号只在盘上带着，不进内存 _CACHE——否则遍历缓存的地方都要额外
+        # 判断"这条不是后端"。
+        body = {k: v for k, v in _CACHE.items() if isinstance(v, dict)}
+        body["__v"] = _CACHE_VERSION
+        tmp.write_text(json.dumps(body, ensure_ascii=False), encoding="utf-8")
         tmp.replace(_CACHE_FILE)
     except Exception:  # noqa: BLE001 - 落盘失败只影响下次重启的展示
         pass
@@ -320,7 +358,7 @@ def cached(name: str, *, max_age_s: float = 24 * 3600,
     if time.time() - item.get("checked_at", 0) >= max_age_s:
         return None
     if provider is not None:
-        fp = _key_fp(provider)
+        fp = _key_fp(provider, name)
         if fp != "unknown" and item.get("key_fp") and item["key_fp"] != fp:
             return None
     return item
