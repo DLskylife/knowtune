@@ -310,7 +310,7 @@ PROBE = r"""
     ok("删除-落回新对话", !document.getElementById("welcome").hidden
        && document.querySelectorAll(".msg").length === 0);
     var saved = [];
-    try { saved = JSON.parse(localStorage.getItem("ragkb.site.chats") || "[]"); } catch (_) {}
+    try { saved = JSON.parse(localStorage.getItem("knowtune.site.chats") || "[]"); } catch (_) {}
     ok("删除-本地存档同步", saved.length === 0, String(saved.length));
 
     flush();
@@ -334,7 +334,7 @@ def main() -> int:
     html = S.build_html("ug", False, args.zh, gate="await window.__askGate;")
     html = html.replace("</body>", PROBE + "</body>")
 
-    tmp = Path(tempfile.mkdtemp(prefix="ragkb-smoke-"))
+    tmp = Path(tempfile.mkdtemp(prefix="knowtune-smoke-"))
     page = tmp / "smoke.html"
     page.write_text(html, encoding="utf-8")
 

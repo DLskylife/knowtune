@@ -1,12 +1,12 @@
 """命令行入口。Web UI 是主形态，CLI 负责批量导入与脚本化。
 
-    ragkb init                     初始化数据库与默认知识库
-    ragkb status                   环境与索引状态
-    ragkb kb list|create <name>
-    ragkb ingest <path> [--kb 1]   导入文件或目录
-    ragkb ask "问题" [--kb 1]      单次问答（走当前 provider）
-    ragkb debug "问题"             打印两路召回与融合排序（调检索必用）
-    ragkb serve [--port 8000]      启动 Web UI
+    knowtune init                     初始化数据库与默认知识库
+    knowtune status                   环境与索引状态
+    knowtune kb list|create <name>
+    knowtune ingest <path> [--kb 1]   导入文件或目录
+    knowtune ask "问题" [--kb 1]      单次问答（走当前 provider）
+    knowtune debug "问题"             打印两路召回与融合排序（调检索必用）
+    knowtune serve [--port 8000]      启动 Web UI
 """
 
 from __future__ import annotations
@@ -248,12 +248,12 @@ def cmd_serve(args) -> int:
     import uvicorn
 
     print(f"Web UI: http://127.0.0.1:{args.port}")
-    uvicorn.run("ragkb.api.app:app", host=args.host, port=args.port, log_level="info")
+    uvicorn.run("knowtune.api.app:app", host=args.host, port=args.port, log_level="info")
     return 0
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="ragkb", description="本地个人 RAG 知识库")
+    parser = argparse.ArgumentParser(prog="knowtune", description="KnowTune — 本地知识库问答系统（带引用的 RAG）")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("init", help="初始化数据库").set_defaults(func=cmd_init)

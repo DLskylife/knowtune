@@ -124,10 +124,10 @@ class LLMClient:
         像模型服务挂了，实际是本机代理劫持。这个坑排查成本极高，所以默认
         关掉环境代理。
 
-        确实需要走代理访问境外模型的，用 RAGKB_LLM_PROXY 显式指定，不要
+        确实需要走代理访问境外模型的，用 KNOWTUNE_LLM_PROXY 显式指定，不要
         依赖环境变量生效（那会把本地 vLLM 一起带进代理）。
         """
-        proxy = os.environ.get("RAGKB_LLM_PROXY", "").strip()
+        proxy = os.environ.get("KNOWTUNE_LLM_PROXY", "").strip()
         if proxy:
             return httpx.Client(timeout=self._timeout(), proxy=proxy, trust_env=False)
         return httpx.Client(timeout=self._timeout(), trust_env=False)

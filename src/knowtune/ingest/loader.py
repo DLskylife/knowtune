@@ -566,7 +566,7 @@ def load_url(
         with httpx.Client(
             timeout=httpx.Timeout(connect=8.0, read=timeout_s, write=10.0, pool=5.0),
             follow_redirects=True,
-            headers={"User-Agent": "ragkb/0.1 (+local personal knowledge base)"},
+            headers={"User-Agent": "knowtune/0.1 (+local personal knowledge base)"},
         ) as client:
             resp = client.get(url)
     except httpx.HTTPError as exc:

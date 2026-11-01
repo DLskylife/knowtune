@@ -44,8 +44,8 @@ SEED = r"""
              cit: [{ doc: "维医典籍.pdf", sec: "第一章", preview: "四种体液" },
                    { doc: "维医典籍.pdf", sec: "第二章", preview: "三种因素" }] }]
   };
-  localStorage.setItem("ragkb.site.chats", JSON.stringify([rec]));
-  localStorage.setItem("ragkb.site.session", "bidi-1");
+  localStorage.setItem("knowtune.site.chats", JSON.stringify([rec]));
+  localStorage.setItem("knowtune.site.session", "bidi-1");
   return "seeded:" + A.length;
 })()
 """

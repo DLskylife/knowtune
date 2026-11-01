@@ -22,7 +22,7 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-STATIC = ROOT / "src" / "ragkb" / "frontsite" / "static"
+STATIC = ROOT / "src" / "knowtune" / "frontsite" / "static"
 EDGE = Path(r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe")
 
 INFO_UG = {
@@ -235,7 +235,7 @@ def main() -> int:
 
     out = (ROOT / args.out).resolve()
     out.parent.mkdir(parents=True, exist_ok=True)
-    tmpdir = Path(tempfile.mkdtemp(prefix="ragkb-shot-"))
+    tmpdir = Path(tempfile.mkdtemp(prefix="knowtune-shot-"))
     page = tmpdir / "index.html"
     page.write_text(build_html("zh" if args.zh else "ug", args.filled, args.zh,
                                error=args.error, stream_file=args.stream_file,

@@ -329,7 +329,7 @@ def upsert(
 
     is_mock = kind == "mock"
     clean_url = validate_url(base_url, allow_empty=is_mock) or None
-    # 密钥不在这里存：它由调用方放进口内存注册表（ragkb.secrets），
+    # 密钥不在这里存：它由调用方放进口内存注册表（knowtune.secrets），
     # 这里只管地址/模型/类型这些"可以见人"的字段。
     #
     # model_list 传 None 表示"这次不改清单"——卡片上切个模型只改 model 一个字段，

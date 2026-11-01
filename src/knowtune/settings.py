@@ -144,14 +144,14 @@ PARAMS: tuple[Param, ...] = (
     Param("refusal.enabled", "启用拒答", "refusal", "bool",
           "关掉后无论检索多差都会硬答，容易出现「看起来有理但全靠编」。"),
     Param("refusal.min_score", "分数阈值", "refusal", "float",
-          "top1 余弦低于此值即拒答。正解是用 ragkb eval --calibrate 按评估集扫出来，别手调。",
+          "top1 余弦低于此值即拒答。正解是用 knowtune eval --calibrate 按评估集扫出来，别手调。",
           lo=0.0, hi=1.0, step=0.005),
     Param("refusal.min_margin", "区分度阈值", "refusal", "float",
           "top1 减 mean(top2..5)。分数全挤在一起说明模型对哪条都没把握，此时就该拒答。",
           lo=0.0, hi=0.5, step=0.005),
     Param("refusal.margin_window", "margin 窗口", "refusal", "int",
           "取前几条算 margin。它同时是标定口径——改了窗口，历史标定结果不再可比，"
-          "要重跑 ragkb eval --calibrate。",
+          "要重跑 knowtune eval --calibrate。",
           lo=2, hi=20, step=1, unit="条"),
     Param("refusal.soft_margin", "低置信提醒余量", "refusal", "float",
           "top1 低于 min_score + 此值时不拦截、只在答案旁提示『相关度偏低』。"

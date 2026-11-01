@@ -485,7 +485,7 @@ class AppState:
 
 
 state = AppState()
-app = FastAPI(title="ragkb", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="KnowTune", version="0.1.0", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
@@ -696,7 +696,7 @@ class ModelUpsert(BaseModel):
     model: str = ""
     kind: str = "custom"
     # None = 不改动现有密钥；"" = 清空；非空 = 设为新密钥。
-    # 密钥只进内存（ragkb.secrets），永远不写 models.yaml。
+    # 密钥只进内存（knowtune.secrets），永远不写 models.yaml。
     api_key: str | None = None
     # 模型清单（人维护的"我打算用哪些模型"），None = 不动
     model_list: list[dict] | None = None

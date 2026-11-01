@@ -22,8 +22,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from ragkb.cli import _bootstrap  # noqa: E402
-from ragkb.evaluate import load_cases, run_eval  # noqa: E402
+from knowtune.cli import _bootstrap  # noqa: E402
+from knowtune.evaluate import load_cases, run_eval  # noqa: E402
 
 
 def main() -> int:

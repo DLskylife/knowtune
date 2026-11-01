@@ -3,9 +3,9 @@ requires = ["hatchling>=1.25.0"]
 build-backend = "hatchling.build"
 
 [project]
-name = "ragkb"
+name = "knowtune"
 version = "0.1.0"
-description = "本地个人 RAG 知识库：多格式导入 + 混合检索 + 带引用生成 + 可量化评估"
+description = "KnowTune：本地知识库问答系统 —— 多格式导入 + 混合检索 + 带引用生成 + 可量化评估"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 
@@ -54,13 +54,13 @@ dev = [
     "ruff>=0.7.0",
     "mypy>=1.13.0",
 ]
-all = ["ragkb[extract,local,dev]"]
+all = ["knowtune[extract,local,dev]"]
 
 [project.scripts]
-ragkb = "ragkb.cli:main"   # S1 提供
+knowtune = "knowtune.cli:main"   # S1 提供
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/ragkb"]
+packages = ["src/knowtune"]
 
 [tool.ruff]
 line-length = 100

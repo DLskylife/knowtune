@@ -170,8 +170,8 @@ const LANG_NAME = { ug: "ئۇيغۇرچە", zh: "中文", en: "English" };
    2. 刷新页面不该把刚问过的对话全丢掉。
    每条答案正文截到 12000 字：一份几十条记录的存档不该把 localStorage
    配额吃满，而 12000 字已经远超一屏能读的量。 */
-const CHAT_KEY = "ragkb.site.chats";
-const SESSION_KEY = "ragkb.site.session";
+const CHAT_KEY = "knowtune.site.chats";
+const SESSION_KEY = "knowtune.site.session";
 const MAX_CHATS = 30;
 const MAX_ANSWER = 12000;
 

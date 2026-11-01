@@ -4,7 +4,7 @@
 #   ./scripts/fetch_model.sh BAAI/bge-small-zh-v1.5
 #   ./scripts/fetch_model.sh BAAI/bge-reranker-base
 #
-# 目标目录：data/models/<org--name>，与 ragkb 的自动查找规则一致。
+# 目标目录：data/models/<org--name>，与 knowtune 的自动查找规则一致。
 # 用 curl 而不是 huggingface-cli：新版 hf 走 Xet 存储，镜像对 Xet 支持不完整，
 # 会出现"下载成功但文件是空的"，排查起来非常费劲。
 set -uo pipefail

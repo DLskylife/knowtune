@@ -50,7 +50,7 @@ ASK = r"""
     ev: badge ? badge.textContent.trim() : "",
     cites: document.querySelectorAll(".cite").length,
     sess: document.querySelectorAll(".sess").length,
-    stored: (localStorage.getItem("ragkb.site.chats") || "").length,
+    stored: (localStorage.getItem("knowtune.site.chats") || "").length,
     answer: ans ? ans.textContent.slice(0, 90) : "",
   };
 })()

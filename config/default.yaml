@@ -1,5 +1,5 @@
 # 全部可调参数的唯一来源。
-# 调优闭环：改这里 → `ragkb eval` → 与 baseline 对比 → 保留或回滚。
+# 调优闭环：改这里 → `knowtune eval` → 与 baseline 对比 → 保留或回滚。
 # 任何不在本文件里的魔法数字都是 bug。
 
 version: 1
@@ -116,7 +116,7 @@ generation:
   provider: vllm
   providers:
     vllm:
-      # 8100：8000 是 ragkb 自己的 Web 服务端口，撞在一起时只能看到"vLLM 起不来"
+      # 8100：8000 是 knowtune 自己的 Web 服务端口，撞在一起时只能看到"vLLM 起不来"
       base_url: "http://127.0.0.1:8100/v1"
       api_key_env: null              # 内网 vLLM 通常无鉴权
       model: "Qwen2.5-7B-Instruct"
@@ -128,7 +128,7 @@ generation:
       kind: lmstudio
     openai:
       base_url: "https://api.openai.com/v1"
-      api_key_env: RAGKB_LLM_API_KEY   # 只读环境变量名，密钥永不落配置文件
+      api_key_env: KNOWTUNE_LLM_API_KEY   # 只读环境变量名，密钥永不落配置文件
       model: "gpt-4o-mini"
       kind: openai
     mock:

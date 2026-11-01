@@ -19,10 +19,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from ragkb.cli import _bootstrap  # noqa: E402
-from ragkb.evaluate import _match, load_cases  # noqa: E402
-from ragkb.textnorm import fold  # noqa: E402
-from ragkb import kbconfig  # noqa: E402
+from knowtune.cli import _bootstrap  # noqa: E402
+from knowtune.evaluate import _match, load_cases  # noqa: E402
+from knowtune.textnorm import fold  # noqa: E402
+from knowtune import kbconfig  # noqa: E402
 
 
 def main() -> int:

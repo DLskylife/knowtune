@@ -2,7 +2,7 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
-      <module fileurl="file://$PROJECT_DIR$/.idea/ragkb.iml" filepath="$PROJECT_DIR$/.idea/ragkb.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/knowtune.iml" filepath="$PROJECT_DIR$/.idea/knowtune.iml" />
     </modules>
   </component>
 </project>

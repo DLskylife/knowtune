@@ -566,7 +566,7 @@ function paintInto(msgs) {
     }
     const el = document.createElement("div");
     el.className = "msg assistant";
-    el.innerHTML = `<div class="role">ragkb</div>
+    el.innerHTML = `<div class="role">knowtune</div>
       <div class="bubble">${renderBody(m.content)}</div>
       <div class="msg-foot"></div>`;
     $("chat").appendChild(el);
@@ -897,7 +897,7 @@ function syncKbOptions() {
    走两条路——生成侧的（模型/温度/长度/流式）本来就是 per-call 参数；
    检索侧的走 overrides 点分路径，后端用 kbconfig.effective 合成一份临时
    配置副本，白名单外的键直接被丢掉，所以这里传错也改不坏别的配置。 */
-const ADV_KEY = "ragkb.chatOpts";
+const ADV_KEY = "knowtune.chatOpts";
 
 const advEls = () => ({
   model: $("genModelSel"), temp: $("optTemp"), maxTok: $("optMaxTok"),
@@ -1266,7 +1266,7 @@ function appendUser(text) {
 function appendAssistant() {
   const el = document.createElement("div");
   el.className = "msg assistant";
-  el.innerHTML = `<div class="role">ragkb</div>
+  el.innerHTML = `<div class="role">knowtune</div>
     <div class="bubble"><span class="cursor"></span></div>
     <div class="msg-foot"></div>`;
   $("chat").appendChild(el);
@@ -1690,7 +1690,7 @@ async function loadDocs() {
 
 async function selectKb(id) {
   state.kbId = id;
-  localStorage.setItem("ragkb.kb", String(id));
+  localStorage.setItem("knowtune.kb", String(id));
   // 换库必须丢掉参数草稿，否则 A 库改了一半的滑杆会出现在 B 库上
   state.kbCfgDraftFor = null;
   state.kbDetail = null;
@@ -3081,7 +3081,7 @@ $("kbSel").onchange = async (e) => {
   if (!raw) {
     // 不挂载知识库：清掉库与会话，消息区留着——刚问出来的那几轮不该被换库冲掉。
     state.kbId = null;
-    localStorage.removeItem("ragkb.kb");
+    localStorage.removeItem("knowtune.kb");
     state.kbCfgDraftFor = null;
     state.kbDetail = null;
     state.docs = [];
@@ -3103,11 +3103,11 @@ $("kbSel").onchange = async (e) => {
 
 $("dbgToggle").onchange = (e) => {
   document.querySelector(".app").classList.toggle("panel-hidden", !e.target.checked);
-  localStorage.setItem("ragkb.debug", e.target.checked ? "1" : "0");
+  localStorage.setItem("knowtune.debug", e.target.checked ? "1" : "0");
 };
 
 $("providerSel").addEventListener("change", (e) => {
-  localStorage.setItem("ragkb.provider", e.target.value);
+  localStorage.setItem("knowtune.provider", e.target.value);
   const opt = e.target.selectedOptions[0];
   e.target.title = opt?.title || opt?.textContent || "";
   // 换后端 = 换一批可用模型：还留着上一个后端的模型名，等于埋一个 404
@@ -3142,7 +3142,7 @@ $("btnTrTest").onclick = async () => {
 };
 
 $("topKSel").addEventListener("change", () => {
-  localStorage.setItem("ragkb.topk", $("topKSel").value);
+  localStorage.setItem("knowtune.topk", $("topKSel").value);
   renderCfgSummary();
 });
 
@@ -3163,7 +3163,7 @@ $("genModelSel").addEventListener("change", () => {
   const gm = parseGenPick();
   if (gm.provider && $("providerSel").value !== gm.provider) {
     $("providerSel").value = gm.provider;
-    localStorage.setItem("ragkb.provider", gm.provider);
+    localStorage.setItem("knowtune.provider", gm.provider);
   }
   saveAdv();
   renderCfgSummary();
@@ -4513,7 +4513,7 @@ async function deleteKb(kb) {
       state.kbDetail = null;
       state.kbCfgDraftFor = null;
       state.kbSearch = null;
-      localStorage.removeItem("ragkb.kb");
+      localStorage.removeItem("knowtune.kb");
     }
     toast(`已删除「${kb.name}」：${r.docs} 篇文档 / ${r.chunks} 个 chunk`);
     await loadKb();
@@ -5253,7 +5253,7 @@ async function useModel(name, opts = {}) {
     // 下拉框跟着切：服务端已经切了，界面还停在旧的，用户下次提问用的就是新的，
     // 但看到的却是旧名字。
     $("providerSel").value = name;
-    localStorage.setItem("ragkb.provider", name);
+    localStorage.setItem("knowtune.provider", name);
     // 后端换了，模型候选也得跟着换：还留着上一个后端的模型名，这一问就会
     // 拿 A 的模型名去打 B 的接口，回一个 404，而界面上看不出哪里不对。
     syncGenModelOptions();
@@ -5836,29 +5836,29 @@ async function newKbWizard() {
   };
 
   try {
-    const saved = localStorage.getItem("ragkb.kb");
+    const saved = localStorage.getItem("knowtune.kb");
     if (saved) state.kbId = Number(saved) || null;
     await tolerate("知识库列表", () => loadKb());
     if (state.kbId && !state.kbs.some((k) => k.id === state.kbId)) {
       state.kbId = state.kbs.length ? state.kbs[0].id : null;
     }
-    if (state.kbId) localStorage.setItem("ragkb.kb", String(state.kbId));
+    if (state.kbId) localStorage.setItem("knowtune.kb", String(state.kbId));
 
     // 后端下拉必须在恢复 localStorage 里的选择之前填好，否则恢复不上去
     await tolerate("后端列表", () => loadProviders());
-    const savedProvider = localStorage.getItem("ragkb.provider");
+    const savedProvider = localStorage.getItem("knowtune.provider");
     if (savedProvider && [...$("providerSel").options].some((o) => o.value === savedProvider)) {
       $("providerSel").value = savedProvider;
     }
     restoreAdv();
     syncGenModelOptions();   // 选项依赖当前后端，必须在 restoreAdv 之后
-    const savedK = localStorage.getItem("ragkb.topk");
+    const savedK = localStorage.getItem("knowtune.topk");
     if (savedK && [...$("topKSel").options].some((o) => o.value === savedK)) {
       $("topKSel").value = savedK;
     }
 
     // 调试面板默认展开（这是这个项目最该被看见的部分）；收起过才记成 0。
-    const dbgPref = localStorage.getItem("ragkb.debug") !== "0";
+    const dbgPref = localStorage.getItem("knowtune.debug") !== "0";
     $("dbgToggle").checked = dbgPref;
     document.querySelector(".app").classList.toggle("panel-hidden", !dbgPref);
     renderCfgSummary();

@@ -3,17 +3,17 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ragkb · 本地知识库</title>
-  <link rel="stylesheet" href="/static/style.css?v=0.9.39">
+  <title>KnowTune · 本地知识库</title>
+  <link rel="stylesheet" href="/static/style.css?v=0.9.40">
   <script>
     /* 同前台那份自检：页面是新的、app.js 被 WebView 留成旧的，就会出现
        "按钮在、点了没反应"（删库那次就这么来的）。编号对不上就强制换一次，
        只换一次，避免死循环。 */
-    window.ADMIN_REQ_BUILD = "0.9.39";
+    window.ADMIN_REQ_BUILD = "0.9.40";
     addEventListener("load", function () {
       if (window.ADMIN_BUILD === window.ADMIN_REQ_BUILD) return;
-      if (sessionStorage.getItem("ragkb.admin.reloaded")) return;
-      sessionStorage.setItem("ragkb.admin.reloaded", "1");
+      if (sessionStorage.getItem("knowtune.admin.reloaded")) return;
+      sessionStorage.setItem("knowtune.admin.reloaded", "1");
       location.replace(location.pathname + "?cb=" + Date.now());
     });
   </script>
@@ -22,9 +22,9 @@
   <div class="app" id="app" data-view="chat">
     <aside class="sidebar">
       <div class="brand">
-        <span class="logo">R</span>
+        <span class="logo">K</span>
         <div class="brand-text">
-          <div class="brand-name">ragkb</div>
+          <div class="brand-name">KnowTune</div>
           <div class="brand-sub">本地知识库</div>
         </div>
       </div>
@@ -390,6 +390,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=0.9.39"></script>
+  <script src="/static/app.js?v=0.9.40"></script>
 </body>
 </html>

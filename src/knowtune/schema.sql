@@ -1,4 +1,4 @@
--- ragkb schema v1
+-- knowtune schema v1
 -- 所有时间统一 UTC ISO8601 字符串，避免时区在个人项目里搞出玄学 bug。
 
 PRAGMA journal_mode = WAL;

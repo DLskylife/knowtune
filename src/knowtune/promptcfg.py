@@ -170,7 +170,7 @@ def _write(data: dict[str, Any]) -> None:
     header = (
         "# 提示词覆盖层。由后台「模型 → 提示词」维护，也可手改。\n"
         "# 只记录与内置默认不同的字段：删掉某一行 = 该项回到内置默认。\n"
-        "# 内置默认在 config/prompts/*.md（generate）和 ragkb/promptcfg.py（translate），\n"
+        "# 内置默认在 config/prompts/*.md（generate）和 knowtune/promptcfg.py（translate），\n"
         "# 本文件永远不覆盖它们，因此「恢复默认」是安全的。\n"
         "# 解析顺序：by_provider.<后端> → default → 内置 → 兜底。\n\n"
     )

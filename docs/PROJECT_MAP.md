@@ -1,4 +1,4 @@
-# 项目地图 · ragkb 是怎么搭起来的
+# 项目地图 · KnowTune 是怎么搭起来的
 
 这份文件回答两件事：**每个文件是干什么的**，以及**它们按什么顺序攒成一个能跑的系统**。
 想读设计取舍和实测数据去 [ARCHITECTURE.md](ARCHITECTURE.md)；想直接跑起来看 [README](../README.md)。
@@ -21,7 +21,7 @@
 
 | 入口 | 默认地址 | 谁在用 | 代码入口 |
 |---|---|---|---|
-| 后台管理台 | `127.0.0.1:8000` | 你自己：建库、导入、调参、看日志 | `ragkb.cli serve` → `api/app.py` |
+| 后台管理台 | `127.0.0.1:8000` | 你自己：建库、导入、调参、看日志 | `knowtune.cli serve` → `api/app.py` |
 | 前台问答站 | `127.0.0.1:8800` 起 | 终端用户：只能提问，看不到任何管理功能 | 由后台的 `InstanceManager` 在**同进程**内起 uvicorn 线程 |
 | 命令行 | — | 批量导入、脚本化评估 | `cli.py` |
 
@@ -51,11 +51,11 @@ cli.py  ← 命令行
 
 | 路径 | 是什么 | 能不能删 |
 |---|---|---|
-| `src/ragkb/` | 全部 Python 源码（含两套前端静态文件） | 不能 |
+| `src/knowtune/` | 全部 Python 源码（含两套前端静态文件） | 不能 |
 | `config/` | 全部配置：默认值、本机覆盖、模型注册表、站点实例、提示词 | 不能 |
 | `data/` | 运行期数据：数据库、上传原件、模型权重、密钥、标定结果 | 不能（删了等于重建库） |
 | `evals/` | 评估题集与基线结果 | 不能（没有基线就无法判断改动是好是坏） |
-| `tests/` | 单测（174 条） | 不能 |
+| `tests/` | 单测（255 条） | 不能 |
 | `scripts/` | 开发与运维工具（截图、冒烟、校准、WBS 生成） | 可删，但删了下次改 UI 要重写 |
 | `docs/` | 架构文档、WBS、本文件 | 不能 |
 | `.venv/` | 虚拟环境（1.3 GB，含 torch） | 可删，重装见 README |
@@ -86,7 +86,7 @@ cli.py  ← 命令行
 | `prompts/qa_v1.md` | 默认系统提示（中文）。`prompt_version` 指向它。 |
 | `prompts/qa_ug.md` | 维吾尔语版本的系统提示。回答语言不是中文时自动改用它。 |
 
-### 4.3 `src/ragkb/` 地基（谁都要用的那层）
+### 4.3 `src/knowtune/` 地基（谁都要用的那层）
 
 | 文件 | 职责 |
 |---|---|
@@ -109,7 +109,7 @@ cli.py  ← 命令行
 | `evaluate.py` | 评估：Recall@K / MRR / 拒答混淆矩阵 / 阈值标定。**没有基线的 RAG 无法判断改动好坏**，这个模块是唯一的裁判。 |
 | `cli.py` | 命令行入口：`init / status / kb / ingest / ask / debug / eval / serve`。 |
 
-### 4.4 `src/ragkb/ingest/` 导入链路
+### 4.4 `src/knowtune/ingest/` 导入链路
 
 | 文件 | 职责 |
 |---|---|
@@ -118,7 +118,7 @@ cli.py  ← 命令行
 | `chunker.py` | 分块：结构优先（标题层级 → 段落 → 句子），字符兜底。中文技术文档一个论点常横跨 3–5 段，按固定窗口切必然切断论证。 |
 | `pipeline.py` | 流水线：抽取 → 清洗 → 切分 → 分词 → 嵌入 → 落库 → **原子切换**。带状态机与进度，供后台轮询。重新索引时保留一代旧数据，用于回滚。 |
 
-### 4.5 `src/ragkb/index/` 两种索引
+### 4.5 `src/knowtune/index/` 两种索引
 
 | 文件 | 职责 |
 |---|---|
@@ -126,14 +126,14 @@ cli.py  ← 命令行
 | `sparse.py` | 关键词检索：jieba 预分词 + SQLite FTS5。**必须预分词**：实测 FTS5 默认分词器对中文完全失效（2 字查询命中 0 条），trigram 同样失效。 |
 | `vectors.py` | 向量检索：内存矩阵 + 暴力点积。10 万 chunk ≈ 196MB，这个量级上暴力算比建 ANN 索引更快也更准。 |
 
-### 4.6 `src/ragkb/retrieve/` 检索编排
+### 4.6 `src/knowtune/retrieve/` 检索编排
 
 | 文件 | 职责 |
 |---|---|
 | `engine.py` | 主链路：双路召回 → 加权 RRF 融合 → 精排 → MMR → 拒答判定。**每一段都可以失败，失败后必须降级并打标**，不能静默返回空结果。 |
 | `rerank.py` | 精排（CrossEncoder）与 MMR 去冗余。模型没下载时自动降级，并把 `rerank_unavailable` 写进响应。 |
 
-### 4.7 `src/ragkb/generate/` 生成链路
+### 4.7 `src/knowtune/generate/` 生成链路
 
 | 文件 | 职责 |
 |---|---|
@@ -143,7 +143,7 @@ cli.py  ← 命令行
 | `evidence.py` | 证据分档：把"这批资料有多可信"量化成高/中/低，既不直接扔给模型、也不让界面假装很有把握。 |
 | `cite.py` | 引用校验：把"模型说它引用了"变成"确认它引用了"。算覆盖率、抓越界编号、给 feedback 关联 `message_id`。 |
 
-### 4.8 `src/ragkb/api/` 后台
+### 4.8 `src/knowtune/api/` 后台
 
 | 文件 | 职责 |
 |---|---|
@@ -152,7 +152,7 @@ cli.py  ← 命令行
 | `static/app.js` | 后台全部逻辑（约 5000 行）：路由、各视图渲染、SSE 对话、参数面板、站点卡片。无框架、无打包，直接 ES2020。 |
 | `static/style.css` | 后台样式。深色为基底。 |
 
-### 4.9 `src/ragkb/frontsite/` 前台问答站
+### 4.9 `src/knowtune/frontsite/` 前台问答站
 
 | 文件 | 职责 |
 |---|---|
@@ -180,9 +180,9 @@ cli.py  ← 命令行
 
 | 文件 | 职责 |
 |---|---|
-| `tests/test_core.py` | 174 条单测。覆盖检索数学、分块、清洗、抽取、引用、配置、语言、拒答分档等**纯函数层**。不起服务、不连模型，8 秒跑完。 |
+| `tests/test_core.py` | 255 条单测。覆盖检索数学、分块、清洗、抽取、引用、配置、语言、拒答分档等**纯函数层**。不起服务、不连模型，12 秒跑完。 |
 | `evals/cases.jsonl` | 22 条评估题（20 可答 + 2 应拒）。用「文档标题 + 关键词」判定，不用 `chunk_id`——重新分块后不失效。 |
-| `evals/baseline.json` | 评估基线。`ragkb eval` 与它比对，参数指纹不一致时明确报「不可比」而不是给个假差值。 |
+| `evals/baseline.json` | 评估基线。`knowtune eval` 与它比对，参数指纹不一致时明确报「不可比」而不是给个假差值。 |
 
 ### 4.12 `data/` 运行期数据
 
@@ -193,7 +193,7 @@ cli.py  ← 命令行
 | `models/` | 本地模型权重（嵌入 92M，精排可选）。 |
 | `vectors/` | 预留的向量落盘目录，当前向量直接存在 SQLite 里。 |
 | `secrets.json` | 会话密钥（服务停止即失效）。 |
-| `refusal_calibration.json` | 拒答阈值的标定结果，由 `ragkb eval --calibrate` 写出。 |
+| `refusal_calibration.json` | 拒答阈值的标定结果，由 `knowtune eval --calibrate` 写出。 |
 | `probe_cache.json` | 后端探测结果缓存，15 秒过期。 |
 
 ---
@@ -221,7 +221,7 @@ L0  契约层   models（数据结构）· schema.sql（存储）· db（连接�
 - **L2 之间互不调用**。`retrieve` 不知道 `generate` 存在（`engine.py` 只 import `index` 和 `models`），
   `ingest` 不知道自己以后会被检索。唯一的一处横向依赖是 `generate/prompt.py` 用了
   `lang.answer_instruction`——`lang` 是旁挂工具，不反向依赖任何业务模块，所以不会成环。
-  这一层的每个模块都只靠 `models.py` 里的数据结构对话，这就是 174 条单测能跑在 8 秒内的原因：
+  这一层的每个模块都只靠 `models.py` 里的数据结构对话，这就是 255 条单测能跑在 12 秒内的原因：
   每一层都能单独喂数据进去，不需要起服务、不连模型。
 - **L3 是唯一知道全局的地方**。`AppState` 把七个组件实例化并串起来，它不实现任何算法。
 - **L4 只做 I/O**。`app.py` 收参数、调 L2/L3、拼 JSON，不在路由里写业务分支。
@@ -237,7 +237,7 @@ L0  契约层   models（数据结构）· schema.sql（存储）· db（连接�
 ### 6.1 导入一篇文档
 
 ```
-POST /api/kb/{id}/import   (或 CLI: ragkb ingest)
+POST /api/kb/{id}/import   (或 CLI: knowtune ingest)
    └─ ingest/loader.py      抽取：任意格式 → 纯文本 + 结构块
    └─ ingest/cleaner.py     清洗：去页眉页脚/水印/重复行（不改源文件）
    └─ ingest/chunker.py     切分：标题层级优先，句子兜底
@@ -270,8 +270,8 @@ POST /api/kb/{id}/import   (或 CLI: ragkb ingest)
 ## 7. 启动顺序
 
 ```
-ragkb serve --port 8000
-  └─ uvicorn 加载 ragkb.api.app:app
+knowtune serve --port 8000
+  └─ uvicorn 加载 knowtune.api.app:app
        └─ lifespan 启动 → AppState.__init__
             ├─ load_config()          default.yaml + local.yaml + models.yaml + 标定结果
             ├─ Database(cfg)          开 SQLite，PRAGMA foreign_keys=ON
@@ -339,7 +339,7 @@ config/default.yaml          ← 出厂值，代码里不再有第二份默认�
 | `.pytest_cache/`、全部 `__pycache__/` | 缓存，可再生成 |
 | `_patch.py` | 一次性补丁脚本（改动早已落到 `tests/test_core.py`） |
 | `_serve.log` | 一次启动的临时输出 |
-| `data/ragkb.db` | 0 字节空壳，真实库是 `data/library.db` |
+| `data/knowtune.db` | 0 字节空壳，真实库是 `data/library.db` |
 | `docs/env_report.json` | `scripts/check_env.py` 的输出，随时可重跑 |
 | `.idea/workspace.xml` | IDE 窗口状态。删了会被 PyCharm 立刻重建，已写进 `.gitignore` |
 

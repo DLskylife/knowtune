@@ -1,7 +1,7 @@
-# 个人 RAG 知识库 — 架构设计 v0.1
+# KnowTune — 架构设计 v0.1
 
 > 对应需求规格说明书 F1–F5。本文是 Phase 0（需求锚定）+ Phase 1（架构设计）的交付物。
-> 状态：设计已定稿待确认，未开始编码。
+> 状态：v0.1 已交付（255 条单测全绿），设计与实测数据持续更新。
 
 ---
 
@@ -83,7 +83,7 @@ D5 的含义要说清楚：不是"启动时选一次"，而是同一次运行里
 flowchart TB
   subgraph ACCESS["接入层"]
     API["FastAPI<br/>/kb /docs /search /chat(SSE) /eval"]
-    CLI["CLI<br/>ragkb ingest | ask | eval"]
+    CLI["CLI<br/>knowtune ingest | ask | eval"]
   end
 
   subgraph PIPE["编排层（固定流水线，无自主决策）"]
@@ -448,7 +448,7 @@ F2.4 要求"20 条候选送交叉编码器"。这是全链路延迟最大项，�
 1. **绝对阈值**：`max_dense_sim < refuse.min_score`（默认 0.35，**未标定前打 `uncalibrated` 标记**）
 2. **分布区分度**：`top1_score - mean(top2..top5) < refuse.min_margin`（默认 0.02）。理由：当 5 条结果分数全在 0.42±0.01 时，说明模型对哪条都不确定，此时 top1 是随机抽签——比低分更危险，因为分数"看起来够高"。
 
-标定流程（`python -m ragkb.eval.calibrate`）：
+标定流程（`python -m knowtune.eval.calibrate`）：
 
 1. 评估集里标出 `should_refuse: true/false`；
 2. 在 0.20–0.80 区间以 0.02 步长扫 `min_score`，对每个点算"应拒未拒率"与"不应拒误拒率"；
@@ -571,7 +571,7 @@ rag.ask
 | 阶段 | 内容 | 验收 |
 |---|---|---|
 | **S0** | `check_env.py` 环境自检（本机已跑通，见 §4.3 数据） | 输出 JSON 报告，FTS5 与中文分词项全绿 |
-| **S1 竖切片** | 导入 1 个 .md → 切分 → 嵌入 → 双路检索 → RRF → 非流式生成带引用 | `ragkb ask "…"` 能给出带 `[1]` 的答案，`/search/debug` 能看到两路 rank |
+| **S1 竖切片** | 导入 1 个 .md → 切分 → 嵌入 → 双路检索 → RRF → 非流式生成带引用 | `knowtune ask "…"` 能给出带 `[1]` 的答案，`/search/debug` 能看到两路 rank |
 | **S2 检索质量** | 20 条评估集 + Recall@5 基线 + 精排开关对比 + chunk size 三档对比 | 拿到 baseline.json，Recall@5 ≥ 70% |
 | **S3 加固** | 错误矩阵落地、降级标记、重新索引原子切换、SSE | 断网/断模型/坏文件三种故障下不崩、有可读原因 |
 | **S4 会话** | 多会话、多轮、消息持久化、反馈 | 5 轮连续追问不失焦（需求 F4 验证标准） |
@@ -671,7 +671,7 @@ S1 不做的事，明确列出：不做前端、不做 URL 导入、不做多会
 
 ### 12.3 参数面板：把调参从编辑器里放出来（2026-10-27 追加）
 
-原本所有 RAG 参数只能改 YAML 再重启，等于把"调参"这件事锁在文本编辑器里。现在参数是一张**注册表**（`src/ragkb/settings.py`）：每个参数的路径、类型、上下界、步长、中文说明、生效方式都写成数据，后端 `/api/settings` 直接下发给前端渲染。
+原本所有 RAG 参数只能改 YAML 再重启，等于把"调参"这件事锁在文本编辑器里。现在参数是一张**注册表**（`src/knowtune/settings.py`）：每个参数的路径、类型、上下界、步长、中文说明、生效方式都写成数据，后端 `/api/settings` 直接下发给前端渲染。
 
 ```
 声明（PARAMS 表）→ GET 下发 → 前端渲染滑杆/开关/下拉
@@ -714,7 +714,7 @@ S1 不做的事，明确列出：不做前端、不做 URL 导入、不做多会
 
 全局参数面板解决的是"参数能不能改"，没解决"改完谁受伤"。一个系统里同时放合同库和技术文档库时，精确匹配与技术语义召回是互斥的诉求：全局口径只能二选一，用户于是被迫在两个库之间来回改，改到最后谁都不对。
 
-`src/ragkb/kbconfig.py` 加了第四层，落在 `kb.config_json`：
+`src/knowtune/kbconfig.py` 加了第四层，落在 `kb.config_json`：
 
 ```
 单次提问
@@ -1257,7 +1257,7 @@ DOM、自己持有引用，谁的数据进谁的卡，容器 `#taskDock` 竖排�
 
 **① 启动命令是错的**（用户反馈）。三条硬伤：
 
-- **vLLM 的端口定在 8000** —— 那正是 ragkb 自己的 Web 服务端口。照抄的人只会
+- **vLLM 的端口定在 8000** —— 那正是 knowtune 自己的 Web 服务端口。照抄的人只会
   看到"vLLM 起不来"，根本想不到是被自己占了。改成 **8100**（`default.yaml`
   与 `KINDS` 同步，不同步的话"默认地址"和"命令"会各说各话）。
 - **命令是照 Linux 写的，而用户机器是 Windows**。vLLM 在 Windows 原生跑不起来
@@ -1454,7 +1454,7 @@ DOM、自己持有引用，谁的数据进谁的卡，容器 `#taskDock` 竖排�
 本地 7B 干后者勉强、干前者容易把提示词一起吐出来；云端模型（例如混元）干翻译
 又快又稳。两者价位与能力都不同，没理由共用一个后端。
 
-**解析顺序**（`src/ragkb/roles.py`，谁更具体谁优先）：
+**解析顺序**（`src/knowtune/roles.py`，谁更具体谁优先）：
 
 ```
 站点 spec.roles[role] → 系统 generation.roles[role] → 站点 provider → 知识库/系统当前后端
@@ -1493,7 +1493,7 @@ DOM、自己持有引用，谁的数据进谁的卡，容器 `#taskDock` 竖排�
 
 检索完把资料丢给模型就完事，等于让模型盲猜这批资料靠不靠谱。命中很硬时它应该
 严格照着答并标编号；命中很差时它还硬凑，就是把猜测说成事实。所以把召回质量
-**显式告诉模型**，让它按档位决定怎么答（`src/ragkb/generate/evidence.py`）。
+**显式告诉模型**，让它按档位决定怎么答（`src/knowtune/generate/evidence.py`）。
 
 | 档位 | 判定 | 给模型的指令 |
 |---|---|---|
@@ -1537,7 +1537,7 @@ mid 取它的 6 折。再单独加两个旋钮只会让人不知道该调哪个�
 一搅，界面上就是一坨看着像"倒着"的乱字——此前报的"思考过程为什么是倒着的"，
 根子就在这儿。
 
-**放在 LLM 层做**（`src/ragkb/generate/think.py`，`stream` 与 `complete` 两条路
+**放在 LLM 层做**（`src/knowtune/generate/think.py`，`stream` 与 `complete` 两条路
 都盖住），调用方不用各自记着处理：
 
 - `ThinkFilter.feed()` 增量过滤，跨 chunk 被切开的标签也认（保留一段尾巴等下一个 chunk）；
@@ -1557,7 +1557,7 @@ mid 取它的 6 折。再单独加两个旋钮只会让人不知道该调哪个�
 ### 12.30 云端密钥：只活在内存里（2026-10-28 追加，同日修订）
 
 后端配置里**不存任何密钥**。密钥由管理员在模型页直接填写，存进
-`src/ragkb/secrets.py` 的进程级 dict：**服务一停就没了，重启必须重填**。
+`src/knowtune/secrets.py` 的进程级 dict：**服务一停就没了，重启必须重填**。
 
 为什么不做持久化（`.env` / `api_key_env` / 写进 YAML 三条路都走过，全否掉了）：
 
@@ -1689,7 +1689,7 @@ style.css / app.js），不引外部字体、不引图标库、不做构建。
 5. 空态改为 `margin: auto` 分组居中，而不是 `justify-content: center`——
    内容比视口高时 auto 会收成 0 并允许滚动，center 会把顶部裁掉。
 
-**新增能力：会话存档（本机）**。`localStorage["ragkb.site.chats"]` 存最近
+**新增能力：会话存档（本机）**。`localStorage["knowtune.site.chats"]` 存最近
 30 轮、每条答案截 12000 字；侧栏按"今天 / 更早"分组列出，点一条就整轮恢复。
 刷新不再丢历史。写盘失败（隐私模式 / 配额满）静默降级成"只有当前这一轮"，
 不弹错。
@@ -1710,7 +1710,7 @@ style.css / app.js），不引外部字体、不引图标库、不做构建。
 机器上只要有 `http_proxy`（开发机、公司网络、CI 镜像里很常见），所有请求
 就被塞进那个代理。代理连不上时返回的是 **502 upstream connect failed**，
 看着像模型服务挂了，实际是本机代理。`LLMClient._client()` 现在统一
-`trust_env=False`，要代理的人用 `RAGKB_LLM_PROXY` 显式指定——不能用
+`trust_env=False`，要代理的人用 `KNOWTUNE_LLM_PROXY` 显式指定——不能用
 环境变量生效，那会把本地 vLLM 一起带进代理。`complete()` 原来用的是模块级
 `httpx.post`，同样问题，一并改掉。
 
@@ -2215,7 +2215,7 @@ if not alt_lang or alt_lang == lang_:
 比没有提示更糟。现在只有一个来源，交叉校验还拦住了"地板 ≥ 总预算"。
 
 **③ `margin_window` 一动，历史标定就作废。** margin 是 `top1 - mean(前 N 条)`，
-N 变了这个统计量就换了个定义，旧 `min_margin` 不再可比。所以 `ragkb eval --calibrate`
+N 变了这个统计量就换了个定义，旧 `min_margin` 不再可比。所以 `knowtune eval --calibrate`
 的采样口径也改成读同一个参数，并在参数说明里明写"要重跑标定"。`margin_window`
 **故意不进知识库级覆盖**：标定是全局一次的事，让某个库单独改窗口会造出"窗口
 不一样、阈值却共用"的错配。
@@ -2457,7 +2457,7 @@ request body 上限，浏览器对长时间无进展的请求会判超时，HTTP
 ### 13.1 已落地
 
 ```
-src/ragkb/
+src/knowtune/
 ├── config.py                  YAML → pydantic，路径钉死绝对路径
 ├── settings.py                参数注册表（27 参数 / 7 组），全局面板与库级覆盖共用
 ├── kbconfig.py                知识库级参数（全量存储 / 建库时按预设复制 / 改完自动重排）
@@ -2606,9 +2606,9 @@ F1–F5 的逐条对照见 **§14**（含未完成项与原因）。
 | 编号 | 状态 | 落地形式 / 证据 |
 |---|---|---|
 | F5.1 评估集管理 | ✅ | `evals/cases.jsonl` 22 条（20 可答 + 2 应拒），格式 `{id,question,expect:{doc,keys}}`，**用文档+关键词而非 chunk_id**，重新分块后不失效 |
-| F5.2 检索指标 | ✅ | `ragkb eval` 一次跑完：**Recall@5 95.0% / MRR 0.7792 / Hit@1 65.0%**，p50 17ms；`--save` 写基线，参数指纹不一致时明确报"不可比" |
+| F5.2 检索指标 | ✅ | `knowtune eval` 一次跑完：**Recall@5 95.0% / MRR 0.7792 / Hit@1 65.0%**，p50 17ms；`--save` 写基线，参数指纹不一致时明确报"不可比" |
 | F5.3 生成忠实度 | ⬜ | 只有引用覆盖率（`cite.verify`），没接 LLM 逐句判据 |
-| F5.4 拒答准确率 | ✅ | 评估输出误拒率/漏拒率；`ragkb eval --calibrate` 网格扫描 0.20–0.80 × margin 0–0.12，目标函数"误拒优先"。**样本不足会明确警告**（当前 2 条应拒题 → `reliable: false`） |
+| F5.4 拒答准确率 | ✅ | 评估输出误拒率/漏拒率；`knowtune eval --calibrate` 网格扫描 0.20–0.80 × margin 0–0.12，目标函数"误拒优先"。**样本不足会明确警告**（当前 2 条应拒题 → `reliable: false`） |
 | F5.5 请求日志 | ✅ | query_log 记录耗时/token/模型/chunk 列表/降级；`GET /api/logs` 可按 kb 与时间筛 |
 | F5.6 反馈收集 | ✅ | 回答下方「有用 / 无用」，无用可填原因；`message_id` 随 SSE done 事件下发。**前台同一套**（site.py 自挂 `/api/feedback`，2026-10-30 补，此前前台只落库不收反馈） |
 

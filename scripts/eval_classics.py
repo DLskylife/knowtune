@@ -1,6 +1,6 @@
 """在真实知识库上跑评估集，可切换"折叠关/开"以对比改前改后。
 
-为什么单独一个脚本而不是走 `ragkb eval`：CLI 的评估集路径钉在配置里
+为什么单独一个脚本而不是走 `knowtune eval`：CLI 的评估集路径钉在配置里
 （默认 evals/cases.jsonl），而这次要对比的不是"同一份配置"，而是**同一批
 问题在两种码位处理下的检索质量**。用脚本可以直接传 cases、可以 monkeypatch
 fold，把"改前"这个本来已经消失的状态复现出来。
@@ -26,10 +26,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-import ragkb.retrieve.engine as engine_mod  # noqa: E402
-from ragkb.cli import _bootstrap  # noqa: E402
-from ragkb.evaluate import load_cases, run_eval  # noqa: E402
-from ragkb import kbconfig  # noqa: E402
+import knowtune.retrieve.engine as engine_mod  # noqa: E402
+from knowtune.cli import _bootstrap  # noqa: E402
+from knowtune.evaluate import load_cases, run_eval  # noqa: E402
+from knowtune import kbconfig  # noqa: E402
 
 
 def main() -> int:

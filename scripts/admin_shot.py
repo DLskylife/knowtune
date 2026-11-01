@@ -95,7 +95,7 @@ def main() -> int:
     args = ap.parse_args()
 
     port = free_port()
-    profile = tempfile.mkdtemp(prefix="ragkb-shot-")
+    profile = tempfile.mkdtemp(prefix="knowtune-shot-")
     proc = subprocess.Popen([
         EDGE, "--headless=new", f"--remote-debugging-port={port}",
         f"--user-data-dir={profile}", f"--window-size={args.width},{args.height}",

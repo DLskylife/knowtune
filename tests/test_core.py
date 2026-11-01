@@ -11,12 +11,12 @@ import time
 
 import pytest
 
-from ragkb.config import ChunkingCfg, defaults_config, load_config
-from ragkb.generate.cite import verify, verbatim_ratio
-from ragkb.ingest.chunker import chunk_blocks, estimate_tokens
-from ragkb.ingest.loader import ExtractError, decode_bytes, load_inline_text
-from ragkb.models import Block, Hit
-from ragkb.retrieve.engine import fuse_rrf
+from knowtune.config import ChunkingCfg, defaults_config, load_config
+from knowtune.generate.cite import verify, verbatim_ratio
+from knowtune.ingest.chunker import chunk_blocks, estimate_tokens
+from knowtune.ingest.loader import ExtractError, decode_bytes, load_inline_text
+from knowtune.models import Block, Hit
+from knowtune.retrieve.engine import fuse_rrf
 
 
 class _StubChat:
@@ -170,14 +170,14 @@ class TestProbeCacheKeyBinding:
     """
 
     def _prov(self, key: str):
-        from ragkb.config import ProviderCfg
+        from knowtune.config import ProviderCfg
         p = ProviderCfg(base_url="https://example.invalid/v1", model="m", kind="custom")
         if key:
             p.set_inline_key(key)
         return p
 
     def test_cache_dropped_when_key_changes(self):
-        from ragkb import services
+        from knowtune import services
 
         services._CACHE.clear()
         item = {"name": "x", "checked_at": time.time(), "status": "ok",
@@ -188,7 +188,7 @@ class TestProbeCacheKeyBinding:
 
     def test_cache_dropped_when_key_gone(self):
         """重启后内存密钥没了（默认不落盘），旧绿灯必须作废。"""
-        from ragkb import services
+        from knowtune import services
 
         services._CACHE.clear()
         services._CACHE["x"] = {"name": "x", "checked_at": time.time(), "status": "ok",
@@ -202,7 +202,7 @@ class TestProbeCacheKeyBinding:
         `_key_fp` 不传名字时两边都算成 "no_key"、永远相等，比对从来没拦住
         过任何东西（2026-11-01 发现）。这条专门走真实路径。
         """
-        from ragkb import secrets, services
+        from knowtune import secrets, services
 
         services._CACHE.clear()
         secrets.put("realp", "sk-real-A")
@@ -227,7 +227,7 @@ class TestLoader:
         assert enc in {"gb18030", "gbk"}
 
     def test_unsupported_extension(self, tmp_path):
-        from ragkb.ingest.loader import load_path
+        from knowtune.ingest.loader import load_path
 
         p = tmp_path / "x.exe"
         p.write_bytes(b"MZ")
@@ -235,7 +235,7 @@ class TestLoader:
             load_path(p)
 
     def test_empty_file_rejected(self, tmp_path):
-        from ragkb.ingest.loader import load_path
+        from knowtune.ingest.loader import load_path
 
         p = tmp_path / "empty.md"
         p.write_text("   \n\n  ", encoding="utf-8")
@@ -267,8 +267,8 @@ class TestConfig:
 
 class TestEvalMatcher:
     def test_match_requires_doc_and_all_keys(self):
-        from ragkb.evaluate import _match
-        from ragkb.models import Candidate
+        from knowtune.evaluate import _match
+        from knowtune.models import Candidate
 
         cand = Candidate(
             chunk_id=1, doc_id=1, doc_title="ARCHITECTURE", source_uri="x",
@@ -285,20 +285,20 @@ class TestEvalMatcher:
 
 class TestUrlGuard:
     def test_rejects_private_hosts(self):
-        from ragkb.ingest.loader import _assert_public_host
+        from knowtune.ingest.loader import _assert_public_host
 
         for host in ("127.0.0.1", "10.0.0.5", "192.168.1.1", "localhost"):
             with pytest.raises(ExtractError):
                 _assert_public_host(host)
 
     def test_allowed_domains_is_checked_before_network(self):
-        from ragkb.ingest.loader import load_url
+        from knowtune.ingest.loader import load_url
 
         with pytest.raises(ExtractError, match="白名单"):
             load_url("https://evil.example.org/x", allowed_domains=["python.org"])
 
     def test_rejects_non_http_scheme(self):
-        from ragkb.ingest.loader import load_url
+        from knowtune.ingest.loader import load_url
 
         with pytest.raises(ExtractError, match="http/https"):
             load_url("file:///etc/passwd")
@@ -309,7 +309,7 @@ class TestRefusalCalibration:
         """阈值是嵌入模型余弦分布的属性，换模型后必须作废。"""
         import json
 
-        from ragkb import config as cfg_mod
+        from knowtune import config as cfg_mod
 
         path = tmp_path / "cal.json"
         path.write_text(json.dumps({
@@ -329,7 +329,7 @@ class TestRefusalCalibration:
     def test_calibration_applied_when_reliable(self, tmp_path):
         import json
 
-        from ragkb import config as cfg_mod
+        from knowtune import config as cfg_mod
 
         cfg = load_config(reload=True)
         path = tmp_path / "cal.json"
@@ -356,7 +356,7 @@ class TestRefusalCalibration:
         """
         import json
 
-        from ragkb import config as cfg_mod
+        from knowtune import config as cfg_mod
 
         cfg = load_config(reload=True)
         baseline = cfg.refusal.min_score
@@ -386,7 +386,7 @@ class TestSettingsRegistry:
         return defaults_config().model_copy(deep=True)
 
     def test_every_param_is_readable_and_in_a_known_group(self):
-        from ragkb import settings
+        from knowtune import settings
 
         groups = {g[0] for g in settings.GROUPS}
         cfg = self._cfg()
@@ -395,7 +395,7 @@ class TestSettingsRegistry:
             settings._get(cfg, p.path)  # 路径写错会在这里炸
 
     def test_rejects_out_of_range(self):
-        from ragkb import settings
+        from knowtune import settings
 
         with pytest.raises(ValueError):
             settings.apply(self._cfg(), {"retrieval.dense.top_k": 5})
@@ -403,20 +403,20 @@ class TestSettingsRegistry:
             settings.apply(self._cfg(), {"refusal.min_score": 1.4})
 
     def test_rejects_unknown_path(self):
-        from ragkb import settings
+        from knowtune import settings
 
         with pytest.raises(ValueError, match="未知参数"):
             settings.apply(self._cfg(), {"retrieval.magic": 1})
 
     def test_rejects_overlap_not_less_than_size(self):
-        from ragkb import settings
+        from knowtune import settings
 
         with pytest.raises(ValueError, match="重叠"):
             settings.apply(self._cfg(), {"chunking.overlap": 480})
 
     def test_apply_is_all_or_nothing(self):
         """一条非法就整批不落地——改一半的配置比不改更难查。"""
-        from ragkb import settings
+        from knowtune import settings
 
         cfg = self._cfg()
         before = cfg.retrieval.fusion.w_dense
@@ -425,7 +425,7 @@ class TestSettingsRegistry:
         assert cfg.retrieval.fusion.w_dense == before
 
     def test_snapshot_marks_unsaved(self):
-        from ragkb import settings
+        from knowtune import settings
 
         cfg = self._cfg()
         settings.apply(cfg, {"retrieval.fusion.w_dense": 0.7})
@@ -434,7 +434,7 @@ class TestSettingsRegistry:
         assert "retrieval.fusion.w_dense" in snap["modified"]
 
     def test_save_writes_only_diffs(self, tmp_path, monkeypatch):
-        from ragkb import settings
+        from knowtune import settings
 
         monkeypatch.setattr(settings, "LOCAL_CONFIG", tmp_path / "local.yaml")
         cfg = self._cfg()
@@ -450,7 +450,7 @@ class TestSettingsRegistry:
         assert set(result["written"]) >= {"retrieval.fusion.w_dense", "retrieval.mmr.lambda_"}
 
     def test_save_removes_file_when_everything_is_default(self, tmp_path, monkeypatch):
-        from ragkb import settings
+        from knowtune import settings
 
         path = tmp_path / "local.yaml"
         path.write_text("retrieval:/n  fusion:/n    w_dense: 0.7\n", encoding="utf-8")
@@ -461,7 +461,7 @@ class TestSettingsRegistry:
         assert not path.exists()
 
     def test_reset_goes_back_to_factory(self):
-        from ragkb import settings
+        from knowtune import settings
 
         cfg = self._cfg()
         settings.apply(cfg, {"retrieval.fusion.w_dense": 0.7, "retrieval.rerank.top_k": 9})
@@ -471,7 +471,7 @@ class TestSettingsRegistry:
         assert cfg.retrieval.rerank.top_k == base.retrieval.rerank.top_k
 
     def test_deep_merge_keeps_siblings(self):
-        from ragkb.config import _deep_merge
+        from knowtune.config import _deep_merge
 
         merged = _deep_merge({"a": {"b": 1, "c": 2}}, {"a": {"c": 3}})
         assert merged == {"a": {"b": 1, "c": 3}}
@@ -479,8 +479,8 @@ class TestSettingsRegistry:
 
 def _temp_db(tmp_path):
     """独立库：不能碰用户真实的 data/library.db —— 测试把主库改坏是最难查的事故。"""
-    from ragkb.config import load_config
-    from ragkb.db import Database
+    from knowtune.config import load_config
+    from knowtune.db import Database
 
     cfg = load_config().model_copy(deep=True)
     cfg.storage.db_path = tmp_path / "t.db"
@@ -498,14 +498,14 @@ class TestKbConfig:
         return load_config().model_copy(deep=True)
 
     def test_every_preset_is_valid(self):
-        from ragkb import kbconfig
+        from knowtune import kbconfig
 
         cfg = self._cfg()
         for preset in kbconfig.PRESETS:
             kbconfig.normalize(cfg, preset["values"])  # 越界会在这里炸
 
     def test_effective_does_not_mutate_global(self):
-        from ragkb import kbconfig
+        from knowtune import kbconfig
 
         cfg = self._cfg()
         before = cfg.chunking.size
@@ -515,7 +515,7 @@ class TestKbConfig:
         assert clone is not cfg
 
     def test_cross_check_uses_kb_size_not_global(self):
-        from ragkb import kbconfig
+        from knowtune import kbconfig
 
         cfg = self._cfg()
         # 块长 360 时，重叠 400 必须被拒
@@ -525,13 +525,13 @@ class TestKbConfig:
         kbconfig.normalize(cfg, {"chunking.size": 360, "chunking.overlap": 300})
 
     def test_rejects_params_that_are_system_level(self):
-        from ragkb import kbconfig
+        from knowtune import kbconfig
 
         with pytest.raises(ValueError, match="不支持按库覆盖"):
             kbconfig.normalize(self._cfg(), {"embedding.model": "other/model"})
 
     def test_save_load_roundtrip_and_snapshot_flags(self, tmp_path):
-        from ragkb import kbconfig
+        from knowtune import kbconfig
 
         cfg, conn = _temp_db(tmp_path)
         conn.execute("INSERT INTO kb (name) VALUES ('t')")
@@ -556,7 +556,7 @@ class TestKbConfig:
         assert "config_json" in cols
 
     def test_unknown_kb_rows_do_not_crash(self, tmp_path):
-        from ragkb import kbconfig
+        from knowtune import kbconfig
 
         _, conn = _temp_db(tmp_path)
         assert kbconfig.load(conn, 9999) == {}
@@ -572,7 +572,7 @@ class TestModelRegistry:
     def test_write_only_diff(self, tmp_path, monkeypatch):
         import yaml
 
-        from ragkb import modelcfg
+        from knowtune import modelcfg
 
         path = tmp_path / "models.yaml"
         monkeypatch.setattr(modelcfg, "MODELS_CONFIG", path)
@@ -588,7 +588,7 @@ class TestModelRegistry:
     def test_editing_builtin_is_recorded(self, tmp_path, monkeypatch):
         import yaml
 
-        from ragkb import modelcfg
+        from knowtune import modelcfg
 
         path = tmp_path / "models.yaml"
         monkeypatch.setattr(modelcfg, "MODELS_CONFIG", path)
@@ -600,7 +600,7 @@ class TestModelRegistry:
     def test_deleting_builtin_leaves_a_marker(self, tmp_path, monkeypatch):
         import yaml
 
-        from ragkb import modelcfg
+        from knowtune import modelcfg
 
         path = tmp_path / "models.yaml"
         monkeypatch.setattr(modelcfg, "MODELS_CONFIG", path)
@@ -611,7 +611,7 @@ class TestModelRegistry:
         assert "openai" in raw["deleted"]
 
     def test_cannot_delete_active_provider(self, tmp_path, monkeypatch):
-        from ragkb import modelcfg
+        from knowtune import modelcfg
 
         monkeypatch.setattr(modelcfg, "MODELS_CONFIG", tmp_path / "models.yaml")
         cfg = self._cfg()
@@ -619,7 +619,7 @@ class TestModelRegistry:
             modelcfg.remove(cfg, cfg.generation.provider)
 
     def test_rejects_bad_name_and_url(self, tmp_path, monkeypatch):
-        from ragkb import modelcfg
+        from knowtune import modelcfg
 
         monkeypatch.setattr(modelcfg, "MODELS_CONFIG", tmp_path / "models.yaml")
         cfg = self._cfg()
@@ -631,7 +631,7 @@ class TestModelRegistry:
             modelcfg.upsert(cfg, "ok", base_url="http://127.0.0.1:1/v1", model="")
 
     def test_listing_marks_local_and_active(self):
-        from ragkb import modelcfg
+        from knowtune import modelcfg
 
         data = modelcfg.listing(load_config())
         active = [p for p in data["providers"] if p["active"]]
@@ -648,7 +648,7 @@ class TestReadiness:
     """
 
     def _cfg(self, **provider):
-        from ragkb.config import ProviderCfg
+        from knowtune.config import ProviderCfg
 
         cfg = defaults_config().model_copy(deep=True)
         cfg.generation.providers = {"t": ProviderCfg(**provider)}
@@ -656,14 +656,14 @@ class TestReadiness:
         return cfg
 
     def test_complete_local_provider_is_ready(self):
-        from ragkb import modelcfg
+        from knowtune import modelcfg
 
         cfg = self._cfg(base_url="http://127.0.0.1:8000/v1", model="qwen", kind="vllm")
         assert modelcfg.readiness(cfg) == {
             "provider": "t", "ready": True, "code": "ok", "reason": ""}
 
     def test_missing_url_model_and_key_have_distinct_codes(self):
-        from ragkb import modelcfg
+        from knowtune import modelcfg
 
         assert modelcfg.readiness(self._cfg(base_url=None, model="q", kind="custom"))["code"] == "no_url"
         assert modelcfg.readiness(self._cfg(base_url="http://x/v1", model="", kind="custom"))["code"] == "no_model"
@@ -674,7 +674,7 @@ class TestReadiness:
 
     def test_cloud_ready_once_key_is_in_memory(self):
         """密钥进内存后，云端后端就该是就绪的。"""
-        from ragkb import modelcfg, secrets
+        from knowtune import modelcfg, secrets
 
         cfg = self._cfg(base_url="https://api.x/v1", model="gpt", kind="openai")
         secrets.put("t", "sk-test")
@@ -684,12 +684,12 @@ class TestReadiness:
             secrets.drop("t")
 
     def test_mock_is_ready_without_url(self):
-        from ragkb import modelcfg
+        from knowtune import modelcfg
 
         assert modelcfg.readiness(self._cfg(model="mock", kind="mock"))["code"] == "mock"
 
     def test_dangling_provider_is_reported(self):
-        from ragkb import modelcfg
+        from knowtune import modelcfg
 
         cfg = defaults_config().model_copy(deep=True)
         cfg.generation.provider = "ghost"
@@ -697,7 +697,7 @@ class TestReadiness:
         assert r["ready"] is False and r["code"] == "no_provider"
 
     def test_listing_carries_ready_flags(self):
-        from ragkb import modelcfg
+        from knowtune import modelcfg
 
         data = modelcfg.listing(load_config())
         assert isinstance(data["active_ready"], bool)
@@ -706,22 +706,22 @@ class TestReadiness:
 
 class TestServiceProbe:
     def test_mock_needs_no_network(self):
-        from ragkb import services
-        from ragkb.config import ProviderCfg
+        from knowtune import services
+        from knowtune.config import ProviderCfg
 
         r = services.probe_one("mock", ProviderCfg(model="mock", kind="mock"))
         assert r["status"] == "mock" and r["ok"] is True
 
     def test_unset_base_url_reported(self):
-        from ragkb import services
-        from ragkb.config import ProviderCfg
+        from knowtune import services
+        from knowtune.config import ProviderCfg
 
         r = services.probe_one("x", ProviderCfg(base_url=None, model="m", kind="custom"))
         assert r["status"] == "unset" and r["ok"] is False
 
     def test_localhost_bypasses_proxy(self):
         """本地地址必须不被 HTTP_PROXY 劫持，否则"服务起来了"也会报 502。"""
-        from ragkb.services import _is_local
+        from knowtune.services import _is_local
 
         assert _is_local("http://127.0.0.1:8000/v1/models")
         assert _is_local("http://localhost:1234/v1")
@@ -733,7 +733,7 @@ class TestDashboard:
     def test_builds_with_empty_database(self, tmp_path):
         import time as _t
 
-        from ragkb.dashboard import build
+        from knowtune.dashboard import build
 
         cfg, conn = _temp_db(tmp_path)
         data = build(cfg, conn, started_at=_t.time(), port=8765)
@@ -746,7 +746,7 @@ class TestDashboard:
     def test_counts_after_insert(self, tmp_path):
         import time as _t
 
-        from ragkb.dashboard import build
+        from knowtune.dashboard import build
 
         cfg, conn = _temp_db(tmp_path)
         conn.execute("INSERT INTO kb (name) VALUES ('a')")
@@ -767,9 +767,9 @@ class TestPerCallOverrides:
     def _llm(monkeypatch, captured):
         import json
 
-        from ragkb.config import Config, ProviderCfg
-        from ragkb.generate.llm import LLMClient
-        import ragkb.generate.llm as llm_mod
+        from knowtune.config import Config, ProviderCfg
+        from knowtune.generate.llm import LLMClient
+        import knowtune.generate.llm as llm_mod
 
         cfg = Config()
         cfg.generation.providers["fake"] = ProviderCfg(
@@ -831,7 +831,7 @@ class TestDirectAskNoKb:
     """
 
     def test_direct_has_no_citation_and_no_source_rule(self):
-        from ragkb.generate.prompt import build_direct
+        from knowtune.generate.prompt import build_direct
 
         b = build_direct("太阳病是什么？")
         assert b.citations == []
@@ -852,7 +852,7 @@ class TestChatContext:
                 for i in range(n)]
 
     def test_plenty_of_room_says_nothing(self):
-        from ragkb.chatctx import notice, usage
+        from knowtune.chatctx import notice, usage
 
         ctx = usage(self._hist(2), total_messages=2, budget=6000, turns_limit=5)
         assert ctx["truncated"] is False
@@ -861,7 +861,7 @@ class TestChatContext:
 
     def test_turns_truncated_is_reported_separately(self):
         """轮次被 history_turns 截断 ≠ 预算被吃满，两者提示语必须不同。"""
-        from ragkb.chatctx import notice, usage
+        from knowtune.chatctx import notice, usage
 
         ctx = usage(self._hist(10, chars=10), total_messages=40, budget=6000, turns_limit=5)
         assert ctx["truncated"] is True
@@ -871,7 +871,7 @@ class TestChatContext:
         assert "保留最近 5 轮" in text
 
     def test_budget_eaten_is_reported_as_full(self):
-        from ragkb.chatctx import notice, usage
+        from knowtune.chatctx import notice, usage
 
         ctx = usage(self._hist(4, chars=900), total_messages=4, budget=1000, turns_limit=5)
         assert ctx["exhausted"] is True
@@ -879,13 +879,13 @@ class TestChatContext:
 
     def test_budget_left_never_below_fallback(self):
         """build_context 兜底至少留 200 字符，提示里的"剩余"不能算出 0 甚至负数。"""
-        from ragkb.chatctx import MIN_CONTEXT_CHARS, usage
+        from knowtune.chatctx import MIN_CONTEXT_CHARS, usage
 
         ctx = usage(self._hist(2, chars=5000), total_messages=2, budget=1000, turns_limit=5)
         assert ctx["budget_left"] == MIN_CONTEXT_CHARS
 
     def test_no_history_is_never_exhausted(self):
-        from ragkb.chatctx import notice, usage
+        from knowtune.chatctx import notice, usage
 
         ctx = usage([], total_messages=0, budget=800, turns_limit=5)
         assert ctx["exhausted"] is False
@@ -897,7 +897,7 @@ class TestChunkStrategy:
 
     @staticmethod
     def _blocks() -> list:
-        from ragkb.models import Block
+        from knowtune.models import Block
 
         # 三个章节，每章两小段，一段约 125 字；正文里不写标题文字，
         # 章节归属只通过 heading_path 表达（真实 loader 也是这么给的）
@@ -947,20 +947,20 @@ class TestRefusalSoftSignal:
 
     @staticmethod
     def _engine(cfg=None):
-        from ragkb.config import Config
-        from ragkb.retrieve.engine import _soft
+        from knowtune.config import Config
+        from knowtune.retrieve.engine import _soft
 
         return _soft
 
     def test_high_score_is_confident(self):
-        from ragkb.config import RefusalCfg
+        from knowtune.config import RefusalCfg
 
         soft = self._engine()
         cfg = RefusalCfg(min_score=0.35)
         assert soft(0.72, 0.09, cfg) == (False, None)
 
     def test_middle_band_is_low_confidence_not_refusal(self):
-        from ragkb.config import RefusalCfg
+        from knowtune.config import RefusalCfg
 
         soft = self._engine()
         cfg = RefusalCfg(min_score=0.35)
@@ -969,7 +969,7 @@ class TestRefusalSoftSignal:
         assert "0.40" in reason
 
     def test_flat_candidates_are_low_confidence(self):
-        from ragkb.config import RefusalCfg
+        from knowtune.config import RefusalCfg
 
         soft = self._engine()
         cfg = RefusalCfg(min_score=0.35)
@@ -978,7 +978,7 @@ class TestRefusalSoftSignal:
         assert "持平" in reason
 
     def test_no_score_never_claims_confidence(self):
-        from ragkb.config import RefusalCfg
+        from knowtune.config import RefusalCfg
 
         soft = self._engine()
         assert soft(None, None, RefusalCfg()) == (False, None)
@@ -992,26 +992,26 @@ class TestSourcePaths:
     """
 
     def test_missing_file_detected(self, tmp_path):
-        from ragkb.paths import source_missing
+        from knowtune.paths import source_missing
 
         assert source_missing("file", str(tmp_path / "nope.docx")) is True
 
     def test_existing_file_not_flagged(self, tmp_path):
-        from ragkb.paths import source_missing
+        from knowtune.paths import source_missing
 
         p = tmp_path / "a.docx"
         p.write_bytes(b"x")
         assert source_missing("file", str(p)) is False
 
     def test_url_and_text_never_missing(self):
-        from ragkb.paths import source_missing
+        from knowtune.paths import source_missing
 
         # URL / 粘贴文本没有本地副本，"缺失"这个概念不适用，否则界面会误报
         assert source_missing("url", "https://example.com/a") is False
         assert source_missing("text", "text://abc/def") is False
 
     def test_inside_root(self, tmp_path):
-        from ragkb.paths import inside
+        from knowtune.paths import inside
 
         root = tmp_path / "uploads"
         root.mkdir()
@@ -1029,23 +1029,23 @@ class TestDisplayTitle:
     """
 
     def test_strips_upload_prefix(self):
-        from ragkb.ingest.pipeline import display_title
+        from knowtune.ingest.pipeline import display_title
 
         assert display_title("D:/kb/data/uploads/23970fa2-zyyw_update.docx") == "zyyw_update.docx"
 
     def test_plain_path_untouched(self):
-        from ragkb.ingest.pipeline import display_title
+        from knowtune.ingest.pipeline import display_title
 
         assert display_title("D:/docs/ARCHITECTURE.md") == "ARCHITECTURE.md"
 
     def test_short_hex_is_not_a_prefix(self):
-        from ragkb.ingest.pipeline import display_title
+        from knowtune.ingest.pipeline import display_title
 
         # 只有 8 位才算前缀：3f2a- 这种不该被吃掉，否则会误伤正常文件名
         assert display_title("3f2a-note.md") == "3f2a-note.md"
 
     def test_url_keeps_last_segment(self):
-        from ragkb.ingest.pipeline import display_title
+        from knowtune.ingest.pipeline import display_title
 
         assert display_title("https://example.com/a/b.html") == "b.html"
 
@@ -1060,12 +1060,12 @@ class TestWeightedFusion:
 
     @staticmethod
     def _hit(cid, score, rank, label):
-        from ragkb.models import Hit
+        from knowtune.models import Hit
 
         return Hit(chunk_id=cid, score=score, rank=rank, label=label)
 
     def test_bm25_scores_are_flipped(self):
-        from ragkb.retrieve.engine import fuse_weighted
+        from knowtune.retrieve.engine import fuse_weighted
 
         # bm25 返回负值、越小越相关：-9 是最相关的那条
         sparse = [self._hit(1, -9.0, 1, "sparse"), self._hit(2, -1.0, 2, "sparse")]
@@ -1073,14 +1073,14 @@ class TestWeightedFusion:
         assert [o["chunk_id"] for o in out] == [1, 2]
 
     def test_better_score_wins_within_one_road(self):
-        from ragkb.retrieve.engine import fuse_weighted
+        from knowtune.retrieve.engine import fuse_weighted
 
         dense = [self._hit(7, 0.9, 1, "dense"), self._hit(8, 0.4, 2, "dense")]
         out = fuse_weighted([dense], [1.0], top_k=2)
         assert [o["chunk_id"] for o in out] == [7, 8]
 
     def test_hit_in_both_roads_beats_single_road(self):
-        from ragkb.retrieve.engine import fuse_weighted
+        from knowtune.retrieve.engine import fuse_weighted
 
         dense = [self._hit(1, 0.80, 1, "dense"), self._hit(2, 0.79, 2, "dense")]
         sparse = [self._hit(1, -5.0, 1, "sparse")]
@@ -1088,7 +1088,7 @@ class TestWeightedFusion:
         assert out[0]["chunk_id"] == 1
 
     def test_zero_weight_road_is_ignored(self):
-        from ragkb.retrieve.engine import fuse_weighted
+        from knowtune.retrieve.engine import fuse_weighted
 
         dense = [self._hit(1, 0.9, 1, "dense")]
         sparse = [self._hit(2, -9.0, 1, "sparse")]
@@ -1096,7 +1096,7 @@ class TestWeightedFusion:
         assert [o["chunk_id"] for o in out] == [1]
 
     def test_flat_scores_do_not_divide_by_zero(self):
-        from ragkb.retrieve.engine import fuse_weighted
+        from knowtune.retrieve.engine import fuse_weighted
 
         # 整路分数相同 → 归一化分母为 0，必须退化成 0.5 而不是崩掉
         dense = [self._hit(1, 0.5, 1, "dense"), self._hit(2, 0.5, 2, "dense")]
@@ -1108,7 +1108,7 @@ class TestQueryInstruction:
     """查询侧指令前缀：只加在查询上，语料侧绝不能加。"""
 
     def test_prefix_applied_once(self):
-        from ragkb.retrieve.engine import RetrievalEngine
+        from knowtune.retrieve.engine import RetrievalEngine
 
         cfg = type("C", (), {"embedding": type("E", (), {"query_instruction": "指令："})()})()
         assert RetrievalEngine._query_text("什么是维医", cfg) == "指令：什么是维医"
@@ -1116,7 +1116,7 @@ class TestQueryInstruction:
         assert RetrievalEngine._query_text("指令：什么是维医", cfg) == "指令：什么是维医"
 
     def test_empty_instruction_passes_through(self):
-        from ragkb.retrieve.engine import RetrievalEngine
+        from knowtune.retrieve.engine import RetrievalEngine
 
         cfg = type("C", (), {"embedding": type("E", (), {"query_instruction": ""})()})()
         assert RetrievalEngine._query_text("什么是维医", cfg) == "什么是维医"
@@ -1131,7 +1131,7 @@ class TestDocxFlowExtraction:
 
     def test_table_and_textbox_are_extracted(self, tmp_path):
         docx = pytest.importorskip("docx")
-        from ragkb.ingest.loader import load_path
+        from knowtune.ingest.loader import load_path
 
         d = docx.Document()
         d.add_paragraph("正文第一段")
@@ -1172,7 +1172,7 @@ class TestDocxFlowExtraction:
         """被删除的修订（w:del）不能当作正文：文档里根本看不到这些字。"""
         docx = pytest.importorskip("docx")
         from docx.oxml import OxmlElement
-        from ragkb.ingest.loader import load_path
+        from knowtune.ingest.loader import load_path
 
         d = docx.Document()
         p = d.add_paragraph()
@@ -1200,7 +1200,7 @@ class TestCoverage:
     """完整性自检：覆盖率算法必须能真检出"少了一段"。"""
 
     def test_full_coverage(self):
-        from ragkb.api.app import _coverage_of
+        from knowtune.api.app import _coverage_of
 
         src = "藏医三因学说：隆、赤巴、培根。"
         r = _coverage_of(src, [src])
@@ -1208,7 +1208,7 @@ class TestCoverage:
         assert r["gaps"] == []
 
     def test_missing_middle_is_reported(self):
-        from ragkb.api.app import _coverage_of
+        from knowtune.api.app import _coverage_of
 
         head = "这一句是文档开头的内容，足够长以形成一个窗口，后面还要再补一些字让它更长。"
         tail = "这一句是文档结尾的内容，同样足够长以形成窗口，后面也要再补一些字让它更长。"
@@ -1222,7 +1222,7 @@ class TestCoverage:
 
     def test_short_gaps_are_not_reported_as_evidence(self):
         """几十字的差异（页码、标记符号）只进百分比，不摆出来当"丢了内容"。"""
-        from ragkb.api.app import _coverage_of
+        from knowtune.api.app import _coverage_of
 
         src = "甲" * 100 + "乙" * 30 + "丙" * 100
         r = _coverage_of(src, ["甲" * 100, "丙" * 100])
@@ -1231,13 +1231,13 @@ class TestCoverage:
         assert r["gaps"] == []
 
     def test_whitespace_is_ignored(self):
-        from ragkb.api.app import _coverage_of
+        from knowtune.api.app import _coverage_of
 
         src = "维医 four 体液 学说"
         assert _coverage_of(src, [src.replace(" ", "\n\n")])["ratio"] == 1.0
 
     def test_stale_extractor_flag(self):
-        from ragkb.api.app import _stale_extractor
+        from knowtune.api.app import _stale_extractor
 
         assert _stale_extractor("python-docx", "/data/uploads/a.docx") is True
         assert _stale_extractor("python-docx/flow", "/data/uploads/a.docx") is False
@@ -1256,7 +1256,7 @@ class TestImportTaskQueue:
     def test_two_tasks_do_not_overlap(self):
         import time
 
-        from ragkb.api.app import _start_import_task, import_task
+        from knowtune.api.app import _start_import_task, import_task
 
         spans: list[tuple[str, float, float]] = []
 
@@ -1296,7 +1296,7 @@ class TestImportTaskQueue:
         """任务里挂着 _work（一个函数），不能进 JSON 响应。"""
         import time
 
-        from ragkb.api.app import _start_import_task, import_task
+        from knowtune.api.app import _start_import_task, import_task
 
         t = _start_import_task("x", lambda progress: {"status": "ready", "message": "ok"})
         for _ in range(200):
@@ -1321,8 +1321,8 @@ class TestProbeChatVerifyAndPersistence:
         """服务可达、/models 有列表，但对话失败 → 必须是 warn 而不是 ok。"""
         import httpx
 
-        from ragkb import services
-        from ragkb.config import ProviderCfg
+        from knowtune import services
+        from knowtune.config import ProviderCfg
 
         class FakeResp:
             def raise_for_status(self): pass
@@ -1342,8 +1342,8 @@ class TestProbeChatVerifyAndPersistence:
         assert "对话失败" in r["message"]
 
     def test_chat_pass_is_ok(self, monkeypatch):
-        from ragkb import services
-        from ragkb.config import ProviderCfg
+        from knowtune import services
+        from knowtune.config import ProviderCfg
 
         class FakeResp:
             def __init__(self, body): self._b = body
@@ -1370,7 +1370,7 @@ class TestProbeChatVerifyAndPersistence:
         import json
         import time
 
-        from ragkb import services
+        from knowtune import services
 
         f = tmp_path / "probe_cache.json"
         monkeypatch.setattr(services, "_CACHE_FILE", f)
@@ -1396,8 +1396,8 @@ class TestKbFullConfig:
     """
 
     def test_materialize_is_a_complete_set(self):
-        from ragkb import kbconfig
-        from ragkb.config import load_config
+        from knowtune import kbconfig
+        from knowtune.config import load_config
 
         cfg = load_config()
         full = kbconfig.materialize(cfg, {"chunking.size": 320})
@@ -1409,8 +1409,8 @@ class TestKbFullConfig:
         """老库存的是差异：读的时候用当前全局值补齐，并且**写回**。"""
         import json
 
-        from ragkb import kbconfig
-        from ragkb.config import load_config
+        from knowtune import kbconfig
+        from knowtune.config import load_config
 
         cfg, conn = _temp_db(tmp_path)
         conn.execute("INSERT INTO kb (name, config_json) VALUES ('old', ?)",
@@ -1428,7 +1428,7 @@ class TestKbFullConfig:
         assert kbconfig.load_full(conn, kb_id, cfg) == values
 
     def test_needs_reindex_only_for_chunking(self):
-        from ragkb import kbconfig
+        from knowtune import kbconfig
 
         before = {"chunking.size": 480, "chunking.overlap": 80,
                   "retrieval.rerank.top_k": 5}
@@ -1439,7 +1439,7 @@ class TestKbFullConfig:
 
     def test_load_strips_the_marker(self, tmp_path):
         """__full__ 只是存储格式标记，不能混进"参数值"里。"""
-        from ragkb import kbconfig
+        from knowtune import kbconfig
 
         cfg, conn = _temp_db(tmp_path)
         conn.execute("INSERT INTO kb (name) VALUES ('t')")
@@ -1462,7 +1462,7 @@ class TestAutoCoverageOnTask:
     def test_result_carries_coverage(self, monkeypatch):
         import time
 
-        import ragkb.api.app as A
+        import knowtune.api.app as A
 
         monkeypatch.setattr(
             A, "_coverage_digest",
@@ -1483,7 +1483,7 @@ class TestAutoCoverageOnTask:
     def test_failed_task_has_no_coverage(self):
         import time
 
-        from ragkb.api.app import _start_import_task, import_task
+        from knowtune.api.app import _start_import_task, import_task
 
         t = _start_import_task("y", lambda p: {"status": "failed", "message": "bad", "doc_id": 7})
         for _ in range(200):
@@ -1496,7 +1496,7 @@ class TestAutoCoverageOnTask:
 
     def test_digest_never_breaks_the_task(self, monkeypatch):
         """自检本身炸了也不能把导入任务拖成失败。"""
-        import ragkb.api.app as A
+        import knowtune.api.app as A
 
         def boom(doc_id):
             raise RuntimeError("源文件突然读不到了")
@@ -1513,21 +1513,21 @@ class TestLaunchCommands:
     """
 
     def test_port_placeholder_is_filled(self):
-        from ragkb import modelcfg
+        from knowtune import modelcfg
 
         r = modelcfg._render_launch(modelcfg.KIND_MAP["lmstudio"], "1235")
         assert "{port}" not in r["launch"]
         assert "1235" in r["launch"], "命令里的端口必须和卡片上的地址一致"
 
     def test_vllm_port_does_not_collide_with_web_ui(self):
-        from ragkb import modelcfg
+        from knowtune import modelcfg
 
         assert ":8000" not in modelcfg.KIND_MAP["vllm"]["default_base"], \
-            "8000 是 ragkb 自己的 Web 服务端口，撞上就只剩'起不来'三个字"
+            "8000 是 knowtune 自己的 Web 服务端口，撞上就只剩'起不来'三个字"
 
     def test_every_local_kind_has_a_copyable_command(self):
         """以前 custom 那一栏只有一行注释，复制过去什么都不会发生。"""
-        from ragkb import modelcfg
+        from knowtune import modelcfg
 
         for k in modelcfg.kinds():
             if k["local"] and k["id"] != "mock":
@@ -1545,7 +1545,7 @@ class TestDeleteKb:
     """
 
     def _state(self, cfg, conn):
-        from ragkb.index.sparse import SparseIndex
+        from knowtune.index.sparse import SparseIndex
 
         class _V:
             def __init__(self):
@@ -1567,7 +1567,7 @@ class TestDeleteKb:
         return _S(conn)
 
     def test_deletes_docs_chunks_and_fts(self, tmp_path):
-        from ragkb.api import app as A
+        from knowtune.api import app as A
 
         cfg, conn = _temp_db(tmp_path)
         conn.execute("INSERT INTO kb (name) VALUES ('gone')")
@@ -1604,7 +1604,7 @@ class TestDeleteKb:
     def test_sessions_survive_unbound(self, tmp_path):
         """会话按设计保留：库没了，历史问答还有价值，只是解除绑定。
         确认框里就是这么写的，实现不能偷偷把它们一起删了。"""
-        from ragkb.api import app as A
+        from knowtune.api import app as A
 
         cfg, conn = _temp_db(tmp_path)
         conn.execute("INSERT INTO kb (name) VALUES ('s')")
@@ -1631,7 +1631,7 @@ class TestDeleteKb:
         看不出到底是删成功了还是压根没这个库。"""
         from fastapi import HTTPException
 
-        from ragkb.api import app as A
+        from knowtune.api import app as A
 
         cfg, conn = _temp_db(tmp_path)
         st = self._state(cfg, conn)
@@ -1662,7 +1662,7 @@ class TestImportCleaning:
 
     @staticmethod
     def _doc(blocks):
-        from ragkb.models import Block, LoadedDoc
+        from knowtune.models import Block, LoadedDoc
 
         return LoadedDoc(
             text="\n\n".join(blocks),
@@ -1672,8 +1672,8 @@ class TestImportCleaning:
 
     def test_source_file_is_never_touched(self, tmp_path):
         """最重要的一条：清洗只读源文件，不写。"""
-        from ragkb.ingest import loader as L
-        from ragkb.ingest.cleaner import clean_loaded, plan_from_dict
+        from knowtune.ingest import loader as L
+        from knowtune.ingest.cleaner import clean_loaded, plan_from_dict
 
         src = tmp_path / "a.md"
         src.write_text("正文一段。\n\n第 12 页\n", encoding="utf-8")
@@ -1688,7 +1688,7 @@ class TestImportCleaning:
 
     def test_default_rules_drop_only_junk(self):
         """默认规则只该清掉噪声，不能吃掉正文。"""
-        from ragkb.ingest.cleaner import clean_loaded, default_plan
+        from knowtune.ingest.cleaner import clean_loaded, default_plan
 
         doc = self._doc([
             "第一章 概述........... 12",
@@ -1708,7 +1708,7 @@ class TestImportCleaning:
 
     def test_every_rule_reports_what_it_removed(self):
         """账单要能指到具体规则：一句"共删了 300 字"没法让人判断删得对不对。"""
-        from ragkb.ingest.cleaner import clean_loaded, plan_from_dict
+        from knowtune.ingest.cleaner import clean_loaded, plan_from_dict
 
         doc = self._doc(["第 7 页", "http://example.com/a/b", "正常正文内容足够长。"])
         plan = plan_from_dict({"enabled": {"drop_page_no": True, "strip_url": True}})
@@ -1720,7 +1720,7 @@ class TestImportCleaning:
         assert by_id["strip_url"]["chars"] > 0
 
     def test_keyword_and_regex_rules(self):
-        from ragkb.ingest.cleaner import clean_loaded, plan_from_dict
+        from knowtune.ingest.cleaner import clean_loaded, plan_from_dict
 
         doc = self._doc([
             "内部资料，禁止外传。",
@@ -1740,7 +1740,7 @@ class TestImportCleaning:
         """正则写错必须明确报错，而不是静默"什么都没删"。"""
         import pytest
 
-        from ragkb.ingest.cleaner import plan_from_dict
+        from knowtune.ingest.cleaner import plan_from_dict
 
         plan = plan_from_dict({"enabled": {"drop_regex": True}, "options": {"regex": "([a-"}})
         with pytest.raises(ValueError):
@@ -1748,7 +1748,7 @@ class TestImportCleaning:
 
     def test_repeated_lines_catches_header_footer(self):
         """页眉页脚靠"同一行出现多次"识别，不是靠猜格式。"""
-        from ragkb.ingest.cleaner import clean_loaded, plan_from_dict
+        from knowtune.ingest.cleaner import clean_loaded, plan_from_dict
 
         doc = self._doc([
             "某某医院内部讲义\n第一段正文。",
@@ -1763,7 +1763,7 @@ class TestImportCleaning:
 
     def test_plan_roundtrip_and_unknown_rules_ignored(self):
         """前端可能把旧规则 id 发回来（规则改版过），不能因此炸掉。"""
-        from ragkb.ingest.cleaner import plan_from_dict
+        from knowtune.ingest.cleaner import plan_from_dict
 
         plan = plan_from_dict({"enabled": {"drop_page_no": True, "no_such_rule": True},
                               "options": {"short_min": "12"}})
@@ -1783,7 +1783,7 @@ class TestModelRoles:
     """
 
     def test_resolution_order(self):
-        from ragkb.roles import resolve
+        from knowtune.roles import resolve
 
         known = {"hunyuan": 1, "local": 1, "def": 1}
         got = resolve("translate", instance_roles={"translate": "local"},
@@ -1800,7 +1800,7 @@ class TestModelRoles:
 
     def test_unknown_provider_falls_through(self):
         """配了拼错/已删掉的后端名：退到下一级，不能让站点 500。"""
-        from ragkb.roles import normalize, resolve
+        from knowtune.roles import normalize, resolve
 
         known = {"def": 1}
         assert resolve("translate", instance_roles={"translate": "typo"},
@@ -1813,8 +1813,8 @@ class TestModelRoles:
         """翻译走翻译模型、输出走输出模型 —— 分工的唯一验收标准。"""
         from fastapi.testclient import TestClient
 
-        from ragkb.frontsite.instcfg import InstanceSpec
-        from ragkb.frontsite.site import build_site
+        from knowtune.frontsite.instcfg import InstanceSpec
+        from knowtune.frontsite.site import build_site
 
         cfg, conn = _temp_db(tmp_path)
         conn.execute("INSERT INTO kb (name) VALUES ('维医')")
@@ -1916,7 +1916,7 @@ class TestEvidenceGrade:
 
     def test_override_lands_in_system_prompt(self):
         """例外条款必须进系统提示——写进用户消息压不过"禁止外部知识"那条硬约束。"""
-        from ragkb.generate.prompt import build_context
+        from knowtune.generate.prompt import build_context
 
         def _bundle(evidence):
             return build_context(
@@ -1939,7 +1939,7 @@ class TestEvidenceGrade:
         实测漏洞：召回一般时模型照着"以资料为主"推演一圈，最后憋出一句
         "无法给出答案"。用户要的是答案，不是投降声明。
         """
-        from ragkb.generate.evidence import guidance
+        from knowtune.generate.evidence import guidance
 
         for g in ("high", "mid", "low"):
             text = guidance(g)
@@ -1948,7 +1948,7 @@ class TestEvidenceGrade:
         assert "资料整体与问题无关" in guidance("mid"), "中间档要覆盖'资料基本无关'的情况"
 
     def test_grade_boundaries(self):
-        from ragkb.generate.evidence import grade_of
+        from knowtune.generate.evidence import grade_of
 
         assert grade_of(0.62, min_score=0.5) == "high"
         assert grade_of(0.50, min_score=0.5) == "high", "等于阈值算充足"
@@ -1958,7 +1958,7 @@ class TestEvidenceGrade:
 
     def test_low_guidance_tells_model_to_mark_general_knowledge(self):
         """低档指令的核心是"让用户分清哪句是资料、哪句是通用知识"。"""
-        from ragkb.generate.evidence import guidance, label
+        from knowtune.generate.evidence import guidance, label
 
         low = guidance("low")
         assert "通用知识" in low and "不要编造" in low
@@ -1971,9 +1971,9 @@ class TestEvidenceGrade:
         """跑一次证据不足的提问，返回 (SSE 事件行, 送到模型的最后一条消息列表)。"""
         from fastapi.testclient import TestClient
 
-        from ragkb.frontsite.instcfg import InstanceSpec
-        from ragkb.frontsite.site import build_site
-        from ragkb.models import RefusalDecision
+        from knowtune.frontsite.instcfg import InstanceSpec
+        from knowtune.frontsite.site import build_site
+        from knowtune.models import RefusalDecision
 
         cfg, conn = _temp_db(tmp_path)
         conn.execute("INSERT INTO kb (name) VALUES ('维医')")
@@ -2101,8 +2101,8 @@ class TestLanguageFollow:
     def _client(tmp_path, llm):
         from fastapi.testclient import TestClient
 
-        from ragkb.frontsite.instcfg import InstanceSpec
-        from ragkb.frontsite.site import build_site
+        from knowtune.frontsite.instcfg import InstanceSpec
+        from knowtune.frontsite.site import build_site
 
         cfg, conn = _temp_db(tmp_path)
         conn.execute("INSERT INTO kb (name) VALUES ('维医')")
@@ -2238,7 +2238,7 @@ class TestLanguageFollow:
     """
 
     def test_detect_uyghur_vs_chinese(self):
-        from ragkb.lang import detect
+        from knowtune.lang import detect
 
         assert detect("مىزاج دېگەن نېمە؟") == "ug"
         assert detect("维吾尔医学的四种体液是什么？") == "zh"
@@ -2248,7 +2248,7 @@ class TestLanguageFollow:
 
     def test_translation_echo_is_rejected(self):
         """模型把整个提示吐回来时要当没翻译，而不是拿去检索。"""
-        from ragkb.lang import translate_query
+        from knowtune.lang import translate_query
 
         class _Out:
             text = "源语言代码：ug\n问题：مىزاج دېگەن نېمە？\n\n中文译文：气质是什么"
@@ -2265,7 +2265,7 @@ class TestLanguageFollow:
 
     def test_translation_retry_after_echo(self):
         """第一次抄回原文，第二次必须重试并拿到译文（不复用那次的坏输出）。"""
-        from ragkb.lang import translate_query
+        from knowtune.lang import translate_query
 
         calls = []
 
@@ -2285,7 +2285,7 @@ class TestLanguageFollow:
 
     def test_translation_gives_up_after_two(self):
         """两次都抄回：退回原文，并说清原因，且不超过两次。"""
-        from ragkb.lang import translate_query
+        from knowtune.lang import translate_query
 
         calls = []
 
@@ -2304,7 +2304,7 @@ class TestLanguageFollow:
         assert err and "translation_dropped" in err and "抄回" in err
 
     def test_clean_translation_is_kept(self):
-        from ragkb.lang import translate_query
+        from knowtune.lang import translate_query
 
         class _Out:
             text = "译文：维医中的气质是什么？"
@@ -2318,7 +2318,7 @@ class TestLanguageFollow:
 
     def test_translation_failure_never_raises(self):
         """翻译是加分项：翻译服务挂了也要能继续回答。"""
-        from ragkb.lang import translate_query
+        from knowtune.lang import translate_query
 
         class _LLM:
             def complete(self, *a, **k):
@@ -2330,7 +2330,7 @@ class TestLanguageFollow:
 
     def test_ug_system_prompt_exists_and_is_used(self):
         """维语站点的系统提示必须是维语版，否则模型照着中文资料吐中文。"""
-        from ragkb.generate.prompt import load_system_prompt
+        from knowtune.generate.prompt import load_system_prompt
 
         zh = load_system_prompt("qa_v1")
         ug = load_system_prompt("qa_v1", answer_lang="ug")
@@ -2338,7 +2338,7 @@ class TestLanguageFollow:
         assert "ئۇيغۇر تىلىدا" in ug
 
     def test_repeating_detection(self):
-        from ragkb.lang import repeating
+        from knowtune.lang import repeating
 
         assert repeating("正气正气正气" * 10)
         assert not repeating("正气、血液质、胆液质是维医的三种基本气质类型。")
@@ -2354,7 +2354,7 @@ class TestLanguageFollow:
     # ---------------------------------------------------------- 实例配置
 
     def test_port_range_excludes_backend_and_vllm(self, monkeypatch, tmp_path):
-        from ragkb.frontsite import instcfg
+        from knowtune.frontsite import instcfg
 
         monkeypatch.setattr(instcfg, "INSTANCES_CONFIG", tmp_path / "instances.yaml")
         assert instcfg.PORT_MIN > 8100, "不能撞后台 8000，也不能撞 vLLM 8100"
@@ -2369,7 +2369,7 @@ class TestLanguageFollow:
 
     def test_bad_config_entry_is_skipped_not_fatal(self, monkeypatch, tmp_path):
         """手写坏了一行配置，不能让整个后台起不来。"""
-        from ragkb.frontsite import instcfg
+        from knowtune.frontsite import instcfg
 
         p = tmp_path / "instances.yaml"
         p.write_text(
@@ -2384,7 +2384,7 @@ class TestLanguageFollow:
     def test_next_free_port_avoids_taken_ones(self, monkeypatch, tmp_path):
         import socket
 
-        from ragkb.frontsite import instcfg
+        from knowtune.frontsite import instcfg
 
         monkeypatch.setattr(instcfg, "INSTANCES_CONFIG", tmp_path / "instances.yaml")
         listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -2402,8 +2402,8 @@ class TestLanguageFollow:
         """前台 /api/info 是页面渲染的第一依赖：dir/lang 错了整页就是反的。"""
         from fastapi.testclient import TestClient
 
-        from ragkb.frontsite.instcfg import InstanceSpec
-        from ragkb.frontsite.site import build_site
+        from knowtune.frontsite.instcfg import InstanceSpec
+        from knowtune.frontsite.site import build_site
 
         cfg, conn = _temp_db(tmp_path)
         conn.execute("INSERT INTO kb (name, description) VALUES ('维医','x')")
@@ -2461,8 +2461,8 @@ class TestLanguageFollow:
         """
         from fastapi.testclient import TestClient
 
-        from ragkb.frontsite.instcfg import InstanceSpec
-        from ragkb.frontsite.site import build_site
+        from knowtune.frontsite.instcfg import InstanceSpec
+        from knowtune.frontsite.site import build_site
 
         cfg, conn = _temp_db(tmp_path)
         conn.execute("INSERT INTO kb (name) VALUES ('维医')")
@@ -2544,8 +2544,8 @@ class TestLanguageFollow:
         """
         from fastapi.testclient import TestClient
 
-        from ragkb.frontsite.instcfg import InstanceSpec
-        from ragkb.frontsite.site import build_site
+        from knowtune.frontsite.instcfg import InstanceSpec
+        from knowtune.frontsite.site import build_site
 
         cfg, conn = _temp_db(tmp_path)
         conn.execute("INSERT INTO kb (name) VALUES ('维医')")
@@ -2605,8 +2605,8 @@ class TestLanguageFollow:
         """
         from fastapi.testclient import TestClient
 
-        from ragkb.frontsite.instcfg import InstanceSpec
-        from ragkb.frontsite.site import build_site
+        from knowtune.frontsite.instcfg import InstanceSpec
+        from knowtune.frontsite.site import build_site
 
         cfg, conn = _temp_db(tmp_path)
         conn.execute("INSERT INTO kb (name) VALUES ('维医')")
@@ -2658,7 +2658,7 @@ class TestLanguageFollow:
 
     def test_alt_copy_ignores_junk(self, monkeypatch, tmp_path):
         """alt 写了乱七八糟的东西不能让实例起不来。"""
-        from ragkb.frontsite import instcfg
+        from knowtune.frontsite import instcfg
 
         p = tmp_path / "instances.yaml"
         p.write_text(
@@ -2677,8 +2677,8 @@ class TestLanguageFollow:
 
     def test_instance_start_and_stop_releases_the_port(self, tmp_path):
         """启停是真的：启动后端口可达，停止后必须释放，否则下次起不来。"""
-        from ragkb.frontsite.instcfg import InstanceSpec
-        from ragkb.frontsite.runner import InstanceManager, port_in_use
+        from knowtune.frontsite.instcfg import InstanceSpec
+        from knowtune.frontsite.runner import InstanceManager, port_in_use
 
         cfg, conn = _temp_db(tmp_path)
         conn.execute("INSERT INTO kb (name) VALUES ('维医')")
@@ -2703,7 +2703,7 @@ class TestLanguageFollow:
             cfg = _Cfg()
             prompt_version = "qa_v1"
 
-        import ragkb.frontsite.instcfg as instcfg
+        import knowtune.frontsite.instcfg as instcfg
 
         orig = instcfg.INSTANCES_CONFIG
         instcfg.INSTANCES_CONFIG = tmp_path / "instances.yaml"
@@ -2729,7 +2729,7 @@ class TestThinkStrip:
     """
 
     def test_strip_balanced_block(self):
-        from ragkb.generate.think import strip
+        from knowtune.generate.think import strip
 
         raw = "<think>让我想想这个问题。</think>真正的答案在这里。"
         assert strip(raw) == "真正的答案在这里。", "思考块要整段去掉"
@@ -2737,13 +2737,13 @@ class TestThinkStrip:
 
     def test_strip_unclosed_block(self):
         """模型没写闭合标签 = 整段都在推理，全丢。"""
-        from ragkb.generate.think import strip
+        from knowtune.generate.think import strip
 
         assert strip("<think>一直想到天荒地老") == ""
 
     def test_stream_tag_split_across_chunks(self):
         """标签被切在两个 chunk 之间是最容易漏的情况。"""
-        from ragkb.generate.think import ThinkFilter
+        from knowtune.generate.think import ThinkFilter
 
         f = ThinkFilter()
         out = ""
@@ -2753,21 +2753,21 @@ class TestThinkStrip:
         assert out == "前面正常。后面答案", f"跨 chunk 的标签也要滤掉：{out!r}"
 
     def test_stream_no_think_passes_through(self):
-        from ragkb.generate.think import ThinkFilter
+        from knowtune.generate.think import ThinkFilter
 
         f = ThinkFilter()
         out = "".join(f.feed(p) for p in ["維医", "的四种", "体液"]) + f.flush()
         assert out == "維医的四种体液", f"没有思考块时不能吞字：{out!r}"
 
     def test_stream_unclosed_think_discards_all(self):
-        from ragkb.generate.think import ThinkFilter
+        from knowtune.generate.think import ThinkFilter
 
         f = ThinkFilter()
         out = "".join(f.feed(p) for p in ["<think>", "想啊想"]) + f.flush()
         assert out == "", f"未闭合的思考块不该漏出去：{out!r}"
 
     def test_case_insensitive(self):
-        from ragkb.generate.think import strip
+        from knowtune.generate.think import strip
 
         assert strip("<THINK>推理</THINK>答案") == "答案"
 
@@ -2783,9 +2783,9 @@ class TestLLMThinkWiring:
     def _client(monkeypatch, pieces):
         import json
 
-        from ragkb.config import Config, ProviderCfg
-        from ragkb.generate.llm import LLMClient
-        import ragkb.generate.llm as llm_mod
+        from knowtune.config import Config, ProviderCfg
+        from knowtune.generate.llm import LLMClient
+        import knowtune.generate.llm as llm_mod
 
         cfg = Config()
         cfg.generation.providers["fake"] = ProviderCfg(
@@ -2831,13 +2831,13 @@ class TestOrphanThinkTag:
     """
 
     def test_orphan_close_tag_is_dropped(self):
-        from ragkb.generate.think import strip
+        from knowtune.generate.think import strip
 
         assert strip("正文</think>") == "正文"
         assert "think" not in strip("答案A\n</think>\n\n答案A").lower()
 
     def test_orphan_close_in_stream(self):
-        from ragkb.generate.think import ThinkFilter
+        from knowtune.generate.think import ThinkFilter
 
         f = ThinkFilter()
         out = "".join(f.feed(p) for p in ["答案。</", "think>", "收尾"]) + f.flush()
@@ -2848,22 +2848,22 @@ class TestSessionKeys:
     """密钥只活在内存里（2026-10-28 改）。
 
     改版原因：把密钥写进配置文件 / .env 都会被"保存设置"回写、被导出、被截图。
-    现在密钥只存在进程内存（ragkb.secrets），服务一停就没了，重启需重填。
+    现在密钥只存在进程内存（knowtune.secrets），服务一停就没了，重启需重填。
     这类"故意不持久化"的设计必须被测试钉住，否则某次重构顺手加个落盘就白做了。
     """
 
     def setup_method(self):
-        from ragkb import secrets
+        from knowtune import secrets
 
         secrets.clear()
 
     def teardown_method(self):
-        from ragkb import secrets
+        from knowtune import secrets
 
         secrets.clear()
 
     def test_put_get_drop(self):
-        from ragkb import secrets
+        from knowtune import secrets
 
         secrets.put("deepseek", "sk-abc")
         assert secrets.get("deepseek") == "sk-abc"
@@ -2877,7 +2877,7 @@ class TestSessionKeys:
 
     def test_empty_key_is_ignored(self):
         """空串当"没填"，不能把已有密钥冲成一个空字符串。"""
-        from ragkb import secrets
+        from knowtune import secrets
 
         secrets.put("x", "sk-real")
         secrets.put("x", "   ")
@@ -2885,8 +2885,8 @@ class TestSessionKeys:
 
     def test_api_key_resolution_order(self):
         """临时密钥 > 内存密钥 > 环境变量；后端名决定查哪一条。"""
-        from ragkb import secrets
-        from ragkb.config import ProviderCfg
+        from knowtune import secrets
+        from knowtune.config import ProviderCfg
 
         p = ProviderCfg(base_url="https://api.x/v1", model="m", kind="openai")
         assert p.api_key("x") is None
@@ -2902,8 +2902,8 @@ class TestSessionKeys:
         """密钥不能出现在任何会写进 YAML 的序列化结果里。"""
         import json
 
-        from ragkb import secrets
-        from ragkb.config import Config, ProviderCfg
+        from knowtune import secrets
+        from knowtune.config import Config, ProviderCfg
 
         secrets.put("x", "sk-MUST-NOT-LEAK")
         cfg = Config()
@@ -2916,8 +2916,8 @@ class TestSessionKeys:
         """走一遍真实的保存接口：密钥进内存、文件里没有。"""
         from fastapi.testclient import TestClient
 
-        from ragkb import modelcfg, secrets
-        from ragkb.api import app as app_mod
+        from knowtune import modelcfg, secrets
+        from knowtune.api import app as app_mod
 
         monkeypatch.setattr(modelcfg, "MODELS_CONFIG", tmp_path / "models.yaml")
         client = TestClient(app_mod.app)
@@ -2933,8 +2933,8 @@ class TestSessionKeys:
     def test_clear_all_keys_endpoint(self):
         from fastapi.testclient import TestClient
 
-        from ragkb import secrets
-        from ragkb.api import app as app_mod
+        from knowtune import secrets
+        from knowtune.api import app as app_mod
 
         secrets.put("a", "sk-1")
         secrets.put("b", "sk-2")
@@ -2953,7 +2953,7 @@ class TestChatModelFilter:
     """
 
     def test_filters_non_chat_models(self):
-        from ragkb.services import split_chat_models
+        from knowtune.services import split_chat_models
 
         ids = [
             "qwen-plus", "qwen3.8-omni-flash", "glm-5.3-prime",
@@ -2966,7 +2966,7 @@ class TestChatModelFilter:
 
     def test_omni_itself_is_kept(self):
         """`omni` 不能一刀切：实测 qwen3.8-omni-flash 能对话，坏的是 -realtime 那支。"""
-        from ragkb.services import split_chat_models
+        from knowtune.services import split_chat_models
 
         chat, _ = split_chat_models(["qwen3.8-omni-flash"])
         assert chat == ["qwen3.8-omni-flash"]
@@ -2980,18 +2980,18 @@ class TestModelListAndRemember:
     """
 
     def setup_method(self):
-        from ragkb import secrets
+        from knowtune import secrets
 
         secrets.clear()
         secrets.forget()
 
     def teardown_method(self):
-        from ragkb import secrets
+        from knowtune import secrets
 
         secrets.wipe_file()
 
     def test_clean_model_list_dedupes_and_tolerates_junk(self):
-        from ragkb.modelcfg import _clean_model_list
+        from knowtune.modelcfg import _clean_model_list
 
         got = _clean_model_list([
             {"id": "qwen-plus", "context": "128000", "max_output": 8192},
@@ -3007,8 +3007,8 @@ class TestModelListAndRemember:
     def test_model_list_round_trip_through_yaml(self, tmp_path, monkeypatch):
         from fastapi.testclient import TestClient
 
-        from ragkb import modelcfg
-        from ragkb.api import app as app_mod
+        from knowtune import modelcfg
+        from knowtune.api import app as app_mod
 
         monkeypatch.setattr(modelcfg, "MODELS_CONFIG", tmp_path / "models.yaml")
         c = TestClient(app_mod.app)
@@ -3027,8 +3027,8 @@ class TestModelListAndRemember:
     def test_remember_true_writes_file_false_deletes_it(self, tmp_path, monkeypatch):
         from fastapi.testclient import TestClient
 
-        from ragkb import modelcfg, secrets
-        from ragkb.api import app as app_mod
+        from knowtune import modelcfg, secrets
+        from knowtune.api import app as app_mod
 
         monkeypatch.setattr(modelcfg, "MODELS_CONFIG", tmp_path / "models.yaml")
         secrets.attach(tmp_path)
@@ -3058,8 +3058,8 @@ class TestModelListAndRemember:
         """不传 remember 时绝不能偷偷落盘——默认必须是纯内存。"""
         from fastapi.testclient import TestClient
 
-        from ragkb import modelcfg, secrets
-        from ragkb.api import app as app_mod
+        from knowtune import modelcfg, secrets
+        from knowtune.api import app as app_mod
 
         monkeypatch.setattr(modelcfg, "MODELS_CONFIG", tmp_path / "models.yaml")
         secrets.attach(tmp_path)
@@ -3080,8 +3080,8 @@ class TestSwitchModelKeepsList:
     """
 
     def test_none_keeps_existing_list(self, tmp_path, monkeypatch):
-        from ragkb import modelcfg
-        from ragkb.config import Config, ProviderCfg
+        from knowtune import modelcfg
+        from knowtune.config import Config, ProviderCfg
 
         monkeypatch.setattr(modelcfg, "MODELS_CONFIG", tmp_path / "models.yaml")
         cfg = Config()
@@ -3094,8 +3094,8 @@ class TestSwitchModelKeepsList:
         assert got == ["a", "b"], f"切模型把清单弄丢了：{got}"
 
     def test_empty_list_clears(self, tmp_path, monkeypatch):
-        from ragkb import modelcfg
-        from ragkb.config import Config, ProviderCfg
+        from knowtune import modelcfg
+        from knowtune.config import Config, ProviderCfg
 
         monkeypatch.setattr(modelcfg, "MODELS_CONFIG", tmp_path / "models.yaml")
         cfg = Config()
@@ -3119,7 +3119,7 @@ class TestFormerlyHardcodedParams:
         return defaults_config().model_copy(deep=True)
 
     def test_all_new_paths_registered(self):
-        from ragkb import settings
+        from knowtune import settings
 
         keys = {p.path for p in settings.PARAMS}
         for k in (
@@ -3143,7 +3143,7 @@ class TestFormerlyHardcodedParams:
 
     def test_soft_confidence_reads_config(self):
         """低置信提醒的两个阈值原先是模块常量，现在必须跟着配置走。"""
-        from ragkb.retrieve.engine import _soft
+        from knowtune.retrieve.engine import _soft
 
         cfg = self._cfg()
         cfg.refusal.min_score = 0.35
@@ -3160,8 +3160,8 @@ class TestFormerlyHardcodedParams:
 
     def test_margin_window_controls_how_many_scores_count(self):
         """margin = top1 - mean(前 N 条)，N 由 refusal.margin_window 决定。"""
-        from ragkb.retrieve.engine import RetrievalEngine
-        from ragkb.models import Hit
+        from knowtune.retrieve.engine import RetrievalEngine
+        from knowtune.models import Hit
 
         eng = object.__new__(RetrievalEngine)      # 不走 __init__，不加载模型
         hits = [Hit(1, 0.80, 1, "dense"), Hit(2, 0.79, 2, "dense"), Hit(3, 0.20, 3, "dense")]
@@ -3177,7 +3177,7 @@ class TestFormerlyHardcodedParams:
         assert dec.margin == pytest.approx(0.305), "窗口放大后 0.20 要计入均值"
 
     def test_grade_mid_ratio_changes_band(self):
-        from ragkb.generate.evidence import grade_of
+        from knowtune.generate.evidence import grade_of
 
         # min_score=0.6：mid 门槛 = 0.6 * ratio
         assert grade_of(0.56, min_score=0.6, mid_ratio=0.9) == "mid"
@@ -3186,7 +3186,7 @@ class TestFormerlyHardcodedParams:
         assert grade_of(0.40, min_score=0.6, mid_ratio=0.5) == "mid", "放宽比例应升档"
 
     def test_trim_history_drops_whole_earliest_turns(self):
-        from ragkb.chatctx import trim_history
+        from knowtune.chatctx import trim_history
 
         hist = [
             {"role": "user", "content": "一" * 100},
@@ -3203,8 +3203,8 @@ class TestFormerlyHardcodedParams:
 
     def test_build_context_respects_floor(self):
         """预算被历史吃光时，资料段至少留 min_context_chars 字符。"""
-        from ragkb.generate.prompt import build_context
-        from ragkb.models import Candidate
+        from knowtune.generate.prompt import build_context
+        from knowtune.models import Candidate
 
         text = "资料正文" * 50          # 200 字
         cand = Candidate(
@@ -3225,8 +3225,8 @@ class TestFormerlyHardcodedParams:
         踩过：拿 used 当列表解包 [c.text for _, c in bundle.used]，
         线上直接 TypeError 把整条问答打挂。这里把契约钉住。
         """
-        from ragkb.generate.prompt import build_context
-        from ragkb.models import Candidate
+        from knowtune.generate.prompt import build_context
+        from knowtune.models import Candidate
 
         cands = [
             Candidate(chunk_id=i, doc_id=1, doc_title="t", source_uri="u",
@@ -3242,7 +3242,7 @@ class TestFormerlyHardcodedParams:
         assert bundle.used_texts[0] == cands[0].text
 
     def test_cross_checks_for_new_params(self):
-        from ragkb import settings
+        from knowtune import settings
 
         cfg = self._cfg()
         cfg.retrieval.fusion.top_k = 20
@@ -3257,7 +3257,7 @@ class TestFormerlyHardcodedParams:
 
     def test_evidence_section_is_persisted(self, tmp_path, monkeypatch):
         """新开的 evidence 段能否写进 local.yaml —— 嵌套写错会静默丢键。"""
-        from ragkb import settings
+        from knowtune import settings
 
         monkeypatch.setattr(settings, "LOCAL_CONFIG", tmp_path / "local.yaml")
         cfg = self._cfg()
@@ -3285,7 +3285,7 @@ class TestHardening:
     def test_upload_streams_and_reports_size(self, tmp_path):
         import asyncio
 
-        from ragkb.api.app import _save_upload
+        from knowtune.api.app import _save_upload
 
         n = asyncio.run(_save_upload(self._upload(b"x" * 5000), tmp_path / "a.txt", 1))
         assert n == 5000
@@ -3301,7 +3301,7 @@ class TestHardening:
 
         from fastapi import HTTPException
 
-        from ragkb.api.app import _save_upload
+        from knowtune.api.app import _save_upload
 
         target = tmp_path / "a.txt"
         with pytest.raises(HTTPException) as e:
@@ -3319,7 +3319,7 @@ class TestHardening:
 
         from fastapi import HTTPException
 
-        from ragkb.api.app import _save_upload
+        from knowtune.api.app import _save_upload
 
         target = tmp_path / "a.txt"
         target.write_bytes(b"old")
@@ -3341,7 +3341,7 @@ class TestHardening:
 
     @staticmethod
     def _patch_state(monkeypatch, conn):
-        import ragkb.api.app as A
+        import knowtune.api.app as A
 
         class _S:
             class db:
@@ -3400,8 +3400,8 @@ class TestHardening:
 
         from fastapi.testclient import TestClient
 
-        from ragkb.frontsite.instcfg import InstanceSpec
-        from ragkb.frontsite.site import build_site
+        from knowtune.frontsite.instcfg import InstanceSpec
+        from knowtune.frontsite.site import build_site
 
         cfg, conn = _temp_db(tmp_path)
         conn.execute("INSERT INTO kb (name) VALUES ('k')")
@@ -3484,8 +3484,8 @@ class TestHardening:
 
         from fastapi.testclient import TestClient
 
-        from ragkb.frontsite.instcfg import InstanceSpec
-        from ragkb.frontsite.site import build_site
+        from knowtune.frontsite.instcfg import InstanceSpec
+        from knowtune.frontsite.site import build_site
 
         cfg, conn = _temp_db(tmp_path)
         conn.execute("INSERT INTO kb (name) VALUES ('k')")
@@ -3580,7 +3580,7 @@ class TestChunkedUpload:
     def cli(self, tmp_path, monkeypatch):
         from fastapi.testclient import TestClient
 
-        import ragkb.api.app as A
+        import knowtune.api.app as A
 
         monkeypatch.setattr(A, "UPLOAD_DIR", tmp_path / "uploads")
         monkeypatch.setattr(A, "_PARTS_DIR", tmp_path / "uploads" / ".parts")
@@ -3659,7 +3659,7 @@ class TestChunkedUpload:
 
         （以前单请求上传就是这个毛病：字节全传上来了，才回 413。）
         """
-        import ragkb.api.app as A
+        import knowtune.api.app as A
 
         monkeypatch.setattr(A.state.cfg.ingest, "max_file_mb", 1)
         r = self._init(cli, 2 * 1024 * 1024)
@@ -3684,7 +3684,7 @@ class TestChunkedUpload:
         """启动清扫只清过期的那批，正在传的不许动。"""
         import os as _os
 
-        import ragkb.api.app as A
+        import knowtune.api.app as A
 
         old = self._init(cli, 3000, "d" * 16).json()["upload_id"]
         new = self._init(cli, 3000, "e" * 16).json()["upload_id"]
@@ -3711,7 +3711,7 @@ class TestCleanupNeverFailsRequest:
     def test_quiet_unlink_swallows_blocked_delete(self, tmp_path, monkeypatch):
         import pathlib
 
-        import ragkb.api.app as A
+        import knowtune.api.app as A
 
         f = tmp_path / "0.part"
         f.write_bytes(b"x")
@@ -3726,7 +3726,7 @@ class TestCleanupNeverFailsRequest:
     def test_discard_parts_reports_failure_without_raising(self, tmp_path, monkeypatch):
         import pathlib
 
-        import ragkb.api.app as A
+        import knowtune.api.app as A
 
         folder = tmp_path / "p"
         folder.mkdir()
@@ -3746,7 +3746,7 @@ class TestCleanupNeverFailsRequest:
 
         from fastapi.testclient import TestClient
 
-        import ragkb.api.app as A
+        import knowtune.api.app as A
 
         monkeypatch.setattr(A, "UPLOAD_DIR", tmp_path / "uploads")
         monkeypatch.setattr(A, "_PARTS_DIR", tmp_path / "uploads" / ".parts")
@@ -3775,7 +3775,7 @@ class TestCleanupNeverFailsRequest:
 
         from fastapi.testclient import TestClient
 
-        import ragkb.api.app as A
+        import knowtune.api.app as A
 
         monkeypatch.setattr(A, "UPLOAD_DIR", tmp_path / "uploads")
         monkeypatch.setattr(A, "_PARTS_DIR", tmp_path / "uploads" / ".parts")
@@ -3806,14 +3806,14 @@ class TestSessionBulkDelete:
     def cli(self, tmp_path, monkeypatch):
         from fastapi.testclient import TestClient
 
-        import ragkb.api.app as A
+        import knowtune.api.app as A
 
         # state.conn 是个 property（每次回 db.conn()），直接 setattr 会被拒；
         # 而且 TestClient 在另一个线程跑应用，sqlite 连接不能跨线程用——所以换的
         # 是整个 db，让每个线程各自拿到自己的连接（顺带保住 foreign_keys=ON，
         # 否则 message 的 CASCADE 不生效，删完会话消息还留着）。
-        from ragkb.config import load_config
-        from ragkb.db import Database
+        from knowtune.config import load_config
+        from knowtune.db import Database
 
         cfg = load_config().model_copy(deep=True)
         cfg.storage.db_path = tmp_path / "t.db"
@@ -3841,7 +3841,7 @@ class TestSessionBulkDelete:
         conn.commit()
 
     def test_reports_deleted_count_and_cascades(self, cli, tmp_path, monkeypatch):
-        import ragkb.api.app as A
+        import knowtune.api.app as A
 
         r = cli.post("/api/sessions/bulk-delete", json={"ids": ["s1", "s3"]})
         assert r.status_code == 200, r.text
@@ -3861,7 +3861,7 @@ class TestSessionBulkDelete:
 
     def test_partial_failure_keeps_the_successful_half(self, cli):
         """一条不存在，另外两条照样删。整批回滚才是真的坑。"""
-        import ragkb.api.app as A
+        import knowtune.api.app as A
 
         r = cli.post("/api/sessions/bulk-delete", json={"ids": ["s1", "ghost", "s2"]})
         assert r.status_code == 200, r.text
@@ -3893,7 +3893,7 @@ class TestChunkSizeVsEmbedWindow:
     """
 
     def test_global_setting_rejects_diluted_chunk(self):
-        from ragkb import settings
+        from knowtune import settings
 
         cfg = load_config().model_copy(deep=True)
         with pytest.raises(ValueError, match="两倍"):
@@ -3904,7 +3904,7 @@ class TestChunkSizeVsEmbedWindow:
 
     def test_kb_override_rejects_oversized_chunk(self):
         """库级覆盖走的是另一条校验路径，必须同样拦得住。"""
-        from ragkb import kbconfig
+        from knowtune import kbconfig
 
         cfg = load_config().model_copy(deep=True)
         with pytest.raises(ValueError, match="两倍"):
@@ -3914,9 +3914,9 @@ class TestChunkSizeVsEmbedWindow:
 
     def test_real_chunks_fit_the_window(self):
         """护栏判的是 size，真正要证的是"切出来的块不超限"。"""
-        from ragkb.config import load_config
-        from ragkb.ingest.chunker import chunk_blocks
-        from ragkb.models import Block
+        from knowtune.config import load_config
+        from knowtune.ingest.chunker import chunk_blocks
+        from knowtune.models import Block
 
         cfg = load_config().model_copy(deep=True)
         cfg.chunking.size = 480
@@ -3963,11 +3963,11 @@ class TestAskUsesSelectedBackend:
         import sqlite3
         from pathlib import Path
 
-        import ragkb
-        import ragkb.api.app as A
-        import ragkb.services as services_mod
-        from ragkb.config import Config, ProviderCfg
-        from ragkb.generate.llm import LLMError
+        import knowtune
+        import knowtune.api.app as A
+        import knowtune.services as services_mod
+        from knowtune.config import Config, ProviderCfg
+        from knowtune.generate.llm import LLMError
 
         cfg = Config()
         cfg.generation.providers = {
@@ -3982,7 +3982,7 @@ class TestAskUsesSelectedBackend:
         # 默认连接在跨线程这一步就会抛 "created in thread id ..."。
         conn = sqlite3.connect(":memory:", check_same_thread=False)
         conn.row_factory = sqlite3.Row
-        conn.executescript((Path(ragkb.__file__).parent / "schema.sql")
+        conn.executescript((Path(knowtune.__file__).parent / "schema.sql")
                            .read_text(encoding="utf-8"))
 
         class FakeLLM:
@@ -4010,7 +4010,7 @@ class TestAskUsesSelectedBackend:
 
     @staticmethod
     def _run(monkeypatch, invalidated, **kw):
-        import ragkb.api.app as A
+        import knowtune.api.app as A
 
         conn = TestAskUsesSelectedBackend._prepare(monkeypatch, invalidated)
         req = A.AskRequest(question="维吾尔医学的四种体液是什么？",
@@ -4039,7 +4039,7 @@ class TestAskUsesSelectedBackend:
 
     def test_done_payload_echoes_backend_and_model(self, monkeypatch):
         """界面要能自证"跑的就是我选的"：done/meta 里回显本次用的后端与模型。"""
-        import ragkb.api.app as A
+        import knowtune.api.app as A
 
         invalidated = []
         self._prepare(monkeypatch, invalidated)
@@ -4074,7 +4074,7 @@ class TestSecretStore:
 
     @staticmethod
     def _store(monkeypatch, tmp_path):
-        from ragkb import secrets as S
+        from knowtune import secrets as S
 
         monkeypatch.setattr(S, "_KEYS", {})
         monkeypatch.setattr(S, "_PATH", None)
@@ -4083,7 +4083,7 @@ class TestSecretStore:
 
     def test_saved_file_never_contains_the_key(self, monkeypatch, tmp_path):
         import pytest
-        from ragkb import secrets as S
+        from knowtune import secrets as S
 
         if not S._WINDOWS:
             pytest.skip("这条测的是 Windows DPAPI 落盘")
@@ -4098,7 +4098,7 @@ class TestSecretStore:
 
     def test_roundtrip(self, monkeypatch, tmp_path):
         import pytest
-        from ragkb import secrets as S
+        from knowtune import secrets as S
 
         if not S._WINDOWS:
             pytest.skip("这条测的是 Windows DPAPI 落盘")
@@ -4116,7 +4116,7 @@ class TestSecretStore:
         """旧版明文文件读进来要立刻重写成密文，不能继续留着明文。"""
         import json
         import pytest
-        from ragkb import secrets as S
+        from knowtune import secrets as S
 
         if not S._WINDOWS:
             pytest.skip("这条测的是 Windows DPAPI 落盘")
@@ -4130,7 +4130,7 @@ class TestSecretStore:
     def test_undecryptable_entry_is_skipped_not_used(self, monkeypatch, tmp_path):
         """换账户/换机器后密文解不开：跳过并说清楚，绝不能拿密文去发请求。"""
         import json
-        from ragkb import secrets as S
+        from knowtune import secrets as S
 
         S, path = self._store(monkeypatch, tmp_path)
         path.write_text(json.dumps(
@@ -4142,7 +4142,7 @@ class TestSecretStore:
 
     def test_refuses_plaintext_when_no_system_cipher(self, monkeypatch, tmp_path):
         """没有系统级加密就干脆不写：假加密比没加密更坏。"""
-        from ragkb import secrets as S
+        from knowtune import secrets as S
 
         S, path = self._store(monkeypatch, tmp_path)
         monkeypatch.setattr(S, "_WINDOWS", False)
@@ -4165,7 +4165,7 @@ class TestSecretStore:
 
     @staticmethod
     def _store(monkeypatch, tmp_path):
-        from ragkb import secrets as S
+        from knowtune import secrets as S
 
         monkeypatch.setattr(S, "_KEYS", {})
         monkeypatch.setattr(S, "_PATH", None)
@@ -4174,7 +4174,7 @@ class TestSecretStore:
 
     def test_saved_file_never_contains_the_key(self, monkeypatch, tmp_path):
         import pytest
-        from ragkb import secrets as S
+        from knowtune import secrets as S
 
         if not S._WINDOWS:
             pytest.skip("这条测的是 Windows DPAPI 落盘")
@@ -4189,7 +4189,7 @@ class TestSecretStore:
 
     def test_roundtrip(self, monkeypatch, tmp_path):
         import pytest
-        from ragkb import secrets as S
+        from knowtune import secrets as S
 
         if not S._WINDOWS:
             pytest.skip("这条测的是 Windows DPAPI 落盘")
@@ -4207,7 +4207,7 @@ class TestSecretStore:
         """旧版明文文件读进来要立刻重写成密文，不能继续留着明文。"""
         import json
         import pytest
-        from ragkb import secrets as S
+        from knowtune import secrets as S
 
         if not S._WINDOWS:
             pytest.skip("这条测的是 Windows DPAPI 落盘")
@@ -4221,7 +4221,7 @@ class TestSecretStore:
     def test_undecryptable_entry_is_skipped_not_used(self, monkeypatch, tmp_path):
         """换账户/换机器后密文解不开：跳过并说清楚，绝不能拿密文去发请求。"""
         import json
-        from ragkb import secrets as S
+        from knowtune import secrets as S
 
         S, path = self._store(monkeypatch, tmp_path)
         path.write_text(json.dumps(
@@ -4233,7 +4233,7 @@ class TestSecretStore:
 
     def test_refuses_plaintext_when_no_system_cipher(self, monkeypatch, tmp_path):
         """没有系统级加密就干脆不写：假加密比没加密更坏。"""
-        from ragkb import secrets as S
+        from knowtune import secrets as S
 
         S, path = self._store(monkeypatch, tmp_path)
         monkeypatch.setattr(S, "_WINDOWS", False)
@@ -4260,7 +4260,7 @@ class TestModelCatalogAndActiveModel:
     def setup_method(self):
         import copy
 
-        from ragkb.api import app as app_mod
+        from knowtune.api import app as app_mod
 
         self.app = app_mod
         self.saved = copy.deepcopy(app_mod.state.cfg.generation.providers)
@@ -4268,7 +4268,7 @@ class TestModelCatalogAndActiveModel:
         self.saved_roles = dict(getattr(app_mod.state.cfg.generation, "roles", {}) or {})
 
     def teardown_method(self):
-        from ragkb.api import app as app_mod
+        from knowtune.api import app as app_mod
 
         provs = app_mod.state.cfg.generation.providers
         provs.clear()
@@ -4279,7 +4279,7 @@ class TestModelCatalogAndActiveModel:
     def test_catalog_lists_models_of_every_backend(self, tmp_path, monkeypatch):
         from fastapi.testclient import TestClient
 
-        from ragkb import modelcfg
+        from knowtune import modelcfg
 
         monkeypatch.setattr(modelcfg, "MODELS_CONFIG", tmp_path / "m.yaml")
         c = TestClient(self.app.app)
@@ -4304,7 +4304,7 @@ class TestModelCatalogAndActiveModel:
     def test_active_setting_covers_backend_and_model(self, tmp_path, monkeypatch):
         from fastapi.testclient import TestClient
 
-        from ragkb import modelcfg, settings as settings_mod
+        from knowtune import modelcfg, settings as settings_mod
 
         monkeypatch.setattr(modelcfg, "MODELS_CONFIG", tmp_path / "m.yaml")
         # 切「当前后端」会落盘 local.yaml。不隔离的话，测试会把你机器上真实的
@@ -4327,8 +4327,8 @@ class TestModelCatalogAndActiveModel:
         assert "second-model" in (tmp_path / "m.yaml").read_text(encoding="utf-8")
 
     def test_probe_message_has_no_model_count_noise(self, monkeypatch):
-        from ragkb import services
-        from ragkb.config import ProviderCfg
+        from knowtune import services
+        from knowtune.config import ProviderCfg
 
         class FakeResp:
             def __init__(self, body): self._b = body

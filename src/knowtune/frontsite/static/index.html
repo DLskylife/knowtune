@@ -18,8 +18,8 @@
   window.SITE_REQ_BUILD = "1.7.4";
   addEventListener("load", function () {
     if (window.SITE_BUILD === window.SITE_REQ_BUILD) return;
-    if (sessionStorage.getItem("ragkb.site.reloaded")) return;
-    sessionStorage.setItem("ragkb.site.reloaded", "1");
+    if (sessionStorage.getItem("knowtune.site.reloaded")) return;
+    sessionStorage.setItem("knowtune.site.reloaded", "1");
     location.replace(location.pathname + "?cb=" + Date.now());
   });
 </script>

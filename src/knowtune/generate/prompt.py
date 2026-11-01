@@ -17,9 +17,9 @@ from ..lang import answer_instruction
 from ..models import Candidate, Citation
 from . import evidence as evidence_rule
 
-# 提示词资产的实际归属在 ragkb/promptcfg.py（它要同时管 generate 与 translate
+# 提示词资产的实际归属在 knowtune/promptcfg.py（它要同时管 generate 与 translate
 # 两个角色、以及后台可编辑的覆盖层）。这里保留同名符号，是为了别处 `from
-# ragkb.generate.prompt import SYSTEM_PROMPT_FALLBACK / PROMPT_DIR` 的老引用不断。
+# knowtune.generate.prompt import SYSTEM_PROMPT_FALLBACK / PROMPT_DIR` 的老引用不断。
 PROMPT_DIR = promptcfg.PROMPT_DIR
 SYSTEM_PROMPT_FALLBACK = promptcfg.SYSTEM_PROMPT_FALLBACK
 
