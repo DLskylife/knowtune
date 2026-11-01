@@ -4800,17 +4800,15 @@ async function openModelEditor(name) {
           记住密钥到本机（明文存在 data/secrets.json，勾了重启才不用重填）</label></div>
       <div class="form-row" style="grid-column: span 2"><label>默认模型</label>
         <div class="input-row">
-          <input id="mModel" value="${esc(cur?.model || "")}" placeholder="qwen-plus"
-            list="mModelOptions" autocomplete="off" spellcheck="false">
-          <datalist id="mModelOptions"></datalist>
+          <select id="mModel"></select>
           <button class="ghost-btn" id="mProbe" title="验证地址 + 密钥 + 默认模型能不能真的对话">验证</button>
         </div>
-        <span class="hint">可以直接手打；也可以从下面的清单里选。<b>这里填的模型才真正用于问答。</b></span></div>
+        <span class="hint">从下拉里选；探测过就有候选。<b>这里选的模型才真正用于问答。</b></span></div>
       <div class="form-row" style="grid-column: span 2"><label>模型清单（我打算用哪些；可增删）</label>
         <div id="mList" class="model-list"></div>
         <div style="margin-top:6px"><button class="ghost-btn" id="mListAdd" type="button">＋ 添加一行</button></div>
         <span class="hint">清单只是候选表，不影响调用；真正生效的是上面的「默认模型」。
-          探测到的可用模型会出现在候选里，点一下加入清单。</span></div>
+          点「验证」探测出可用模型后，每行都能从下拉里选，并能<b>单独测这一个</b>能不能对话。</span></div>
     </div>
     <div class="probe-box" id="mProbeBox" hidden></div>
     <div class="form-row" style="margin-top:10px">
@@ -4899,25 +4897,117 @@ async function openModelEditor(name) {
 
   /* 模型清单：抄 ccswitch 的做法——**清单是人维护的候选表**，探测只负责验证。
      以前把厂商 /models 的原始返回（含图像/语音/实时/向量）直接做成可点选项，
-     等于让人在雷区里挑。 */
+     等于让人在雷区里挑。
+
+     行内改成**下拉框**而不是手打：模型 id 是这套界面最容易写错的东西——
+     少个点、大小写差一位，保存能过，问答时才报 404。能选就别让人打。
+     下拉框自带"这一个能不能用"的测试按钮，省得每次都整体验证一遍。 */
+  const CUSTOM = "__custom__";
+  // 候选池 = 上次探测回来的 + 已存清单里的 + 当前默认模型（它未必在清单里）。
+  // 没探测过时至少已有条目还选得到，也不会把当前默认值显示成"未选"。
+  let pool = [...new Set([
+    ...((cur && cur.models) || []),
+    ...((cur && cur.model_list) || []).map((m) => m.id),
+    ...(cur && cur.model ? [cur.model] : []),
+  ].filter(Boolean))];
+
+  const optionsOf = (value, ph) => {
+    const opts = [`<option value="">${esc(ph || "（选一个模型）")}</option>`];
+    pool.forEach((id) => opts.push(
+      `<option value="${esc(id)}"${id === value ? " selected" : ""}>${esc(id)}</option>`));
+    // 已存但不在候选里（探测失败、或换过后端）：保留原值，别让下拉框悄悄改掉数据
+    if (value && !pool.includes(value)) {
+      opts.push(`<option value="${esc(value)}" selected>${esc(value)}（不在候选里）</option>`);
+    }
+    opts.push(`<option value="${CUSTOM}">＋ 手动输入…</option>`);
+    return opts.join("");
+  };
+
+  // 探测不出来的时候（自建服务、内网代理）不能把人堵死，所以留了手动输入的口子，
+  // 但它不该是默认路径——选了才把下拉换成输入框。
+  const toInput = (sel, keep) => {
+    const inp = document.createElement("input");
+    inp.className = sel.className;
+    inp.id = sel.id;
+    inp.value = keep || "";
+    inp.placeholder = sel.id === "mModel" ? "手打模型 id，如 qwen-plus" : "手打模型 id";
+    inp.autocomplete = "off";
+    inp.spellcheck = false;
+    sel.replaceWith(inp);
+    return inp;
+  };
+
+  // 给"模型"字段赋值：值不在候选里就切成手输框，绝不让 value 静默变成空
+  const setChoice = (el, v) => {
+    if (!el) return;
+    if (el.tagName === "SELECT" && v && ![...el.options].some((o) => o.value === v)) {
+      toInput(el, v).focus();
+      return;
+    }
+    el.value = v || "";
+  };
+
   const renderList = (entries) => {
     const box = $("mList");
     const rows = (entries && entries.length) ? entries : [];
     box.innerHTML = rows.length
       ? rows.map((m) => listRow(m.id, m.context, m.max_output)).join("")
-      : `<p class="hint" style="margin:4px 0">还没有条目。手动加，或点「验证」后从候选里点选。</p>`;
+      : `<p class="hint" style="margin:4px 0">还没有条目。点上面「验证」探测出可用模型，再逐行从下拉里选。</p>`;
     refreshModelOptions();
   };
   const listRow = (id, ctx, out) => `<div class="model-row" data-row>
-      <input class="mr-id" value="${esc(id || "")}" placeholder="qwen-plus" autocomplete="off" spellcheck="false">
+      <select class="mr-id">${optionsOf(id || "")}</select>
       <input class="mr-ctx" value="${ctx || ""}" placeholder="上下文，如 128000" inputmode="numeric">
       <input class="mr-out" value="${out || ""}" placeholder="最大输出，如 8192" inputmode="numeric">
+      <button class="mini" type="button" data-test title="只测这一个模型能不能对话">测试</button>
       <button class="mini" type="button" data-drop>删除</button>
+      <span class="mr-state"></span>
     </div>`;
-  // 默认模型的候选 = 清单里的名字。用原生 datalist，够用且不用自己写搜索框。
+
+  // 单模型测试：后端 probe-url 本来就能指定 model，不用新接口。
+  // 复用的还是弹窗里当前的地址/密钥，所以"地址填错了"会在这里一起暴露。
+  const testOne = async (row, btn) => {
+    const field = row.querySelector(".mr-id");
+    const st = row.querySelector(".mr-state");
+    const id = (field.value || "").trim();
+    if (!id) { st.innerHTML = `<span class="warn">先选一个模型</span>`; return; }
+    btn.disabled = true;
+    st.innerHTML = `<span class="hint">测试中…</span>`;
+    try {
+      const r = await jsonPost("/api/services/probe-url", {
+        base_url: $("mBase").value.trim(),
+        api_key: $("mKey").value.trim(),
+        kind: $("mKind").value,
+        model: id,
+        name: cur ? cur.name : "",
+      });
+      st.innerHTML = `<i class="dot ${dotOf(r.status)}"></i> ${esc(r.message || statusText(r.status))}`
+        + (r.latency_ms ? ` · ${r.latency_ms}ms` : "");
+    } catch (err) {
+      st.innerHTML = `<span class="warn">${esc(err.message)}</span>`;
+    } finally {
+      btn.disabled = false;
+    }
+  };
+
+  const refreshAllSelects = () => {
+    $("mList").querySelectorAll("select.mr-id").forEach((sel) => {
+      const v = sel.value;
+      sel.innerHTML = optionsOf(v);
+      sel.value = v;
+    });
+  };
+  // 默认模型的候选 = 清单里的名字；清单变化时两边的下拉一起刷新
   const refreshModelOptions = () => {
-    const ids = collectModelList().map((m) => m.id).filter(Boolean);
-    $("mModelOptions").innerHTML = ids.map((i) => `<option value="${esc(i)}"></option>`).join("");
+    collectModelList().map((m) => m.id).filter(Boolean)
+      .forEach((i) => { if (!pool.includes(i)) pool.push(i); });
+    refreshAllSelects();
+    const mm = $("mModel");
+    if (mm && mm.tagName === "SELECT") {
+      const v = mm.value;
+      mm.innerHTML = optionsOf(v, "（先点验证探测，或从清单里选）");
+      mm.value = v;
+    }
   };
   const collectModelList = () => {
     const rows = [...$("mList").querySelectorAll("[data-row]")];
@@ -4935,6 +5025,10 @@ async function openModelEditor(name) {
     $("mList").insertAdjacentHTML("beforeend", listRow(id, "", ""));
     refreshModelOptions();
   };
+  // select 元素自己不带 value 属性，初值只能在这里回填（先灌 options 再取值，
+  // 否则空 select 会被 setChoice 误判成"值不在候选里"而切成手输框）。
+  // 漏了这一步，编辑已有后端时默认模型会显示成"（未选）"，一保存原值就没了。
+  $("mModel").innerHTML = optionsOf((cur && cur.model) || "", "（先点验证探测，或从清单里选）");
   renderList((cur && cur.model_list) || []);
   $("mListAdd").onclick = () => {
     $("mList").querySelector("p.hint")?.remove();
@@ -4944,10 +5038,19 @@ async function openModelEditor(name) {
     rows[rows.length - 1]?.querySelector(".mr-id")?.focus();
   };
   $("mList").onclick = (e) => {
-    const btn = e.target.closest("[data-drop]");
-    if (!btn) return;
-    btn.closest("[data-row]").remove();
-    if (!$("mList").querySelector("[data-row]")) renderList([]);
+    const drop = e.target.closest("[data-drop]");
+    if (drop) {
+      drop.closest("[data-row]").remove();
+      if (!$("mList").querySelector("[data-row]")) renderList([]);
+      refreshModelOptions();
+      return;
+    }
+    const t = e.target.closest("[data-test]");
+    if (t) testOne(t.closest("[data-row]"), t);
+  };
+  $("mList").onchange = (e) => {
+    if (!e.target.classList.contains("mr-id")) return;
+    if (e.target.value === CUSTOM) toInput(e.target, "").focus();
     refreshModelOptions();
   };
   $("mList").oninput = (e) => { if (e.target.classList.contains("mr-id")) refreshModelOptions(); };
@@ -4967,7 +5070,14 @@ async function openModelEditor(name) {
       const b = $("mBase").value.trim();
       if (!b || b === lastBase) $("mBase").value = k.default_base || "";
       const m = $("mModel").value.trim();
-      if (!m || m === lastModel) $("mModel").value = k.default_model || "";
+      if (!m || m === lastModel) {
+        // 类型自带的默认模型要进候选池：不然它不在 options 里，赋值会静默变空，
+        // 或者把下拉框顶成手输框——看着像"选了 DeepSeek 但模型没跟着变"。
+        const dm = k.default_model || "";
+        if (dm && !pool.includes(dm)) pool.push(dm);
+        refreshAllSelects();
+        setChoice($("mModel"), dm);
+      }
       // 换类型时顺手把名字也换成可用的：新增场景下用户不会去纠结这个字段，
       // 但同名冲突会让保存直接失败。只换掉"还是上一个建议值"的，别覆盖手打的名字。
       if (!cur) {
@@ -4999,6 +5109,12 @@ async function openModelEditor(name) {
         name: cur ? cur.name : "",
       });
       const list = r.models || [];
+      // 探测回来的模型全部进候选池：下面每一行的下拉框立刻都能选到，
+      // 不用再手打一遍名字（这正是 404 的主要来源）。
+      if (list.length) {
+        pool = [...new Set([...pool, ...list])];
+        refreshModelOptions();
+      }
       const head = `<div class="probe-head">
           <i class="dot ${dotOf(r.status)}"></i>
           <span class="probe-msg">${esc(r.message || statusText(r.status))}${r.latency_ms ? ` · ${r.latency_ms}ms` : ""}</span>
@@ -5017,7 +5133,7 @@ async function openModelEditor(name) {
       box.innerHTML = head + chips;
       box.querySelectorAll("[data-pick]").forEach((chip) => {
         chip.onclick = () => {
-          $("mModel").value = chip.dataset.pick;
+          setChoice($("mModel"), chip.dataset.pick);
           addToEntry(chip.dataset.pick);
           box.querySelectorAll("[data-pick]").forEach((c) => c.classList.toggle("on", c === chip));
         };
