@@ -2813,8 +2813,9 @@ sky 要的是「打通」——不是卡片上多一个地址，而是这些页�
 （`knowtune serve` 按实际端口写入）> `config/previsit.yaml` 的 `llm_gateway` >
 默认 8000；`llm_gateway: false/direct` 完全不走网关。
 
-独立包与 `previsit_site/` 镜像保持逐字节一致；`previsit/app.py` 增加
-`set_llm_factory()`，主项目注入自己的适配器，两边共用同一套路由。
+独立包与 `previsit_site/` 镜像当时保持逐字节一致（12.49 已把镜像删掉，
+独立站改为引用同一份代码）；`previsit/app.py` 增加 `set_llm_factory()`，
+主项目注入自己的适配器，两边共用同一套路由。
 
 **评测台**（`evals/backends.py`）：`entries()` 先问 `/api/gateway` + `/v1/models`
 + `/api/models`，把网关包装成一个 `gateway` 端点；清单里除了上游模型 id，还把
@@ -2844,3 +2845,44 @@ radius 合并后只有 **1 种组合**，且 JS 无报错。
 留下 5 条 `chat` 记录，全部经 `/v1` 转发；`runtime.llm_source=gateway`；
 评测台 `gateway_status().ok=True`、默认项变成 `gateway::Hy-MT2-1.8B-Q4_K_M`；
 站点页两张卡各一行「模型入口」可复制。回归 **361 passed**（新增 6 条网关路由测试）。
+
+---
+
+### 12.49 预问诊流程重排 + 三份镜像合并（2026-11-04 追加）
+
+目标：**信息更全**、整条链路重排，前后端一起改。
+
+**镜像合并**：`src/previsit/` 是唯一实现（含 `static/`）；
+`src/knowtune/previsit/` 是桥接装配层（`KnowtuneLLMAdapter` 只在这里，
+frontsite / api / cli / 3 个测试都依赖它），不是重复实现，保留。
+`previsit_site/src/previsit/` 的 13 个文件是逐字节副本，全部删除；
+`previsit_site/main.py` 把 `sys.path` 指向 `<项目根>/src`，`PREVISIT_HOME`
+仍指独立站目录，配置、覆盖层、模型清单、会话库继续隔离，避免独立站改
+参数面板时把主项目的 `previsit.overrides.yaml` 一起改掉。
+
+**三视图**（`previsit/static/`）：① 基本信息表单加了「跳过，直接开始」，
+不再是门禁；顶部「补充基本信息」随时可回填，走新增的
+`PATCH /api/previsit/profile/{sid}`，不新开会话。② 对话顶部显示
+`coverage`（已采集 / 总数）与 `profile_missing`；猜不出选项时给
+「没有 / 不清楚 / 想不起来了」通用快捷，明确不知道会被记账并跳过。
+③ 新增独立结果页：分诊卡、六段结构化病历、可编辑（保存走
+`PATCH /api/previsit/record/{sid}`）、复制、下载 .txt / .md、
+患者原话折叠区、「继续补充」按钮。旧的浅色「纸张病历」样式与
+`sheetHTML / appendSheet / downloadRecord` 一并删掉。
+
+**后端**：`view()` 新增 `coverage / profile_missing / can_supplement`；
+`record` 新增 `patient_turns / coverage / missing / edited`（都不进
+`sections` 和 `text`，患者界面不会冒出诊断线索）。跳过表单时
+`_absorb_profile()` 只从「42岁」「男，…」这类明确说法补性别 / 年龄，
+不猜。`supplement()`（`POST /api/previsit/supplement`）允许结束后再补一句：
+轮次预算已满，`_advance` 直接收网，重新抽取并重新生成病历；急症态拒绝补充。
+`max_turns` / `_is_askable` / danger gate 一概没动，原有对话测试不用改。
+
+**修掉两处真问题**：结果页 `.rv-edit-foot{display:flex}` 盖掉了 UA 的
+`[hidden]{display:none}`，编辑工具条一进结果页就自己露出来 → 加全局
+`[hidden]{display:none !important}`；`.rv-meta` 用 flex 把
+「档案采集 1/7 项」拆成五个散开的 flex item → 改回普通块级排版。
+
+**验证**：全量 **362 passed / 1 skipped**；本机 Edge 无头浏览器实跑
+表单 → 跳过 → 补档案 → 14 轮对话 → 结果页 → 编辑保存 → 继续补充 →
+重新出病历，JS 零报错。

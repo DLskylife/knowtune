@@ -908,6 +908,86 @@ class PrevisitEngine:
         self.store.add_turn(sid, "user", message)
         return self._advance(sid, message)
 
+    @staticmethod
+    def _coverage(slots: list[dict[str, Any]], merged: dict[str, Any]) -> dict[str, Any]:
+        """档案完整度：进度线、侧栏、结果页共用同一个口径，别各算一套。"""
+        total = len(slots)
+        filled = sum(1 for s in slots if merged.get(s["key"]))
+        return {"filled": filled, "total": total,
+                "percent": round(filled * 100 / total) if total else 0}
+
+    def _profile_missing(self, sess: dict[str, Any]) -> list[dict[str, str]]:
+        """还缺哪几项必填基本信息。跳过首屏表单的患者靠它在页面上看到提示。"""
+        prof = sess.get("profile") or {}
+        return [{"key": str(f["key"]), "label": str(f["label"])}
+                for f in self.fields
+                if f.get("required") and not prof.get(f["key"])]
+
+    def _absorb_profile(self, sid: str, sess: dict[str, Any],
+                        text: str) -> dict[str, Any]:
+        """跳过表单后，从患者自己的话里补回性别 / 年龄。
+
+        只认明确说法（"42岁"、"男，…"），宁可留空也不猜：病历抬头写错
+        年龄比空着更糟。已填过的字段一律不动。
+        """
+        prof = dict(sess.get("profile") or {})
+        missing = {str(f["key"]) for f in self.fields
+                   if f.get("required") and not prof.get(f["key"])}
+        if not missing:
+            return sess
+        got: dict[str, str] = {}
+        if "age" in missing:
+            m = re.search(r"(?:年龄\s*)?(\d{1,3})\s*岁", str(text or ""))
+            if m:
+                got["age"] = m.group(1)
+        if "gender" in missing:
+            m = re.search(r"(?:我是|性别是|性别)?\s*([男女])(?:性|士)?(?=[，,。、；;\s]|$)",
+                          str(text or ""))
+            if m:
+                got["gender"] = m.group(1)
+        if not got:
+            return sess
+        self.store.update(sid, profile=self.clean_profile({**prof, **got}))
+        return self.store.get(sid) or sess
+
+    def set_profile(self, sid: str, raw: dict[str, Any]) -> dict[str, Any]:
+        """问诊中途补填 / 修改基本信息，不新建会话。"""
+        sess = self.store.get(sid)
+        if not sess:
+            raise KeyError(sid)
+        allowed = {str(f["key"]) for f in self.fields}
+        prof = dict(sess.get("profile") or {})
+        for k, v in (raw or {}).items():
+            if k not in allowed:
+                continue
+            val = str(v or "").strip()
+            if val:
+                prof[k] = val
+            else:
+                prof.pop(k, None)     # 表单清空 = 真的删掉，别留着旧值
+        self.store.update(sid, profile=self.clean_profile(prof))
+        return self.view(self.store.get(sid) or sess)
+
+    def supplement(self, sid: str, text: str) -> dict[str, Any]:
+        """结束后继续补充信息：重新抽取并**重新生成**病历。
+
+        不清空旧病历——万一中途出错，医生端还能看到上一版。轮次预算已经
+        用满，_advance 会直接收网，所以这一句补充只被抽取，不会再多问一轮。
+        """
+        sess = self.store.get(sid)
+        if not sess:
+            raise KeyError(sid)
+        if sess["state"] == "emergency":
+            raise PermissionError("已触发急症提示，请立即就医，不能继续补充")
+        if sess["state"] != "done":
+            return self.reply(sid, text)
+        text = str(text or "").strip()
+        if not text:
+            return self.view(sess)
+        self.store.update(sid, state="asking")
+        self.store.add_turn(sid, "user", text)
+        return self._advance(sid, text)
+
     def view(self, sess: dict[str, Any], *, question: str = "",
              degraded: list[str] | None = None, note: str = "") -> dict[str, Any]:
         domain_key = str(sess.get("domain") or "") or self._domain_of(sess)
@@ -969,6 +1049,10 @@ class PrevisitEngine:
             # 界面出现"你可能得了 X"是越界。字段放在这里是因为病历生成和
             # 分诊要用同一份数据，藏起来不如摆明了注明用途。
             "dx": self._dx_view(sess),
+            # 完整度 / 待补档案 / 是否允许继续补充：结果页与侧栏共用。
+            "coverage": self._coverage(slots, merged),
+            "profile_missing": self._profile_missing(sess),
+            "can_supplement": sess["state"] == "done",
             "meta": {
                 "title": self.pv.get("title"),
                 "subtitle": self.pv.get("subtitle"),
@@ -1017,6 +1101,10 @@ class PrevisitEngine:
         merged = self._merge(sess.get("slots") or {}, got, slots)
         self.store.update(sid, slots=merged)
         sess = self.store.get(sid)
+
+        # 2.4) 跳过首屏表单的患者，性别 / 年龄在对话里顺手补齐。放在抽取
+        #      之后、图谱记账之前：补完的档案马上能参与本轮分诊。
+        sess = self._absorb_profile(sid, sess, text)
 
         # 2.5) 上一句图谱追问的答案先记账（有/没有/没答上来），再决定下一句。
         #     放在这里而不是最后：不记账的话，患者刚回答的"有咯血"永远进不
@@ -1553,6 +1641,16 @@ class PrevisitEngine:
             # 患者也会看到，"你可能存在 X"这种字样出现在患者界面上就是越界。
             # 医生端/接口需要时单独取这个字段。
             "clues": self._clues_text(sess),
+            # 患者原话全程留档：槽位是抽出来的结论，医生有时要看原话判断
+            # 抽得对不对。只放额外字段，不进 sections / text（患者界面不展示）。
+            "patient_turns": [
+                {"index": i + 1, "text": str(t.get("content") or "")}
+                for i, t in enumerate(sess.get("turns") or [])
+                if t.get("role") == "user"
+            ],
+            "coverage": self._coverage(use_slots, merged),
+            "missing": [str(s["label"]) for s in use_slots if not merged.get(s["key"])],
+            "edited": False,
         }
 
     def _clues_text(self, sess: dict[str, Any]) -> str:

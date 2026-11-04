@@ -18,6 +18,9 @@
   font-synthesis:none;
 }
 *{box-sizing:border-box}
+/* 作者样式里的 display:flex/grid 会盖掉 UA 的 [hidden]{display:none}，
+   结果页的编辑工具条就是这样自己冒出来的。统一兜住，别逐个类补。 */
+[hidden]{display:none !important}
 html,body{height:100%}
 body{
   margin:0;
@@ -281,33 +284,10 @@ body{
 .result-card.danger .urgency{background:rgba(248,113,113,.12);color:#fca5a5;border-color:var(--danger-line)}
 .report{font-size:13px;color:#cfe0f2;white-space:pre-wrap;line-height:1.65;margin:0}
 
-/* ---------------- 病历代 ---------------- */
-.sheet-wrap{width:100%;max-width:100%;animation:rise .3s ease both}
-.sheet{
-  background:linear-gradient(180deg,#f7fbff,#eef6fd);
-  color:#12243a;border-radius:12px;padding:22px 24px;
-  border:1px solid #cfe2f3;box-shadow:0 12px 34px rgba(0,0,0,.30);
-}
-.sheet-head{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;
-  padding-bottom:14px;margin-bottom:14px;border-bottom:1px dashed #b9d4ea}
-.sheet-head h3{margin:0;font-size:17px;letter-spacing:.5px;color:#0b3a56}
-.sheet-meta{margin:3px 0 0;font-size:11.5px;color:#6b8aa5}
-.sheet-actions{display:flex;gap:7px;flex:none}
-.sheet-actions button{
-  border:1px solid #b9d4ea;background:#fff;color:#255b7d;border-radius:8px;
-  padding:5px 11px;font-size:12px;cursor:pointer;transition:.16s;
-}
-.sheet-actions button:hover{background:#e8f4fd;border-color:#7fb6dc}
-.sheet .sec{margin:0 0 13px}
-.sheet .sec:last-of-type{margin-bottom:0}
-.sheet .sec h4{
-  margin:0 0 4px;font-size:11.5px;font-weight:700;letter-spacing:1.2px;
-  color:#4b7ea3;text-transform:none;
-}
-.sheet .sec p{margin:0;font-size:13.5px;line-height:1.7;white-space:pre-wrap;color:#16324a;word-break:break-word}
-.sheet-note{
-  margin:16px 0 0;padding-top:12px;border-top:1px dashed #b9d4ea;
-  font-size:11.5px;color:#6b8aa5;line-height:1.6;
+/* ---------------- 结果页病历脚注 ---------------- */
+.rv-note{
+  margin:16px 0 0;padding-top:12px;border-top:1px dashed var(--line2);
+  font-size:11.5px;color:var(--muted);line-height:1.6;
 }
 
 .disclaimer{color:#5f7693;font-size:11.5px;line-height:1.6;margin:0;padding:0 2px}
@@ -316,12 +296,77 @@ body{
   border-radius:11px;padding:12px 14px;font-size:13.5px;margin-top:12px;
 }
 
+/* ---------------- 结果页 / 档案补充 ---------------- */
+.pv-coverage{
+  display:flex;align-items:center;gap:12px;flex-wrap:wrap;
+  padding:9px 14px;border-bottom:1px solid var(--line);
+  font-size:12px;color:var(--muted);background:rgba(255,255,255,.02);
+}
+.cov-main{color:var(--teal);font-variant-numeric:tabular-nums}
+.cov-miss{color:#fcd34d}
+.link-btn{
+  margin-left:auto;border:0;background:transparent;color:var(--blue);
+  font-size:12px;cursor:pointer;padding:2px 0;
+  text-decoration:underline;text-underline-offset:3px;
+}
+.link-btn:hover{color:var(--teal)}
+.form-foot .ghost{padding:10px 18px}
+
+.result-view{display:flex;flex-direction:column;gap:14px;overflow:auto}
+.rv-head{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap}
+.rv-head h2{margin:0;font-size:20px;letter-spacing:.3px}
+.rv-head p{margin:4px 0 0;color:var(--muted);font-size:12.5px}
+.rv-actions{display:flex;gap:8px;flex-wrap:wrap}
+.rv-triage{
+  display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;
+  padding:16px 18px;border-color:rgba(45,212,191,.35);
+}
+.rv-triage .rv-dept{font-size:22px;font-weight:700;color:var(--teal)}
+.rv-triage .rv-urgency{
+  padding:3px 10px;border-radius:999px;font-size:12px;
+  border:1px solid var(--line2);color:var(--muted);background:rgba(255,255,255,.03);
+}
+.rv-triage .rv-danger{font-size:13px;color:#fca5a5;flex-basis:100%;line-height:1.7}
+.rv-triage.danger{border-color:var(--danger-line);background:linear-gradient(180deg,var(--danger-bg),rgba(42,18,24,.85))}
+.rv-triage.danger .rv-dept{color:var(--danger)}
+.rv-meta{font-size:12px;color:var(--muted);line-height:1.8;padding:0 2px}
+.rv-meta b{color:var(--text);font-weight:600}
+.rv-sheet{padding:18px 20px}
+.rv-sheet-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:14px}
+.rv-sheet-head h3{margin:0;font-size:15px;letter-spacing:.4px}
+.rv-tools{display:flex;gap:7px;flex-wrap:wrap}
+.rv-tools button{
+  border:1px solid var(--line2);background:rgba(255,255,255,.03);color:var(--muted);
+  padding:5px 11px;border-radius:9px;font-size:12px;cursor:pointer;transition:.18s;
+}
+.rv-tools button:hover{color:var(--text);border-color:var(--teal);background:rgba(45,212,191,.08)}
+.rv-sec{margin:0 0 14px;padding-bottom:12px;border-bottom:1px solid var(--line)}
+.rv-sec:last-child{border-bottom:0;margin-bottom:0;padding-bottom:0}
+.rv-sec h4{margin:0 0 5px;font-size:11.5px;letter-spacing:1px;color:var(--muted);font-weight:700}
+.rv-sec p{margin:0;font-size:13.5px;line-height:1.75;white-space:pre-wrap;word-break:break-word;color:var(--text)}
+#recordEdit{
+  width:100%;background:var(--bg2);color:var(--text);border:1px solid var(--line2);
+  border-radius:10px;padding:12px 14px;font:13.5px/1.75 inherit;resize:vertical;
+}
+.rv-edit-foot{display:flex;align-items:center;gap:9px;margin-top:12px;flex-wrap:wrap}
+.rv-saved{font-size:12px;color:var(--ok)}
+.rv-turns{
+  border:1px solid var(--line);border-radius:var(--radius);
+  background:var(--card);padding:12px 16px;font-size:12.5px;color:var(--muted);
+}
+.rv-turns summary{cursor:pointer;color:var(--blue)}
+.rv-turn-row{display:flex;gap:10px;padding:7px 0;border-top:1px solid var(--line);line-height:1.6}
+.rv-turn-row i{color:var(--muted);font-style:normal;flex:none;font-variant-numeric:tabular-nums}
+.rv-turn-row span{color:var(--text);word-break:break-word}
+
 /* ---------------- responsive ---------------- */
 @media (max-width:900px){
   .layout{grid-template-columns:1fr}
   .side{order:-1}
   .view{min-height:64vh}
   .chat-view{min-height:64vh}
+  .result-view{min-height:64vh}
+  .rv-sheet{padding:16px 14px}
   .brand-text p{display:none}
   .form-grid{grid-template-columns:1fr}
   .intake-view{padding:20px 18px}
@@ -329,11 +374,13 @@ body{
 
 @media print{
   body{background:#fff}
-  .topbar,.side,.composer,.hint,.msg,.chips,.stamp,.live,.pv-progress{display:none !important}
+  .topbar,.side,.composer,.hint,.msg,.chips,.stamp,.live,.pv-progress,
+  .pv-coverage,.rv-head,.rv-tools,.rv-actions,.rv-turns,.rv-edit-foot{display:none !important}
   .app{padding:0;max-width:none}
   .chat-view{border:0;box-shadow:none;background:#fff}
   .thread{padding:0;overflow:visible}
-  .sheet{box-shadow:none;border:0;padding:0}
+  .rv-sheet,.rv-triage{background:#fff;border:0;box-shadow:none;padding:0}
+  .rv-sec p,.rv-head h2,.rv-triage .rv-dept{color:#12243a}
 }
 
 /* 系统开了"减少动态效果"：入场、呼吸、光标全部停掉。

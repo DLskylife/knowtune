@@ -150,6 +150,21 @@ class ConfigReq(BaseModel):
     values: dict[str, Any] = Field(default_factory=dict)
 
 
+class ProfileReq(BaseModel):
+    # 中途补填基本信息：整份表单回传，空值表示删掉该项。
+    profile: dict[str, Any] = Field(default_factory=dict)
+
+
+class SupplementReq(BaseModel):
+    session_id: str = Field(min_length=1, max_length=64)
+    message: str = Field(min_length=1, max_length=2000)
+
+
+class RecordEditReq(BaseModel):
+    # 患者在结果页手改过的病历全文。只改这一栏，结构化 sections 仍是原始事实。
+    text: str = Field(min_length=1, max_length=20000)
+
+
 def _runtime(eng: PrevisitEngine) -> dict:
     """参数面板顶部那行"现在实际在用什么"。
 
@@ -295,6 +310,36 @@ def create_app(engine: PrevisitEngine | None = None) -> FastAPI:
         if not rec:
             raise HTTPException(409, "问诊尚未结束，病历还没生成")
         return rec
+
+    @app.patch("/api/previsit/profile/{sid}")
+    def patch_profile(sid: str, req: ProfileReq) -> dict:
+        """首屏跳过表单后，患者在对话里随时补填 / 修改基本信息。"""
+        try:
+            return eng.set_profile(sid, req.profile)
+        except KeyError:
+            raise HTTPException(404, "会话不存在") from None
+
+    @app.post("/api/previsit/supplement")
+    def supplement(req: SupplementReq) -> dict:
+        """结束后又想起一件事：重新抽取、重新生成病历，不新开会话。"""
+        try:
+            return eng.supplement(req.session_id, req.message.strip())
+        except KeyError:
+            raise HTTPException(404, "会话不存在") from None
+        except PermissionError as exc:
+            raise HTTPException(409, str(exc)) from None
+
+    @app.patch("/api/previsit/record/{sid}")
+    def patch_record(sid: str, req: RecordEditReq) -> dict:
+        """保存结果页上的手改病历。只改展示用全文，不动结构化分区。"""
+        sess = store.get(sid)
+        if not sess:
+            raise HTTPException(404, "会话不存在")
+        rec = sess.get("record")
+        if not isinstance(rec, dict):
+            raise HTTPException(409, "问诊尚未结束，病历还没生成")
+        store.update(sid, record={**rec, "text": req.text, "edited": True})
+        return eng.view(store.get(sid))
 
     return app
 

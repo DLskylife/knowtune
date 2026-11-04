@@ -22,6 +22,9 @@
     typeTimer: null,   // 打字机定时器：新消息来了要能立刻打断
     typeEl: null,      // 正在出字的那个气泡：被打断时要把它身上的光标去掉
     lastStamp: "",     // 上一条 AI 消息的时间戳：同一分钟内不重复写
+    editProfile: false,    // 表单此刻是「补档案」，不是「开新会话」
+    supplementing: false,  // 结果页点了继续补充：下一句走 supplement 端点
+    lastView: null,        // 最近一次响应，补档案时回填表单用
   };
 
   // 系统开了"减少动态效果"就不逐字、不淡入了：前庭功能敏感的人会被这类
@@ -38,9 +41,9 @@
     return r.json();
   }
 
-  async function postJSON(path, body) {
+  async function sendJSON(method, path, body) {
     const r = await fetch(path, {
-      method: "POST",
+      method,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
@@ -51,6 +54,8 @@
     }
     return data;
   }
+  const postJSON = (path, body) => sendJSON("POST", path, body);
+  const patchJSON = (path, body) => sendJSON("PATCH", path, body);
 
   /* ================================================================ 表单 */
   function fieldHTML(f) {
@@ -396,6 +401,21 @@
     }
   }
 
+  /* 跳过表单的患者要能随时看到「还差什么」。完整度取后端算的那一套，
+   * 不在前端另算一遍——两处口径不一致时，进度条和病历会对不上。 */
+  function renderCoverage(resp) {
+    const cov = resp.coverage || { filled: 0, total: 0, percent: 0 };
+    $("coverageText").textContent = cov.total
+      ? `档案采集 ${cov.filled}/${cov.total} 项 · ${cov.percent}%`
+      : "等待主诉";
+    const miss = resp.profile_missing || [];
+    const box = $("profileMissing");
+    box.hidden = !miss.length;
+    box.textContent = miss.length
+      ? `还差基本信息：${miss.map((m) => m.label).join("、")}（对话里直接说也行）`
+      : "";
+  }
+
   function renderProfile(list) {
     const filled = (list || []).filter((p) => p.filled);
     $("profileCard").hidden = !filled.length;
@@ -422,39 +442,7 @@
     box.textContent = "按 Enter 发送，Shift + Enter 换行";
   }
 
-  /* ---------------------------------------------------------------- 病历 */
-  function sheetHTML(rec, sid) {
-    const secs = (rec.sections || []).map((s) => `
-      <div class="sec">
-        <h4>${esc(s.label)}</h4>
-        <p>${esc(s.text)}</p>
-      </div>`).join("");
-    return `<div class="sheet">
-      <div class="sheet-head">
-        <div>
-          <h3>${esc(rec.title || "预问诊病历")}</h3>
-          <p class="sheet-meta">${esc(rec.created_at || "")} · 编号 ${esc(sid || "")}</p>
-        </div>
-        <div class="sheet-actions">
-          <button type="button" data-act="copy">复制</button>
-          <button type="button" data-act="download">下载 .txt</button>
-        </div>
-      </div>
-      ${secs}
-      ${rec.note ? `<p class="sheet-note">${esc(rec.note)}</p>` : ""}
-    </div>`;
-  }
-
-  function appendSheet(rec, sid) {
-    const wrap = document.createElement("div");
-    wrap.className = "sheet-wrap";
-    wrap.innerHTML = sheetHTML(rec, sid);
-    wrap.querySelector('[data-act="copy"]').addEventListener("click", (e) => copyRecord(rec, e.target));
-    wrap.querySelector('[data-act="download"]').addEventListener("click", () => downloadRecord(rec, sid));
-    thread.appendChild(wrap);
-    thread.scrollTop = thread.scrollHeight;
-  }
-
+  /* ---------------------------------------------------------------- 病历工具 */
   async function copyRecord(rec, btn) {
     const text = rec?.text || "";
     try {
@@ -477,17 +465,6 @@
     }
   }
 
-  function downloadRecord(rec, sid) {
-    const blob = new Blob([rec?.text || ""], { type: "text/plain;charset=utf-8" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `${(rec?.title || "预问诊病历")}_${sid || ""}.txt`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 3000);
-  }
-
   function showResult(resp) {
     const card = $("resultCard");
     const danger = resp.state === "emergency";
@@ -499,32 +476,147 @@
          <p class="report">${esc(resp.danger_message || "")}</p>`
       : `<div class="dept">${esc(resp.dept || "—")}</div>
          <div class="urgency">${esc(resp.urgency || "")}</div>
-         <p class="report">病历已生成，可在对话末尾查看、复制或下载。</p>`;
+         <p class="report">完整病历已在结果页，可编辑、复制或下载。</p>`;
+  }
+
+  /* ---------------------------------------------------------------- 结果页 */
+  function triageHTML(resp) {
+    const danger = resp.state === "emergency";
+    return danger
+      ? `<span class="rv-dept">请立即就医</span><span class="rv-urgency">急诊科</span>
+         <p class="rv-danger">${esc(resp.danger_message || "")}</p>`
+      : `<span class="rv-dept">${esc(resp.dept || "—")}</span>
+         <span class="rv-urgency">${esc(resp.urgency || "")}</span>`;
+  }
+
+  function recordHTML(rec) {
+    return (rec.sections || []).map((s) => `
+      <div class="rv-sec"><h4>${esc(s.label)}</h4><p>${esc(s.text)}</p></div>`).join("")
+      || '<div class="rv-sec"><p>病历暂不可用</p></div>';
+  }
+
+  function downloadAs(text, sid, ext, mime) {
+    const blob = new Blob([text], { type: mime });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `${(state.record?.title || "预问诊病历")}_${sid || ""}.${ext}`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 3000);
+  }
+
+  function markdownRecord(rec) {
+    const lines = [`# ${rec.title || "预问诊病历"}`, "",
+      `> 生成时间：${rec.created_at || ""} · 编号：${state.sessionId || ""}`, ""];
+    (rec.sections || []).forEach((s) => {
+      lines.push(`## ${s.label}`, "", String(s.text || ""), "");
+    });
+    if (rec.note) lines.push("---", "", rec.note);
+    return lines.join("\n");
+  }
+
+  function showResultPage(resp) {
+    state.record = resp.record || null;
+    state.supplementing = false;
+    $("chatView").hidden = true;
+    $("intakeView").hidden = true;
+    $("resultView").hidden = false;
+    $("btnBack").hidden = true;
+    const danger = resp.state === "emergency";
+    $("rvTitle").textContent = danger ? "请尽快就医" : "问诊已完成";
+    $("rvSub").textContent = danger
+      ? "系统识别到需要立即处理的情况，下面的信息可以带去急诊。"
+      : "下面是整理好的就诊摘要，可编辑、复制或下载带去给医生。";
+    const triage = $("rvTriage");
+    triage.classList.toggle("danger", danger);
+    triage.innerHTML = triageHTML(resp);
+    $("btnSupplement").hidden = Boolean(danger || !resp.can_supplement);
+
+    const cov = resp.coverage || {};
+    const rec = resp.record || {};
+    const userTurns = (resp.turns || []).filter((t) => t.role === "user").length;
+    $("rvMeta").innerHTML = [
+      cov.total ? `档案采集 <b>${cov.filled}/${cov.total}</b> 项` : "",
+      (rec.missing || []).length
+        ? `未采集 <b>${rec.missing.length}</b> 项：${esc(rec.missing.join("、"))}` : "",
+      userTurns ? `患者发言 <b>${userTurns}</b> 轮` : "",
+    ].filter(Boolean).join(" · ");
+
+    $("rvRecordTitle").textContent = rec.title || "预问诊病历";
+    $("rvBody").innerHTML = recordHTML(rec);
+    $("rvBody").hidden = false;
+    $("recordEdit").hidden = true;
+    $("rvEditFoot").hidden = true;
+    $("recordSaved").textContent = rec.edited ? "已保存过修改" : "";
+    $("rvNote").textContent = rec.note || "";
+    $("rvTurns").innerHTML = (rec.patient_turns || []).map((t) => `
+      <div class="rv-turn-row"><i>${t.index}.</i><span>${esc(t.text)}</span></div>`).join("")
+      || '<div class="rv-turn-row"><span>暂无记录</span></div>';
+    $("rvDisclaimer").textContent = state.meta?.disclaimer || "";
+    $("pvProgress").style.width = "100%";
+  }
+
+  function editRecord(on) {
+    if (!state.record) return;
+    $("recordEdit").hidden = !on;
+    $("rvBody").hidden = on;
+    $("rvEditFoot").hidden = !on;
+    if (on) {
+      $("recordEdit").value = state.record.text || "";
+      $("recordEdit").focus();
+    }
+  }
+
+  async function saveRecord() {
+    if (!state.record || !state.sessionId) return;
+    const text = $("recordEdit").value;
+    if (!text.trim()) return;
+    try {
+      await patchJSON(`api/previsit/record/${encodeURIComponent(state.sessionId)}`, { text });
+      state.record = { ...state.record, text, edited: true };
+      $("recordSaved").textContent = "已保存";
+      editRecord(false);
+    } catch (e) {
+      $("recordSaved").textContent = `保存失败：${e.message}`;
+    }
+  }
+
+  /* 结束后想起一件事：回到对话，下一句走 supplement 端点重新出病历。 */
+  function continueChat() {
+    $("resultView").hidden = true;
+    $("chatView").hidden = false;
+    $("btnBack").hidden = false;
+    state.supplementing = true;
+    unlock();
+    input.placeholder = "还想补充什么？例如用药、症状变化；病历会重新生成";
+    input.focus();
+    addMsg("assistant", "还有想补充的吗？说出来我会重新整理病历。");
+    followBottom(true);
   }
 
   function render(resp) {
+    state.lastView = resp;
     state.sessionId = resp.session_id;
     state.started = true;
     const ended = resp.state === "done" || resp.state === "emergency";
     renderDomain(resp.domain_label);
     renderRecord(resp.slot_status);
     renderProfile(resp.profile_status);
+    renderCoverage(resp);
     // 候选答案跟着"说完最后一句"再出现，不抢在打字前面
     renderThread(resp.turns, resp.report, () => {
       if (!ended) offerReplies(resp);
     });
     setHint(resp);
     if (ended) {
-      state.record = resp.record || null;
-      // 问诊结束：进度线走满。停在半格会让人以为"还有问题没问完"，
-      // 而实际是模型判断信息已经够了——档案里没填的那几项就是没问到的。
-      $("pvProgress").style.width = "100%";
       clearChips();
-      if (resp.record) appendSheet(resp.record, resp.session_id);
-      showResult(resp);
-      lock();
+      showResult(resp);       // 侧栏那张小卡仍给「科室 / 紧急度」
+      lock();                 // 结果页接管，对话输入框先锁上
+      showResultPage(resp);
     } else {
       $("resultCard").hidden = true;
+      $("resultView").hidden = true;
       unlock();
     }
   }
@@ -537,7 +629,9 @@
     const guess = guessReplies(lastAI?.content || state.welcome);
     if (guess.length) { addChips(guess); return; }
     if (!turns.length) { addChips(SAMPLE_REPLIES, { sample: true }); return; }
-    clearChips();
+    // 问句猜不出选项时，至少给「答不上来」的出口。患者说「不知道」和沉默
+    // 不是一回事：引擎会把明确不知道记账并跳过，不再重复追问同一格。
+    addChips(["没有", "不清楚", "想不起来了"]);
   }
 
   /* ================================================================ 交互 */
@@ -599,8 +693,10 @@
     showTyping();
     followBottom(true);
     try {
-      const resp = await postJSON("api/previsit/reply",
+      const path = state.supplementing ? "api/previsit/supplement" : "api/previsit/reply";
+      const resp = await postJSON(path,
         { session_id: state.sessionId, message: say });
+      state.supplementing = false;
       hideTyping();
       render(resp);
     } catch (e) {
@@ -617,26 +713,38 @@
     }
   }
 
-  async function startIntake(ev) {
-    ev.preventDefault();
-    if (state.busy) return;
-    const bad = validate();
-    if (bad) { showError(bad); return; }
-    clearError();
-    const profile = collectProfile();
+  function formMode(editing) {
+    state.editProfile = editing;
+    $("btnStart").textContent = editing ? "保存并返回问诊" : "开始问诊";
+    $("btnSkip").hidden = editing;
+    $("formNote").innerHTML = editing
+      ? "修改会立即写进当前这场问诊，不会新开会话。"
+      : '带 <span class="req">*</span> 的必填。信息只存在本机。';
+  }
 
+  function fillForm(profile) {
+    for (const f of state.meta?.profile_fields || []) {
+      const el = document.getElementById(`pf_${f.key}`);
+      if (el) el.value = profile?.[f.key] || "";
+    }
+    syncVisibility();
+  }
+
+  /* 首屏表单不再是门禁：点「跳过」照样开诊，缺的性别 / 年龄在对话里补，
+   * 也能随时从「补充基本信息」回来填。 */
+  async function begin(profile) {
     state.busy = true;
     $("btnStart").disabled = true;
     $("btnStart").textContent = "正在整理…";
     try {
-      // 不传 complaint：表单里没有这个字段了。后端收到空主诉会建一个空会话，
-      // 返回空 turns，前端显示欢迎语（"先说说您哪里不舒服"）并等患者开口。
       const resp = await postJSON("api/previsit/start", { profile });
       $("intakeView").hidden = true;
       $("chatView").hidden = false;
+      $("resultView").hidden = true;
       $("btnBack").hidden = false;
-      state.shown = 0;          // 新会话：thread 从零开始画
+      state.shown = 0;
       state.greeted = false;
+      state.supplementing = false;
       clearChips();
       render(resp);
       syncComposerIdle();
@@ -645,8 +753,53 @@
     } finally {
       state.busy = false;
       $("btnStart").disabled = false;
-      $("btnStart").textContent = "开始问诊";
+      formMode(false);
     }
+  }
+
+  async function saveProfile(profile) {
+    if (!state.sessionId) return;
+    state.busy = true;
+    $("btnStart").disabled = true;
+    $("btnStart").textContent = "正在保存…";
+    try {
+      const resp = await patchJSON(
+        `api/previsit/profile/${encodeURIComponent(state.sessionId)}`, { profile });
+      formMode(false);
+      $("intakeView").hidden = true;
+      $("chatView").hidden = false;
+      $("btnBack").hidden = false;
+      render(resp);
+    } catch (e) {
+      showError(`保存失败：${e.message}`);
+    } finally {
+      state.busy = false;
+      $("btnStart").disabled = false;
+      $("btnStart").textContent = state.editProfile ? "保存并返回问诊" : "开始问诊";
+    }
+  }
+
+  function openProfileEditor() {
+    if (!state.sessionId) return;
+    formMode(true);
+    fillForm(state.lastView?.profile || {});
+    $("chatView").hidden = true;
+    $("resultView").hidden = true;
+    $("intakeView").hidden = false;
+    $("btnBack").hidden = true;
+    clearError();
+    focusFirst();
+  }
+
+  async function startIntake(ev) {
+    ev.preventDefault();
+    if (state.busy) return;
+    const bad = validate();
+    if (bad) { showError(bad); return; }
+    clearError();
+    const profile = collectProfile();
+    if (state.editProfile) await saveProfile(profile);
+    else await begin(profile);
   }
 
   function autoGrow() {
@@ -656,16 +809,21 @@
 
   function toIntake() {
     $("chatView").hidden = true;
+    $("resultView").hidden = true;
     $("intakeView").hidden = false;
     $("btnBack").hidden = true;
     $("resultCard").hidden = true;
     $("profileCard").hidden = true;
+    formMode(false);
   }
 
   function restart() {
     state.sessionId = null;
     state.started = false;
     state.record = null;
+    state.lastView = null;
+    state.editProfile = false;
+    state.supplementing = false;
     state.shown = 0;
     state.greeted = false;
     clearInterval(state.typeTimer);
@@ -714,8 +872,25 @@
   });
   sendBtn.addEventListener("click", submit);
   $("intakeForm").addEventListener("submit", startIntake);
+  $("btnSkip").addEventListener("click", () => {
+    if (!state.busy && !state.editProfile) begin({});
+  });
   $("btnRestart").addEventListener("click", restart);
-  $("btnBack").addEventListener("click", toIntake);
+  $("btnRestart2").addEventListener("click", restart);
+  $("btnBack").addEventListener("click", openProfileEditor);
+  $("btnEditProfile").addEventListener("click", openProfileEditor);
+  $("btnSupplement").addEventListener("click", continueChat);
+  $("resultView").querySelector(".rv-tools").addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-act]");
+    if (!b || !state.record) return;
+    const act = b.dataset.act;
+    if (act === "edit") editRecord(true);
+    else if (act === "copy") copyRecord(state.record, b);
+    else if (act === "txt") downloadAs(state.record.text, state.sessionId, "txt", "text/plain;charset=utf-8");
+    else if (act === "md") downloadAs(markdownRecord(state.record), state.sessionId, "md", "text/markdown;charset=utf-8");
+  });
+  $("btnSaveRecord").addEventListener("click", saveRecord);
+  $("btnCancelRecord").addEventListener("click", () => editRecord(false));
   syncComposerIdle();
   init();
 })();
