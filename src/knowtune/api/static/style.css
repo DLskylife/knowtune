@@ -34,6 +34,17 @@
   --r: 9px;
   --r-lg: 14px;
 
+  /* 模块卡片基准（2026-11-04 统一）。首页 KPI、知识库统计条、模型卡、
+     站点卡、评测台卡、API 卡一律取这几个值：以前每个模块自己写 12px /
+     #05070a / #1a212e，五个视图放在一起像五套皮肤。改这里一处全站生效。 */
+  --card-bg: var(--surface);
+  --card-line: var(--line-soft);
+  --card-radius: var(--r-lg);
+  --card-pad-x: 15px;
+  --card-pad-y: 13px;
+  --card-head-bg: var(--surface-2);
+  --card-gap: 14px;
+
   --ctl: 32px;   /* 控件高度基准线：按钮/下拉/开关都对齐到这一条 */
   --tap: 36px;   /* 可点区域下限 */
   --sb: 288px;   /* 侧栏 */
@@ -1310,10 +1321,7 @@ input[type=number].num::-webkit-outer-spin-button { -webkit-appearance: none; ma
   gap: 10px;
 }
 .kpi {
-  background: var(--surface);
-  border: 1px solid var(--line-soft);
-  border-radius: 12px;
-  padding: 12px 14px 11px;
+  padding: 12px var(--card-pad-x) 11px;
 }
 .kpi .k { font-size: 11px; color: var(--text-3); letter-spacing: .3px; }
 .kpi b {
@@ -1327,11 +1335,14 @@ input[type=number].num::-webkit-outer-spin-button { -webkit-appearance: none; ma
 .split { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
 @media (max-width: 1120px) { .split { grid-template-columns: 1fr; } }
 
+.card, .svc-card, .site-block, .ev-card, .gateway-card, .kpi, .stat-strip {
+  --card-bg: var(--surface);
+  background: var(--card-bg);
+  border: 1px solid var(--card-line);
+  border-radius: var(--card-radius);
+}
 .card {
-  background: var(--surface);
-  border: 1px solid var(--line-soft);
-  border-radius: var(--r-lg);
-  padding: 13px 15px 14px;
+  padding: var(--card-pad-y) var(--card-pad-x) calc(var(--card-pad-y) + 1px);
   min-width: 0;
 }
 .card + .card { margin-top: 12px; }
@@ -1394,19 +1405,13 @@ input[type=number].num::-webkit-outer-spin-button { -webkit-appearance: none; ma
   gap: 10px;
 }
 .svc-card {
-  background: var(--surface);
-  border: 1px solid var(--line-soft);
-  border-radius: 12px;
-  padding: 12px 14px 13px;
+  padding: 12px var(--card-pad-x) var(--card-pad-y);
   display: flex; flex-direction: column; gap: 5px;
   min-width: 0;
-  /* 同一行的卡片等高、动作按钮贴底：卡片内容多少不一（有的多一行"缺配置"），
-     不统一就会看到一排高低不齐的按钮，像没对齐的表格。 */
-  min-height: 152px;
-}
-.svc-card.active {
-  border-color: rgba(91, 140, 255, .42);
-  background: linear-gradient(180deg, rgba(91, 140, 255, .07), transparent 60%), var(--surface);
+  /* 同一行的卡片等高：卡片内容多少不一（有的多一行"缺配置"、有的多一行
+     密钥状态），不统一就会看到一排高低不齐的卡片，像没对齐的表格。
+     底部那个「设为当前使用」按钮已经删了，这个下限只负责等高。 */
+  min-height: 132px;
 }
 .svc-card header { display: flex; align-items: center; gap: 7px; min-width: 0; }
 .svc-card header b { font-size: 13px; }
@@ -1467,13 +1472,11 @@ input[type=number].num::-webkit-outer-spin-button { -webkit-appearance: none; ma
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
   gap: 1px;
-  background: var(--line-soft);
-  border: 1px solid var(--line-soft);
-  border-radius: 12px;
+  background: var(--card-line);
   overflow: hidden;
-  margin-bottom: 14px;
+  margin-bottom: var(--card-gap);
 }
-.stat-strip .st { background: var(--surface); padding: 11px 14px; }
+.stat-strip .st { background: var(--card-bg); padding: 11px var(--card-pad-x); }
 .stat-strip .st .k { font-size: 11px; color: var(--text-3); }
 .stat-strip .st b {
   display: block; font-size: 17px; font-weight: 600;
@@ -1919,33 +1922,6 @@ input[type=number].num::-webkit-outer-spin-button { -webkit-appearance: none; ma
 /* 侧栏知识库行的编辑按钮 */
 .kb-item .act { flex: none; }
 
-/* 顶部「当前使用」条：全局就一套配置，它由「后端 + 模型」两段组成。
-   以前只有卡片角上一个小小的「当前」徽标，模型名散在卡片里，用户看不出
-   现在到底在跑什么，也找不到地方改。 */
-.cur-bar {
-  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-  justify-content: space-between;
-  padding: 10px 12px; margin-bottom: 10px;
-  background: linear-gradient(180deg, rgba(91, 140, 255, .10), transparent 70%), var(--surface);
-  border: 1px solid rgba(91, 140, 255, .35);
-  border-radius: 12px;
-}
-.cur-main { display: flex; align-items: center; gap: 7px; min-width: 0; flex-wrap: wrap; }
-.cur-label { font-size: 11px; color: var(--text-3); letter-spacing: .04em; }
-.cur-main select {
-  height: 30px; min-width: 0; max-width: 240px;
-  background: var(--surface-2); color: var(--text);
-  border: 1px solid var(--line); border-radius: 8px;
-  font-size: 12px; padding: 0 8px;
-}
-.cur-main select#curModel {
-  font-family: var(--mono); font-size: 11.5px; max-width: 320px;
-}
-.cur-sep { color: var(--text-3); }
-.cur-state { font-size: 11.5px; color: var(--text-3); white-space: nowrap; }
-.cur-side { display: flex; gap: 6px; }
-.cur-bar .ghost-btn { height: 28px; font-size: 11.5px; }
-
 /* 卡片头部的小图标按钮：一颗只做一个动作，比四个中文按钮挤一行清爽，
    而且中文按钮在窄卡片里会换行，卡片高度就参差了。 */
 .icon-btn {
@@ -1961,15 +1937,6 @@ input[type=number].num::-webkit-outer-spin-button { -webkit-appearance: none; ma
 .icon-btn[disabled] { opacity: .3; cursor: not-allowed; }
 .svc-card header .sp { flex: 1 1 auto; }
 .svc-card .msg .ago { font-size: 10.5px; color: var(--text-3); opacity: .75; }
-.svc-card .use-btn { align-self: flex-start; margin-top: auto; }
-/* 当前卡片没有"设为当前"按钮，用一个同高的静态标签占位，否则这一格的
-   内容会整体缩上去，和旁边几张对不齐。 */
-.svc-card .cur-tag {
-  align-self: flex-start; margin-top: auto;
-  font-size: 11px; color: var(--accent);
-  border: 1px dashed rgba(91, 140, 255, .45);
-  border-radius: 6px; padding: 3px 8px;
-}
 .launch-fold { margin-top: 12px; }
 .launch-fold > summary {
   cursor: pointer; font-size: 12.5px; color: var(--text-2);
@@ -2301,10 +2268,7 @@ input[type=number].num::-webkit-outer-spin-button { -webkit-appearance: none; ma
    `background: var(--panel-2)`，而整套 token 里根本没有这个变量，也没有
    fallback——于是站点卡一直是透明底，和页面糊成一片，只剩一圈边框。 */
 .site-block {
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--r-lg);
-  margin-bottom: 14px;
+  margin-bottom: var(--card-gap);
   overflow: hidden;
   transition: opacity .15s, border-color .15s;
 }
@@ -2312,9 +2276,9 @@ input[type=number].num::-webkit-outer-spin-button { -webkit-appearance: none; ma
 
 .sbk-head {
   display: flex; align-items: center; justify-content: space-between;
-  gap: 12px; padding: 11px 16px;
-  background: var(--surface-2);
-  border-bottom: 1px solid var(--line-soft);
+  gap: 12px; padding: 11px var(--card-pad-x);
+  background: var(--card-head-bg);
+  border-bottom: 1px solid var(--card-line);
 }
 .sbk-id { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
 .sbk-name { font-size: 14px; font-weight: 600; letter-spacing: .2px; }
@@ -2562,3 +2526,309 @@ input[type=number].num::-webkit-outer-spin-button { -webkit-appearance: none; ma
 .pr-hist + .pr-hist { border-top: 1px solid var(--line-soft); }
 .pr-hist-ts { font-family: var(--mono); color: var(--text-3); flex: none; }
 .pr-hist-why { flex: 1; color: var(--text-2); min-width: 0; }
+
+/* ------------------------------------------------------- 预问诊参数面板 */
+/* 卡片上那排「现在到底在用什么」的胶囊。参数多，逐行写会占掉半屏。 */
+.pv-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.pv-chip {
+  display: inline-flex; align-items: baseline; gap: 6px;
+  padding: 4px 9px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--surface-2);
+  font-size: 11.5px; color: var(--text-2); max-width: 100%;
+}
+.pv-chip i { font-style: normal; font-size: 10.5px; color: var(--text-3); flex: none; }
+.pv-chip.warn { border-color: rgba(232, 163, 61, .4); color: var(--warn); }
+
+/* 弹窗里的分组：每组之间留一条细线，别让二十几个字段糊成一片。 */
+.pv-groups { display: flex; flex-direction: column; gap: 4px; }
+.pv-group { padding: 12px 0 4px; }
+.pv-group + .pv-group { border-top: 1px solid var(--line-soft); }
+.pv-group-head {
+  display: flex; align-items: baseline; gap: 10px;
+  flex-wrap: wrap; margin-bottom: 9px;
+}
+.pv-group-head b { font-size: 12.5px; font-weight: 600; }
+.pv-group-head .hint { font-size: 11px; color: var(--text-3); }
+.pv-rt {
+  margin: 0 0 10px; padding: 8px 10px; border-radius: 8px;
+  border: 1px dashed var(--line); background: var(--surface-2);
+  font-size: 11.5px; color: var(--text-2);
+}
+.pv-chg {
+  margin-left: 6px; padding: 0 5px; border-radius: 4px;
+  background: rgba(91, 140, 255, .14); color: var(--accent);
+  font-size: 10px; font-weight: 500;
+}
+.form-row.full { grid-column: 1 / -1; }
+.form-row.full textarea { font-family: var(--mono); font-size: 11.5px; line-height: 1.7; }
+/* 长路径 / 长代码在弹窗里必须能断行：绝对路径被裁掉一截，看起来像排版故障。 */
+#modalBody .hint code, #modalBody code {
+  word-break: break-all; overflow-wrap: anywhere;
+}
+
+/* 大弹窗：外层 .modal-box 已经是 flex column + max-height:86vh、滚动交给
+   #modalBody 了（见上面「弹窗内容可能比屏幕高」那段）。这里只补两条，
+   别再给 .modal-box 加 overflow——那会把它自己也变成滚动容器，
+   #modalBody 的 min-height:0 立刻失效，内容直接被裁掉且没有滚动条。
+   .modal 改成 flex 起手靠上：一屏放不下时，"表单从屏幕顶上开始"比
+   "上下各切一半"好得多。 */
+.modal { display: flex; align-items: flex-start; justify-content: center; padding: 24px; }
+.modal-box { margin: auto; }
+/* 数字输入框的上下箭头在暗色下几乎看不见，还挤占数字的位置 */
+#modalBody input[type=number]::-webkit-inner-spin-button,
+#modalBody input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+
+/* ---------------------------------------------------------- 模型评测卡（近黑）
+   站点页其余卡都是 --surface 那一档的灰，这张卡刻意再黑一档：它是仪表盘，
+   不是入口列表里的一条，颜色差本身就把"这一块是另一类东西"说清楚了。
+
+   里层所有信息都关进小格子：档案一档一框、产出三个计数框、流程三步、环境
+   三行。之前只有两行胶囊挂在标题下面，卡片中间空出一大截，看起来像没加载
+   完——"空"不是留白的问题，是信息没有落进可见的容器里。 */
+/* 统一前这块是另起炉灶的「黑卡」：#05070a 底、两层渐变、34px 投影、
+   一整组 --ev-* 私有线色，跟上面所有 --surface 模块完全不是一套皮肤。
+   现在只保留顶边那一条强调线当识别标记，其余全部并回卡片基准。 */
+.ev-card {
+  position: relative;
+  margin-bottom: var(--card-gap);
+  overflow: hidden;
+  color: var(--text);
+}
+/* 顶边一条渐变：和上面的卡片贴在一起时，需要一条明确的"起点"。 */
+.ev-card::before {
+  content: ""; position: absolute; inset: 0 0 auto 0; height: 2px;
+  background: linear-gradient(90deg, var(--accent), var(--ok) 58%, transparent 96%);
+  opacity: .85;
+}
+
+.ev-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; padding: 11px var(--card-pad-x);
+  border-bottom: 1px solid var(--card-line);
+  background: var(--card-head-bg);
+}
+.ev-id { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.ev-name { font-size: 14px; font-weight: 600; letter-spacing: .2px; color: var(--text); }
+.ev-dim {
+  font-size: 11.5px; color: var(--text-3); font-variant-numeric: tabular-nums;
+}
+.ev-dim.warn { color: var(--warn); }
+/* 状态灯：徽章已经写了"运行中"，再加一个点是为了在余光里也能看出死活。 */
+.ev-led {
+  width: 7px; height: 7px; flex: none; border-radius: 50%;
+  background: var(--surface-3); box-shadow: 0 0 0 3px rgba(120, 130, 145, .08);
+}
+.ev-led.on {
+  background: var(--ok);
+  box-shadow: 0 0 0 3px rgba(62, 207, 142, .14), 0 0 10px rgba(62, 207, 142, .5);
+}
+
+.ev-url {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 8px var(--card-pad-x); border-bottom: 1px solid var(--card-line);
+  background: var(--card-head-bg);
+  font-family: var(--mono); font-size: 11.5px;
+}
+.ev-url-k {
+  font-family: inherit; font-size: 10px; letter-spacing: 1px;
+  text-transform: uppercase; color: var(--text-3);
+}
+.ev-url a { color: var(--accent); text-decoration: none; }
+.ev-url a:hover { text-decoration: underline; }
+.ev-url-note { font-family: inherit; font-size: 11px; color: var(--text-3); }
+.ev-url-note.warn { color: var(--warn); }
+.ev-flow {
+  margin-left: auto; font-family: inherit; font-size: 11px; color: var(--text-3);
+}
+
+/* 左档案、右两框。窄屏塌成一列：档案名 + 题数那一行挤成两行比截断难看得多。 */
+.ev-body {
+  display: grid; grid-template-columns: minmax(0, 1.12fr) minmax(0, 1fr);
+  gap: 12px; padding: 12px var(--card-pad-x) var(--card-gap); align-items: start;
+}
+.ev-col { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+
+.ev-box {
+  padding: 11px 12px 12px; border-radius: var(--r);
+  border: 1px solid var(--card-line); background: var(--card-head-bg);
+}
+.ev-box-head {
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  margin-bottom: 10px;
+  font-size: 10.5px; font-weight: 600; letter-spacing: 1px;
+  text-transform: uppercase; color: var(--text-3);
+}
+.ev-box-head span {
+  font-size: 11px; font-weight: 400; letter-spacing: 0;
+  text-transform: none; color: var(--text-3);
+}
+.ev-empty { font-size: 11.5px; color: var(--warn); line-height: 1.6; }
+
+/* 档案：一张一个框，悬停抬一档描边。维度名塞进 title，框里只留前三个。 */
+.ev-profs { display: grid; gap: 8px; }
+.ev-prof {
+  padding: 8px 10px 9px; border-radius: var(--r);
+  border: 1px solid var(--card-line);
+  background: var(--card-head-bg);
+  transition: border-color .12s, background .12s;
+}
+.ev-prof:hover { border-color: var(--accent); background: var(--accent-soft); }
+.ev-prof-top { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.ev-prof-top b {
+  font-size: 12.5px; font-weight: 600; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ev-prof-key { flex: none; font-family: var(--mono); font-size: 10px; color: var(--text-3); }
+.ev-prof-meta { display: flex; align-items: baseline; margin-top: 3px; }
+.ev-prof-meta em {
+  font-style: normal; font-size: 11px; color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+.ev-prof-meta em + em::before { content: "·"; margin: 0 7px; color: var(--text-3); }
+.ev-prof-dims {
+  margin-top: 4px; font-size: 10.5px; color: var(--text-3);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* 产出计数：数字是重点，用等宽、大一档；说明压到 10.5px 不让它抢戏。 */
+.ev-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.ev-stat {
+  min-width: 0; padding: 8px 10px 9px; border-radius: var(--r);
+  border: 1px solid var(--card-line); background: var(--card-head-bg);
+}
+.ev-stat b {
+  display: block; font-family: var(--mono); font-size: 19px; line-height: 1.1;
+  font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums;
+}
+.ev-stat.hot b { color: var(--ok); }
+.ev-stat span { display: block; margin-top: 3px; font-size: 11px; color: var(--text-2); }
+.ev-stat i { display: block; margin-top: 1px; font-style: normal; font-size: 10.5px; color: var(--text-3); }
+
+/* 运行环境：和上面的计数之间用一条虚线断开——一个是"有什么"，一个是"跑在哪"。 */
+.ev-env {
+  display: flex; flex-direction: column; gap: 1px;
+  margin-top: 10px; padding-top: 9px; border-top: 1px dashed var(--card-line);
+}
+.ev-env-row {
+  display: grid; grid-template-columns: 46px minmax(0, 1fr);
+  gap: 8px; align-items: baseline; padding: 2px 0;
+}
+.ev-env-k { font-size: 11px; color: var(--text-3); }
+.ev-env-v {
+  font-size: 11px; color: var(--text-2); min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ev-env-v.mono { font-family: var(--mono); font-size: 10.5px; }
+
+/* 三步流程：序号做成方块，和档案框、计数框同一种"格子语言"。 */
+.ev-steps { display: grid; gap: 7px; }
+.ev-step {
+  display: grid; grid-template-columns: 20px 32px minmax(0, 1fr);
+  gap: 8px; align-items: baseline; min-width: 0;
+}
+.ev-step-n {
+  display: flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; border-radius: var(--r-sm);
+  border: 1px solid var(--card-line); background: var(--accent-soft);
+  font-family: var(--mono); font-size: 10.5px; color: var(--accent);
+  transform: translateY(1px);
+}
+.ev-step-t { font-size: 11.5px; font-weight: 600; color: var(--text); }
+.ev-step-d { font-size: 11px; color: var(--text-3); line-height: 1.55; }
+
+.ev-err {
+  margin: 0 var(--card-pad-x) var(--card-gap); padding: 7px 10px; border-radius: var(--r-sm);
+  border: 1px solid rgba(242, 85, 90, .32); background: rgba(242, 85, 90, .08);
+  color: var(--err); font-size: 11.5px; line-height: 1.65;
+}
+
+@media (max-width: 1100px) {
+  .ev-body { grid-template-columns: minmax(0, 1fr); }
+  .ev-flow { margin-left: 0; }
+}
+
+/* ------------------------------------------------------- API 接入固定地址 */
+
+.gateway-card { margin-bottom: var(--card-gap); }
+.gateway-card .kb-actions { margin-bottom: 8px; }
+.gw-line {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 5px 0; border-bottom: 1px solid var(--card-line);
+}
+.gw-line:last-of-type { border-bottom: none; }
+.gw-line > .hint { min-width: 62px; }
+.gw-line code {
+  font-family: var(--mono); font-size: 12px; color: var(--accent);
+  background: var(--card-head-bg); border: 1px solid var(--card-line);
+  border-radius: var(--r-sm); padding: 3px 7px; word-break: break-all;
+}
+.gateway-card .launch { margin: 8px 0 0; padding-right: 11px; }
+.gateway-card .pick {
+  display: flex; align-items: center; gap: 6px;
+  margin-top: 10px; color: var(--text-2); font-size: 12px;
+}
+.gateway-card .pick input { accent-color: var(--accent); }
+
+/* ---------------------------------------------------------------------------
+   统一层（2026-11-04）：五个视图共用的间距 / 颜色 / 卡片零件。
+   以前每个 renderXxx 都往模板里塞 style="margin-top:8px" 这类硬编码，
+   同一个「12px」在五个页面里写了五遍，还夹着 #333b4a 这种早就废掉的色号。
+   间距一律取刻度，颜色一律取 token，模板里只留语义类名。
+   ------------------------------------------------------------------------- */
+
+.u-mt3 { margin-top: 3px; }
+.u-mt4 { margin-top: 4px; }
+.u-mt6 { margin-top: 6px; }
+.u-mt8 { margin-top: 8px; }
+.u-mt10 { margin-top: 10px; }
+.u-mt12 { margin-top: 12px; }
+.u-ml6 { margin-left: 6px; }
+.u-mb8 { margin-bottom: 8px; }
+.u-mb12 { margin-bottom: 12px; }
+.u-my8 { margin: 8px 0; }
+.u-mb12-top8 { margin: 8px 0 12px; }
+.u-neg4-top6 { margin: -4px 0 6px; }
+.u-mb12-0 { margin: 0 0 12px; }
+.u-col2 { grid-column: span 2; }
+.u-err { color: var(--err); }
+.u-warn { color: var(--warn); }
+.u-dim { color: var(--text-3); font-size: 11px; }
+.u-mono { font-family: var(--mono); font-size: 11.5px; }
+.u-btn-on { color: var(--text); border-color: var(--card-line); }
+
+/* 「模型入口」行：站点页预问诊卡 / 评测台卡共用同一套框，视觉上和
+   模型服务页的 API 卡片是同一个零件。 */
+.gw-inline {
+  padding: 9px var(--card-pad-x) 10px;
+  border-bottom: 1px solid var(--card-line);
+  background: var(--card-head-bg);
+}
+.gw-inline-head {
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  font-size: 11px; font-weight: 600; letter-spacing: .3px;
+  color: var(--text-2); margin-bottom: 6px;
+}
+.gw-inline-head span { font-weight: 400; color: var(--text-3); }
+.gw-inline-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.mono-url {
+  font-family: var(--mono); font-size: 12px; color: var(--accent);
+  background: var(--card-bg); border: 1px solid var(--card-line);
+  border-radius: var(--r-sm); padding: 3px 7px; word-break: break-all;
+}
+.gw-src {
+  display: inline-flex; align-items: center; height: 18px; padding: 0 7px;
+  border-radius: 20px; font-size: 10.5px; white-space: nowrap;
+  background: var(--surface-3); color: var(--text-2);
+  border: 1px solid var(--card-line);
+}
+.gw-src.on {
+  background: rgba(62, 207, 142, .12); color: var(--ok);
+  border-color: rgba(62, 207, 142, .3);
+}
+.gw-inline .hint { font-size: 11px; margin-top: 5px; }
+
+/* 卡片标题行统一：首页 .card-head、站点 .sbk-head、评测台 .ev-head 同高、
+   同内边距、同底线，三个视图并排看不再像三个产品。 */
+.card-head, .sbk-head, .ev-head { min-height: 42px; }
+/* 首页日志标题里嵌了一层 .card-head 放两个小按钮，别让它也撑到 42px。 */
+.card-head .card-head { min-height: 0; }

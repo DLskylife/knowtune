@@ -21,6 +21,11 @@ import re
 from typing import Any
 
 from . import promptcfg
+from . import roles as roles_mod
+
+# 内置翻译模板里那段 few-shot 的标记（见 promptcfg.BUILTIN_TRANSLATE_USER）。
+# 用它判断"用户有没有自己改过模板"，比匹配整段靠谱。
+_BUILTIN_FEWSHOT = "مىزاج دېگەن نېمە؟"
 
 # ---------------------------------------------------------------- 字符集
 
@@ -139,7 +144,7 @@ _ECHO_MARKERS = ("源语言", "问题：", "译文", "翻译", "维吾尔语", "
                  "Translate", "Question:", "翻译结果", "以下是")
 
 
-def _clean_translation(raw: str, question: str) -> tuple[str, str]:
+def _clean_translation(raw: str, question: str, dst: str = "") -> tuple[str, str]:
     """从模型输出里抠出真正的译文。返回 `(译文, 丢弃原因)`，二者必有其一为空。
 
     这里每一种丢弃都是"宁可退回原文检索也不要拿指令去查库"，但它们以前的
@@ -168,7 +173,13 @@ def _clean_translation(raw: str, question: str) -> tuple[str, str]:
     if text == question.strip():
         return "", "模型原样抄回问题"
     if len(text) > max(120, len(question) * 3):
-        return "", f"译文过长（{len(text)} 字，原文 {len(question)} 字）"
+        # 维吾尔语用阿拉伯字母，一个汉字常对应三到五个字符：41 字的中文
+        # 译成 136 字是正常的（实测 hy-mt2-1.8b）。一刀切 3 倍会把**正确**
+        # 的译文判死，用户看到的是"翻译没生效"，而日志里写着"译文过长"。
+        # 语言已经判断对了就放行——这条规则本意是拦"模型写了一篇论文"，
+        # 而写论文的模型不会恰好只输出目标语言。
+        if not (dst and detect(text) == dst):
+            return "", f"译文过长（{len(text)} 字，原文 {len(question)} 字）"
     return text, ""
 
 
@@ -180,6 +191,7 @@ def translate_query(
     dst: str = "zh",
     provider: str | None = None,
     attempts: int = 2,
+    meta: dict[str, Any] | None = None,
 ) -> tuple[str, str | None]:
     """把问题翻译成知识库的语言，用于检索。返回 `(译文, 错误信息)`。
 
@@ -200,7 +212,19 @@ def translate_query(
     # 提示词本身可配（后台「模型 → 提示词 → 翻译」），这里只负责把语言名和原句
     # 填进模板。用 replace 而不是 str.format：用户模板里可能带 { } 字面量
     # （JSON 例子、模板语法），format 会当场 KeyError 而用户看不出错在哪。
-    sys_text, user_tpl = promptcfg.translate_messages(provider)
+    #
+    # 查模板要的是**后端名**，而 provider 可能是「后端::模型」——带 `::` 去查
+    # 永远查不到覆盖，会静默退回默认模板。翻译模型的提示词恰恰是最常改的一份。
+    base_provider, _ = roles_mod.split(provider)
+    sys_text, user_tpl = promptcfg.translate_messages(base_provider)
+    # 内置模板的 few-shot 只适用「维吾尔语 → 中文」：样例两边的文字是写死的
+    # （维语句子 → 中文句子）。方向反过来时它会变成「维吾尔语：气质是什么？」，
+    # 标签和内容对不上，小参数专用翻译模型会照着样例的语言走——实测
+    # hy-mt2-1.8b 拿这段提示词把四十字的中文答成了一句无关的维吾尔语。
+    # 只在模板仍是内置那份（样例还在）时替换，用户自己配的模板一律不动。
+    if src != "ug" and _BUILTIN_FEWSHOT in user_tpl:
+        user_tpl = ("把{src}翻译成{dst}，只输出译文，不要解释，不要保留原文。"
+                    "\n\n{question}")
     prompt = promptcfg.fill(user_tpl, src=src_name, dst=dst_name, question=question)
     # 第二次不再给例子：抄回的模型往往是被 few-shot 的最后一行"带跑"的，
     # 换成"只准出现目标语言字符"的硬约束更有效。
@@ -240,7 +264,11 @@ def translate_query(
         except Exception as exc:  # 翻译是加分项，不是必经环节
             return question, f"{type(exc).__name__}: {exc}"
 
-        text, why = _clean_translation(getattr(out, "text", None) or "", question)
+        # 实际用的模型名回填给调用方（只有显式要的人拿）：
+        # 本地后端对未知模型名会静默回落，配置值不能代表真正跑的是谁。
+        if meta is not None:
+            meta["model"] = str(getattr(out, "model", "") or "")
+        text, why = _clean_translation(getattr(out, "text", None) or "", question, dst)
         if text:
             return text, None
         last_why = why

@@ -160,6 +160,12 @@ body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
   border-color: var(--brand-line); color: var(--brand);
   background: var(--brand-soft); box-shadow: var(--shadow-sm);
 }
+/* 预问诊入口。外形沿用"新对话"，但用**虚线**边框区分：它不是开一个新会话，
+   而是跳到另一套前端（/previsit/）。两者长得一模一样会让人点错，点错之后
+   界面上又没有"返回"，只能靠浏览器后退——那是最容易被当成功能坏掉的情形。 */
+a.new-chat { text-decoration: none; }
+.new-chat.previsit-link { border-style: dashed; }
+.new-chat.previsit-link svg { stroke-width: 1.8; }
 
 .side-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 2px 8px 14px; }
 .side-scroll::-webkit-scrollbar { width: 8px; }

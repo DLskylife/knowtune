@@ -15,6 +15,8 @@ import shutil
 import threading
 import time
 import uuid
+
+import httpx
 from typing import Any
 from contextlib import asynccontextmanager
 from dataclasses import asdict
@@ -45,6 +47,7 @@ from ..ingest.pipeline import IngestPipeline, display_title
 from ..retrieve.engine import RetrievalEngine, RetrievalResult
 from ..retrieve.rerank import Reranker
 from .. import chatctx, kbconfig, logbus, modelcfg, promptcfg
+from .. import roles as roles_mod
 from .. import paths as paths_mod
 from .. import services as services_mod
 from .. import settings as settings_mod
@@ -488,6 +491,51 @@ state = AppState()
 app = FastAPI(title="KnowTune", version="0.1.0", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
+def _previsit_kb_id() -> int | None:
+    row = state.conn.execute(
+        "SELECT id FROM kb WHERE name=?", ("预问诊知识库",)
+    ).fetchone()
+    return int(row["id"]) if row else None
+
+
+def _kb_search_for_previsit(question: str, top_k: int = 6) -> list[dict]:
+    """给预问诊的进程内语义检索（不绕 HTTP）。
+
+    预问诊和后台在同一个进程里，走接口要多付 1.8 秒的请求开销，而检索本身
+    只要十几毫秒——这里直接调引擎，返回的结构和 /api/search/debug 的 final
+    对齐，预问诊侧不用区分两条路。
+    """
+    kb_id = _previsit_kb_id()      # 每次查一次：库可能被删了重建，id 会变
+    if kb_id is None:
+        return []                  # 库不在 → 预问诊退回关键词选域
+    cfg = state.effective_cfg(kb_id)
+    result = state.engine.search(
+        state.conn, question, kb_id=kb_id, top_k=top_k, rerank=False, cfg=cfg,
+    )
+    return [
+        {
+            "doc_title": c.doc_title,
+            "heading_path": c.heading_path,
+            "text": c.text,
+            "score": c.rerank_score if c.rerank_score is not None else (c.dense_score or 0.0),
+        }
+        for c in result.candidates
+    ]
+
+
+# 预问诊也挂在后台这个口（/previsit/），从侧栏「预问诊」直接进。
+# 和前台站点挂的是同一个应用工厂、同一个 Engine 单例：两边共用一份 SQLite
+# 档案，前台问了一半、后台接着看是同一份数据。
+# 挂载失败只影响这个入口，后台其余功能照常——所以吞异常，但必须留日志。
+try:
+    from ..previsit.app import create_app as _previsit_app
+    from ..previsit.app import set_kb_search as _set_kb_search
+    _set_kb_search(_kb_search_for_previsit)
+    app.mount("/previsit", _previsit_app())
+except Exception as _pv_exc:      # noqa: BLE001 - 入口失败不能拖垮整个后台
+    logbus.note(f"预问诊挂载失败，后台其余功能不受影响："
+                f"{type(_pv_exc).__name__}: {_pv_exc}", level="ERROR", source="api")
+
 
 # 静态资源绝不允许"启发式缓存"。FileResponse / StaticFiles 默认只带 ETag 和
 # Last-Modified、不带 Cache-Control，WebView 会按"距今时长的 10%"自作主张缓存
@@ -496,8 +544,24 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 # 本地管理端正确性优先：一律 no-cache（每次协商，命中就 304，几乎零开销）。
 @app.middleware("http")
 async def no_stale_static(request: Request, call_next):
-    resp = await call_next(request)
     path = request.url.path
+    # /v1 是给外部程序调的 OpenAI 兼容入口。浏览器里的第三方工具会先发
+    # OPTIONS 预检，这里直接放行；否则它们连 POST 都发不出去，还以为是
+    # 模型服务挂了。服务默认只监听 127.0.0.1，不需要凭据/Cookie。
+    if path.startswith("/v1/"):
+        cors = {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+            "Access-Control-Allow-Headers": "*",
+            "Access-Control-Max-Age": "600",
+        }
+        if request.method == "OPTIONS":
+            return Response(status_code=204, headers=cors)
+        resp = await call_next(request)
+        for k, v in cors.items():
+            resp.headers[k] = v
+        return resp
+    resp = await call_next(request)
     if path == "/" or path.startswith("/static/"):
         # 首页用 no-store：no-cache 只是"每次问问服务器"，某些内嵌 WebView
         # 连问都不问就直接给旧的，用户看到的是改版前的界面。
@@ -624,7 +688,11 @@ def list_models() -> dict:
         p["checked_at"] = probe.get("checked_at")
         # 探测回来的模型 id 列表必须带出去。之前这里只取了 status，前端于是只
         # 能显示"4 个模型可用"却点不到任何一个——用户得自己去 LM Studio 抄名字。
-        p["models"] = probe.get("models") or []
+        #
+        # 字段名是 `probed` 而不是 `models`：`models` 现在是配置里那份带
+        # path / port / 运行状态的清单，两者混用一个键会让卡片上的下拉
+        # 分不清"我配的"和"服务上有的"。
+        p["probed"] = probe.get("models") or []
         p["model_listed"] = probe.get("model_listed")
 
     # 探测到的模型并进扁平目录：那些是"服务上真实存在、只是我还没加进清单"的，
@@ -632,7 +700,7 @@ def list_models() -> dict:
     meta = {p["name"]: p for p in data["providers"]}
     seen = {(c["provider"], c["model"]) for c in data["catalog"]}
     for p in data["providers"]:
-        for mid in p["models"]:
+        for mid in p["probed"]:
             if (p["name"], mid) in seen:
                 continue
             seen.add((p["name"], mid))
@@ -676,7 +744,7 @@ def probe_url(req: ProbeUrlRequest) -> dict:
     tmp = ProviderCfg(
         base_url=clean,
         model=(req.model or "").strip() or "placeholder",
-        kind=req.kind if req.kind in modelcfg.KIND_MAP else "custom",
+        kind=req.kind,
     )
     # 弹窗里刚敲的密钥只挂在这个临时对象上，不进注册表、更不进配置文件。
     # 留空时带上后端名，探测会自动复用内存里已存的那份密钥。
@@ -694,14 +762,19 @@ def probe_url(req: ProbeUrlRequest) -> dict:
 class ModelUpsert(BaseModel):
     base_url: str = ""
     model: str = ""
-    kind: str = "custom"
+    kind: str = "openai"
     # None = 不改动现有密钥；"" = 清空；非空 = 设为新密钥。
     # 密钥只进内存（knowtune.secrets），永远不写 models.yaml。
     api_key: str | None = None
-    # 模型清单（人维护的"我打算用哪些模型"），None = 不动
+    # 模型清单（每个模型带 path/port/context），None = 不动。
+    # 旧字段名 model_list 继续接受：前端和第三方脚本可能还没跟上来。
+    models: list[dict] | None = None
     model_list: list[dict] | None = None
     # 是否把密钥记到本机。None = 不动现有设置；True = 写盘；False = 删掉盘上的
     remember: bool | None = None
+
+    def entries(self) -> list[dict] | None:
+        return self.models if self.models is not None else self.model_list
 
 
 @app.put("/api/models/{name}")
@@ -714,7 +787,7 @@ def upsert_model(name: str, req: ModelUpsert) -> dict:
     try:
         result = modelcfg.upsert(
             state.cfg, name, base_url=req.base_url, model=req.model, kind=req.kind,
-            model_list=req.model_list,
+            models=req.entries(),
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
@@ -779,7 +852,7 @@ def delete_model(name: str) -> dict:
         others = [n for n in providers if n != name]
         picked = min(
             others,
-            key=lambda n: not modelcfg.KIND_MAP.get(providers[n].kind or n, {}).get("local", False),
+            key=lambda n: not modelcfg.kind_of(providers[n].kind).get("local", False),
         )
         try:
             settings_mod.apply(state.cfg, {"generation.provider": picked})
@@ -799,6 +872,257 @@ def delete_model(name: str) -> dict:
     secrets_mod.drop(name)      # 后端没了，内存里的密钥也不该留着
     logbus.note(f"后端 {name} 已删除", level="WARNING", source="models")
     return {"ok": True, **result}
+
+
+# --------------------------------------------------------------- 本地模型实例
+
+
+@app.get("/api/models/local/scan")
+def scan_local_models(dirs: str = "", limit: int = 300) -> dict:
+    """扫 .gguf。`dirs` 用逗号分隔；不传就按 localmodels 的默认目录。"""
+    from .. import localmodels as local_mod
+
+    want = [d.strip() for d in (dirs or "").split(",") if d.strip()]
+    try:
+        found = local_mod.scan(want or None, limit=max(1, min(limit, 1000)))
+    except OSError as exc:
+        raise HTTPException(400, f"扫描失败：{exc}") from exc
+    return {
+        "models": [m.as_dict() for m in found],
+        "dirs": want or local_mod.default_dirs(),
+        "env": local_mod.describe_env(),
+    }
+
+
+class LocalAction(BaseModel):
+    model: str = Field(min_length=1, max_length=120)
+    port: int | None = None
+    ctx: int | None = None
+    ngl: int | None = None
+    # 127.0.0.1 = 只本机调；0.0.0.0 = 同一局域网也能调。
+    host: str = "127.0.0.1"
+
+
+@app.post("/api/models/{name}/start")
+def start_local_model(name: str, req: LocalAction, request: Request) -> dict:
+    """起这个端点下的某个本地模型，并把实例地址回写到端点配置。
+
+    端口可能由 localmodels 自动挑（模型没配 port 时），所以起完必须把 base_url
+    改回来——否则配置里写的是 8090、实际跑在 8091，下一次调用直接连不上。
+    """
+    from .. import localmodels as local_mod
+
+    p = state.cfg.generation.providers.get(name)
+    if p is None:
+        raise HTTPException(404, "端点不存在")
+    entry = p.entry(req.model)
+    if entry is None:
+        raise HTTPException(404, f"端点「{name}」下没有模型「{req.model}」")
+    if not entry.path:
+        raise HTTPException(400, f"「{entry.id}」没有本地路径（path），只能连、不能起")
+
+    inst_name = f"{name}/{entry.id}"
+    try:
+        inst = local_mod.start(
+            name=inst_name,
+            path=entry.path,
+            port=req.port or entry.port,
+            ctx=req.ctx or entry.context or local_mod.DEFAULT_CTX,
+            ngl=req.ngl,
+            alias=entry.id,
+            host=req.host,
+        )
+    except local_mod.LocalError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    entry.port = inst.port
+    p.base_url = inst.base_url
+    p.kind = "local"
+    if not (p.model or "").strip():
+        p.model = entry.id
+    modelcfg.persist(state.cfg)
+    services_mod.invalidate(name)
+    api = local_mod.api_info(inst)
+    gateway = str(request.base_url).rstrip("/") + "/v1"
+    logbus.note(f"本地实例已启动：{entry.id} @ {api['base_url']}"
+                f"（pid {inst.pid}）· 固定入口 {gateway}", source="models")
+    return {"ok": True, "instance": inst.as_dict(), "api": api,
+            "gateway": gateway, "listing": modelcfg.listing(state.cfg)}
+
+
+@app.post("/api/models/{name}/stop")
+def stop_local_model(name: str, req: LocalAction) -> dict:
+    from .. import localmodels as local_mod
+
+    entry = None
+    p = state.cfg.generation.providers.get(name)
+    if p is not None:
+        entry = p.entry(req.model)
+    inst_name = f"{name}/{(entry.id if entry else req.model)}"
+    try:
+        result = local_mod.stop(inst_name)
+    except OSError as exc:
+        raise HTTPException(400, f"停止失败：{exc}") from exc
+    services_mod.invalidate(name)
+    logbus.note(f"本地实例已停止：{inst_name}", source="models")
+    return {"ok": True, **result, "listing": modelcfg.listing(state.cfg)}
+
+
+@app.get("/api/models/local/status")
+def local_status() -> dict:
+    from .. import localmodels as local_mod
+
+    return {"instances": local_mod.running(), "env": local_mod.describe_env()}
+
+
+# ----------------------------------------------- 对外 OpenAI 兼容网关 /v1
+#
+# 存在的理由：本地实例「一个模型一个进程一个端口」，端口还可能因为配置的口被占
+# 而变化。让别的程序（dify / ccswitch / 脚本 / 预问诊站点）去记 8090、8091、
+# 8092 是不现实的。这里给一个**永远不变**的地址——主服务自己的 /v1——由它
+# 转发给当前在跑的实例。换模型、换端口、重启实例，外部调用方一个字都不用改。
+#
+# 支持显式指定：`/v1/chat/completions?provider=local`、请求头
+# `X-KnowTune-Provider: local`，或 body 里写 `model: "local::某模型"`。
+# 都没写就用当前活动端点；请求里的 model 命中别的端点清单时自动路由过去。
+
+
+def _gateway_target(request: Request, payload: dict) -> tuple[str, ProviderCfg, str]:
+    providers = state.cfg.generation.providers
+    want = (request.query_params.get("provider")
+            or request.headers.get("x-knowtune-provider") or "").strip()
+    model = str(payload.get("model") or "")
+
+    if not want and "::" in model:
+        base_name, real_model = roles_mod.split(model)
+        if base_name in providers:
+            want, payload["model"] = base_name, real_model
+            model = real_model
+    if not want and model:
+        for name, p in providers.items():
+            if p.entry(model) or p.model == model:
+                want = name
+                break
+    if not want:
+        want = state.cfg.generation.provider
+    if want not in providers or not want:
+        raise HTTPException(400, f"端点「{want or '（空）'}」不存在；"
+                                f"可用：{', '.join(sorted(providers)) or '（还没配任何端点）'}")
+
+    p = providers[want]
+    base = (p.base_url or "").rstrip("/")
+    if not base:
+        # 端点还没填地址，但它的本地模型已经跑起来了：用实例的真实地址。
+        from .. import localmodels as local_mod
+
+        for inst in local_mod.running().values():
+            if inst.get("state") == "running" and str(inst.get("name", "")).startswith(want + "/"):
+                base = str((inst.get("api") or {}).get("base_url") or "")
+                if base:
+                    break
+    if not base:
+        raise HTTPException(503, f"端点「{want}」没有可调用的地址："
+                                "先在「模型服务」页填 base_url，或点本地模型的「启动」。")
+    return want, p, base
+
+
+def _upstream_headers(p: ProviderCfg, name: str) -> dict[str, str]:
+    h = {"Content-Type": "application/json"}
+    key = p.api_key(name)
+    if key:
+        h["Authorization"] = f"Bearer {key}"
+    return h
+
+
+def _gateway_timeout() -> float:
+    t = getattr(getattr(state.cfg.generation, "timeout", None), "read", 120) or 120
+    return float(t)
+
+
+@app.get("/api/gateway")
+def gateway_info(request: Request) -> dict:
+    """给界面和文档用：现在有哪些能写死在别处的地址。"""
+    from .. import localmodels as local_mod
+
+    root = str(request.base_url).rstrip("/")
+    v1 = root + "/v1"
+    active = state.cfg.generation.provider
+    p = state.cfg.generation.providers.get(active)
+    model = (p.model if p else "") or ""
+    live = local_mod.running()
+    direct = [v["api"] for v in live.values()
+              if v.get("state") == "running" and v.get("api")]
+    curl = (
+        f'curl {v1}/chat/completions -H "Content-Type: application/json" '
+        f'-d \'{{"model": "{model}", "messages": [{{"role": "user", '
+        f'"content": "你好"}}]}}\''
+    ) if model else ""
+    return {
+        "base_url": v1,
+        "chat_url": v1 + "/chat/completions",
+        "models_url": v1 + "/models",
+        "provider": active, "model": model, "curl": curl,
+        "direct": direct,
+        "hint": "这个地址不随本地实例端口变化；?provider=<端点名> 或 model 里写"
+                " <端点名>::<模型名> 可指定后端。",
+    }
+
+
+@app.get("/v1/models")
+async def gateway_models(request: Request):
+    """OpenAI 客户端接入时第一个打的接口：告诉它有哪些模型。"""
+    name, p, base = _gateway_target(request, {})
+    try:
+        async with httpx.AsyncClient(timeout=_gateway_timeout(), trust_env=False) as c:
+            r = await c.get(base + "/models", headers=_upstream_headers(p, name))
+        if r.status_code < 400:
+            return Response(content=r.content, status_code=r.status_code,
+                            media_type=r.headers.get("content-type", "application/json"),
+                            headers={"X-KnowTune-Upstream": name})
+    except httpx.HTTPError:
+        pass
+    # 上游没起也别让客户端拿到 502：配置清单本身就是"有哪些模型"的可靠答案。
+    ids = [m.id for m in p.model_list]
+    if p.model and p.model not in ids:
+        ids.insert(0, p.model)
+    return JSONResponse({"object": "list", "data": [
+        {"id": mid, "object": "model", "owned_by": name} for mid in ids]},
+        headers={"X-KnowTune-Upstream": name})
+
+
+@app.post("/v1/chat/completions")
+@app.post("/v1/completions")
+async def gateway_chat(request: Request):
+    try:
+        payload = await request.json()
+    except ValueError as exc:
+        raise HTTPException(400, "请求体不是合法 JSON") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(400, "请求体必须是 JSON 对象")
+
+    name, p, base = _gateway_target(request, payload)
+    tail = "chat/completions" if request.url.path.endswith("chat/completions") else "completions"
+    url = base + "/" + tail
+    headers = _upstream_headers(p, name)
+    timeout = _gateway_timeout()
+
+    if payload.get("stream"):
+        async def relay():
+            async with httpx.AsyncClient(timeout=timeout, trust_env=False) as c:
+                async with c.stream("POST", url, json=payload, headers=headers) as r:
+                    async for chunk in r.aiter_raw():
+                        yield chunk
+        return StreamingResponse(relay(), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-cache",
+                                          "X-KnowTune-Upstream": name})
+    try:
+        async with httpx.AsyncClient(timeout=timeout, trust_env=False) as c:
+            r = await c.post(url, json=payload, headers=headers)
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, f"上游「{name}」连不上：{exc}") from exc
+    return Response(content=r.content, status_code=r.status_code,
+                    media_type=r.headers.get("content-type", "application/json"),
+                    headers={"X-KnowTune-Upstream": name})
 
 
 @app.post("/api/models/keys/clear")
@@ -2662,9 +2986,13 @@ def ask(req: AskRequest) -> Response:
     # deepseek 提问，401 报错却说"后端 siliconflow 密钥无效"，日志里也记成
     # siliconflow，等于"选哪个都是测当前那个"。
     gen_provider = req.provider or kb_cfg.generation.provider
+    # 角色值可能带「::模型」，模型优先级：请求显式指定 > 角色值里的 > 后端默认。
+    # 漏掉中间那层的话，界面显示"用的是 hy-mt2-1.8b"，实际发的是后端默认模型，
+    # 而且两边都不报错。
+    _ref_base, _ref_model = roles_mod.split(gen_provider)
     try:
-        _gen_name, _gen_prov = state.llm.resolve(gen_provider)
-        gen_model = req.model or _gen_prov.model
+        _gen_name, _gen_prov = state.llm.resolve(_ref_base or None)
+        gen_model = req.model or _ref_model or _gen_prov.model
     except llm_mod.LLMError:
         # 后端名不存在：不在这里拦（下面调用会给出同一份报错），只把名字留下来
         _gen_name, gen_model = gen_provider, req.model or ""
@@ -3292,8 +3620,6 @@ def get_model_roles() -> dict:
     界面上必须能看见"实际用了谁"：配了 hunyuan 却因为名字拼错回落到本地后端，
     用户只会觉得"翻译质量没变"，而看不出配置根本没生效。
     """
-    from .. import roles as roles_mod
-
     providers = state.cfg.generation.providers
     default = state.cfg.generation.provider
     items = []
@@ -3330,10 +3656,13 @@ def put_model_roles(req: RolesIn) -> dict:
         name = (name or "").strip()
         if not name:
             continue
-        if name not in known:
+        # 值的形态是「后端::模型」，只校验后端那半截；模型名写错留给真实调用去
+        # 打脸——把它一起拒掉，用户会看到"配了没生效"，还不如让请求报一次错。
+        base, model = roles_mod.split(name)
+        if base not in known:
             rejected.append(f"{role}={name}")
             continue
-        picked[role] = name
+        picked[role] = roles_mod.join(base, model)
     state.cfg.generation.roles = picked
     result = modelcfg.persist(state.cfg)
     logbus.note("模型角色已更新：" + (", ".join(f"{k}→{v}" for k, v in picked.items()) or "（全部清空）"),
@@ -3364,22 +3693,33 @@ def translate_test(req: TranslateTestIn) -> dict:
     name = req.provider.strip() or (state.cfg.generation.roles or {}).get("translate", "")
     if not name:
         raise HTTPException(400, "还没指定翻译模型：先在「前台站点 → 模型角色」里选一个")
-    if name not in providers:
-        raise HTTPException(400, f"后端 {name} 不存在或已删除")
+    base, _model = roles_mod.split(name)
+    if base not in providers:
+        raise HTTPException(400, f"后端 {base} 不存在或已删除")
     text = req.text.strip() or (
         "维吾尔医学认为人体有血液、黏液、黄胆汁、黑胆汁四种体液，"
         "体液失衡是疾病的主要原因。"
     )
     t0 = time.perf_counter()
+    meta: dict = {}
     out, err = lang_mod.translate_query(
-        state.llm, text, src=req.src, dst=req.dst, provider=name
+        state.llm, text, src=req.src, dst=req.dst, provider=name, meta=meta
     )
     ms = int((time.perf_counter() - t0) * 1000)
     # "译了个寂寞"也算失败：原文抄回来是 translate_query 的降级返回，不是成功
     ok = not err and bool(out.strip()) and out.strip() != text.strip()
+    want_model = _model or ""
+    actual_model = str(meta.get("model") or "")
+    # 本地后端（LM Studio）对不存在的模型名不报错，而是静默回落。这时候
+    # "测试通过"是最坏的结果：用户以为换了模型，实际跑的还是上一个。
+    # 只有实际名字和配置名字不同这一点能拆穿它，所以单独报出来。
+    warn = ""
+    if want_model and actual_model and actual_model != want_model:
+        warn = f"模型未生效：要求 {want_model}，实际跑的是 {actual_model}"
     return {
-        "ok": ok, "output": out, "error": err, "latency_ms": ms,
-        "provider": name, "src": req.src, "dst": req.dst,
+        "ok": ok and not warn, "output": out, "error": err, "latency_ms": ms,
+        "provider": name, "model": actual_model, "want_model": want_model,
+        "warn": warn, "src": req.src, "dst": req.dst,
     }
 
 
@@ -3658,6 +3998,47 @@ def delete_instance(name: str) -> dict:
     instcfg.remove(name)
     logbus.note(f"站点实例 {name} 已删除", level="WARNING", source="sites")
     return {"ok": True, "deleted": name}
+
+
+# ------------------------------------------------------------ 模型评测台
+# 它跑在 evals/.venv 里（Gradio 6 与主项目的依赖打架），所以是一个真的子进程，
+# 不走 InstanceManager。启停逻辑与"端口到底是谁的"判断都在 evalboard 里。
+
+@app.get("/api/evalboard")
+def evalboard_status() -> dict:
+    from ..frontsite import evalboard
+
+    return evalboard.status()
+
+
+@app.post("/api/evalboard/start")
+def evalboard_start(request: Request) -> dict:
+    from ..frontsite import evalboard
+
+    try:
+        return evalboard.start(gateway=str(request.base_url).rstrip("/") + "/v1")
+    except RuntimeError as exc:
+        raise HTTPException(500, str(exc)) from exc
+
+
+@app.post("/api/evalboard/stop")
+def evalboard_stop() -> dict:
+    from ..frontsite import evalboard
+
+    try:
+        return evalboard.stop()
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@app.post("/api/evalboard/restart")
+def evalboard_restart(request: Request) -> dict:
+    from ..frontsite import evalboard
+
+    try:
+        return evalboard.restart(gateway=str(request.base_url).rstrip("/") + "/v1")
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 @app.exception_handler(Exception)

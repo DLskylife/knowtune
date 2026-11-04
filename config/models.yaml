@@ -1,33 +1,25 @@
-# 后端注册表：只记录与 default.yaml 不同的条目 + 被删除的内置后端。
-# roles 是角色分工（哪个后端干翻译、哪个干输出），没配就所有活儿都归
-# 当前后端。由 Web UI 的「模型服务 / 站点」页维护，改完重启生效（或点重读）。
+# 端点注册表。只记录与 default.yaml 不同的条目。
+#
+# 出厂是空注册表：不预置任何云端端点，也不写本机模型路径。
+# 端点在后台「模型服务」页添加（自定义 OpenAI 地址，或扫描本地 .gguf）。
+# 该文件会被程序回写；本机真实配置请自己保管，不要提交含绝对路径的版本。
+#
+# providers:
+#   <名字>:                     小写字母数字，2-24 字符
+#     kind: local | openai      local 表示模型带 .gguf、本机能起
+#     base_url: http://...      OpenAI 兼容地址，末尾到 /v1
+#     model: <默认模型 id>
+#     api_key_env: <变量名>      可选；密钥也可以只放界面里
+#     models:
+#       - id: <发给接口的 model 字段>
+#         path: D:/models/x.gguf  本地 gguf；有这个才能点「启动」
+#         port: 8090              本机监听端口；不写就自动挑
+#         context: 4096           上下文长度
+#         max_output: 1024        单次输出上限
+#
+# roles: 哪个端点+模型干哪件事，值写成 `端点::模型`
+#   translate: local::qwen2.5-3b -- 翻译用
+#   generate:  local::qwen2.5-3b -- 生成答案用
 
-deleted:
-- openai
-providers:
-  lmstudio:
-    base_url: http://127.0.0.1:1235/v1
-    model: qwen3-1.7b-sft_v2
-    kind: lmstudio
-  deepseek:
-    base_url: https://api.deepseek.com
-    model: deepseek-flash
-    kind: deepseek
-    model_list:
-    - id: deepseek-v4-pro
-    - id: deepseek-flash
-  bailian:
-    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
-    model: kimi-k3
-    kind: bailian
-    model_list:
-    - id: glm-5.3
-    - id: deepseek-v4.1-flash
-    - id: kimi-k3
-  siliconflow:
-    base_url: https://api.siliconflow.cn/v1
-    model: Qwen/Qwen2.5-7B-Instruct
-    kind: openai
-    model_list:
-    - id: tencent/Hunyuan-MT-7B
-    - id: Qwen/Qwen2.5-7B-Instruct
+deleted: []
+providers: {}

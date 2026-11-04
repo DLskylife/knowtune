@@ -15,6 +15,7 @@ import re
 import time
 from dataclasses import dataclass
 from typing import Iterator
+from urllib.parse import urlsplit
 
 import httpx
 from tenacity import (
@@ -25,6 +26,7 @@ from tenacity import (
 )
 
 from ..config import Config, ProviderCfg
+from .. import roles as roles_mod
 from . import think
 
 PII_PATTERNS: dict[str, re.Pattern[str]] = {
@@ -93,6 +95,29 @@ def _is_retryable(exc: BaseException) -> bool:
     return False
 
 
+# 数据没出机器的判断只能看地址，不能看后端叫什么。以前这里是
+# `if name in {"vllm","lmstudio","mock"}`——用户把本地端点取名 `local` 就漏判，
+# 云端取名 `lmstudio` 反而跳过 PII 扫描。
+_LOCAL_HOSTS = {"127.0.0.1", "localhost", "0.0.0.0", "::1"}
+
+
+def _is_local_url(url: str | None) -> bool:
+    try:
+        return (urlsplit(url or "").hostname or "") in _LOCAL_HOSTS
+    except ValueError:
+        return False
+
+
+def _is_mock(name: str, prov: ProviderCfg) -> bool:
+    """mock 不是一种端点类型，是"还没有可用端点时验证链路"的替身。
+
+    判据看两样：端点名就叫 mock，或者（没有地址 + 模型名是 mock）。
+    """
+    if name == "mock":
+        return True
+    return not (prov.base_url or "").strip() and (prov.model or "").strip() == "mock"
+
+
 class LLMClient:
     def __init__(self, cfg: Config) -> None:
         self.cfg = cfg
@@ -105,10 +130,45 @@ class LLMClient:
         print(f"[llm] retry attempt={state.attempt_number} reason={exc!r}")
 
     def resolve(self, provider: str | None) -> tuple[str, ProviderCfg]:
-        name = provider or self.cfg.generation.provider
+        # 角色值可能是「后端::模型」，后端名只是前半截。在这里拆掉，而不是要求
+        # 每个调用方自己拆——漏一处就是"未知 provider"，而且报错信息里带着
+        # `::`，看起来像后端名字打错了，排查会跑偏。
+        name, _model = roles_mod.split(provider)
+        name = name or self.cfg.generation.provider
         if name not in self.cfg.generation.providers:
             raise LLMError(f"未知 provider: {name}")
         return name, self.cfg.generation.providers[name]
+
+    def _target(self, provider: str | None, model: str | None) -> tuple[str, ProviderCfg, str | None]:
+        """把「角色值 + 显式 model 参数」收敛成一个实际要发的 (后端, 配置, 模型)。
+
+        显式参数优先于角色值里带的模型：调用点自己指定的更具体。
+        """
+        ref, ref_model = roles_mod.split(provider)
+        name, prov = self.resolve(ref or None)
+        return name, prov, (model or ref_model or None)
+
+    def _clamp_tokens(self, prov: ProviderCfg, model: str, max_tokens: int | None) -> int | None:
+        """按模型清单里的 max_output 收一下输出预算。
+
+        hy-mt2-1.8b 的 context 只有 1000，而翻译链路的预算是按字数算的
+        （短句 2048 起步）。给一个 context 1000 的模型发 2048 的 max_tokens，
+        服务端要么截断、要么把提示词挤出去，输出直接跑偏——实测这段 40 字的
+        中文被它答成了一句无关的维吾尔语。选了小模型却不按它的规格发，
+        等于白选。
+
+        只在**显式指定模型**时收敛（调用方决定），不改默认路径的行为：
+        默认后端那套参数已经跑了很久，不该顺手一起动。
+        """
+        cap = None
+        for m in (prov.model_list or []):
+            if m.id == model:
+                cap = m.max_output or None
+                break
+        if not cap:
+            return max_tokens
+        want = self.cfg.generation.max_tokens if max_tokens is None else max_tokens
+        return min(want, cap)
 
     def _timeout(self) -> httpx.Timeout:
         t = self.cfg.generation.timeout
@@ -188,8 +248,8 @@ class LLMClient:
         return payload
 
     def _prepare(self, messages: list[dict], name: str, prov: ProviderCfg) -> list[dict]:
-        """云端出站前做 PII 处理；本地后端不动。"""
-        if name in {"vllm", "lmstudio", "mock"}:
+        """云端出站前做 PII 处理；本机地址不动（数据没出机器）。"""
+        if _is_local_url(prov.base_url) or _is_mock(name, prov):
             return messages
         policy = self.cfg.generation.pii_policy
         joined = "\n".join(m.get("content", "") for m in messages)
@@ -214,9 +274,11 @@ class LLMClient:
         max_tokens: int | None = None,
         reasoning: str | None = None,
     ) -> Iterator[str]:
-        name, prov = self.resolve(provider)
+        name, prov, model = self._target(provider, model)
+        if roles_mod.split(provider)[1] and model:
+            max_tokens = self._clamp_tokens(prov, model, max_tokens)
 
-        if name == "mock":
+        if _is_mock(name, prov):
             yield from self._mock_stream(messages)
             return
 
@@ -319,8 +381,10 @@ class LLMClient:
         max_tokens: int | None = None,
         reasoning: str | None = None,
     ) -> LLMResult:
-        name, prov = self.resolve(provider)
-        if name == "mock":
+        name, prov, model = self._target(provider, model)
+        if roles_mod.split(provider)[1] and model:
+            max_tokens = self._clamp_tokens(prov, model, max_tokens)
+        if _is_mock(name, prov):
             text = "".join(self._mock_stream(messages))
             return LLMResult(text=text, model="mock", provider=name, degraded=["mock"])
 
@@ -366,9 +430,13 @@ class LLMClient:
             raise LLMError(f"LLM 返回空 choices：{str(data)[:200]}")
         text = think.strip((choices[0].get("message") or {}).get("content") or "")
         usage = data.get("usage") or {}
+        # model 取响应里的，而不是 prov.model：LM Studio 对**不存在的模型名**
+        # 不报错，而是静默回落到上次加载的那个。若这里回填配置值，用户配了
+        # 一个拼错的模型名也能"测试通过"，返回的 provider 还写着他的名字——
+        # 界面上一片绿，实际跑的是别的模型。响应里的 model 是唯一能拆穿它的东西。
         return LLMResult(
             text=text,
-            model=prov.model,
+            model=str(data.get("model") or model or prov.model),
             provider=name,
             prompt_tokens=usage.get("prompt_tokens"),
             completion_tokens=usage.get("completion_tokens"),

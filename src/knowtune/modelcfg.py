@@ -1,16 +1,21 @@
-"""后端注册表 —— `config/models.yaml` 的读写。
+"""端点注册表 —— `config/models.yaml` 的读写。
 
-模型管理页要能"加一个本地端口、删掉用不上的云端、改个模型名"，这些都不该
-逼用户去编辑 YAML 再重启。但也不能把整份 providers 抄进一个文件了事：整份
-拷贝等于永久冻结当时的默认值，以后 default.yaml 改了推荐端口，用户机器上
-还在跑旧的，而且没人看得出为什么。
+一个端点 = 一个 OpenAI 兼容地址 + 一个密钥 + 它下面的一组模型。只有两类：
 
-所以这里只落**差异**：与出厂值不同的条目 + 被显式删除的内置名字。
+  local   本机能起。模型带 `.gguf` 路径，界面直接给「启动 / 停止」。
+  openai  别人的地址。云端、自建网关、容器里的服务，一律算这一类。
+
+**为什么把八种 kind 砍成两种**：vllm / lmstudio / ollama / deepseek / bailian /
+openai / custom / mock 说的是同一个协议，区别只在"谁在跑"和"怎么起"。云端的
+"怎么起"根本没答案，本地的正确答案又早就不止一种（llama.cpp / LM Studio /
+Ollama 各自的命令都不一样，写死在代码里必然过期）。类型越多，过期的提示越多。
+
+**落盘只写差异**：与 `default.yaml` 相同的条目不再抄一遍。整份拷贝等于永久
+冻结当时的出厂值，以后默认值改了，用户机器上还在跑旧的，而且没人看得出为什么。
 """
 
 from __future__ import annotations
 
-import os
 import re
 from pathlib import Path
 from typing import Any
@@ -22,185 +27,71 @@ from .config import ROOT, Config, ModelEntry, ProviderCfg, _read_yaml, defaults_
 
 MODELS_CONFIG = ROOT / "config" / "models.yaml"
 
-# 内置的几类后端。kind 只影响 UI 提示（启动命令、本地/云端徽标），
-# 协议永远只有一种：OpenAI 兼容 /v1/chat/completions。
-#
-# launch 按平台分开写，并且端口用 `{port}` 占位：
-#   · 用户机器是 Windows，一条 `vllm serve ...` 复制过去根本执行不了，
-#     而 vLLM 在 Windows 原生压根跑不起来（得走 WSL2）——这类坑必须写在命令里，
-#     不是让人事后去搜报错；
-#   · 端口写死会和卡片上的地址对不上：用户把 LM Studio 起在 1235，命令却让
-#     他 --port 1234，照抄一遍服务起了、探测还是红的。
-# 所以渲染时按「当前系统 + 该类型现有实例的端口」把占位符替换掉（见 kinds()）。
+# 两种端点。label 只用于界面分组，没有启动命令、没有提示文案——那些要么在
+# localmodels.py 里按真实环境算，要么根本不该有。
 KINDS: tuple[dict[str, Any], ...] = (
     {
-        "id": "vllm",
-        "label": "vLLM",
+        "id": "local",
+        "label": "本地（llama.cpp）",
         "local": True,
-        # 8100，不是 8000：8000 是本系统自己的 Web 服务端口，两个撞在一起时
-        # 用户只会看到"vLLM 起不来"，查半天不知道是被自己占了。
-        "default_base": "http://127.0.0.1:8100/v1",
-        "default_model": "Qwen2.5-7B-Instruct",
-        "launch": {
-            "posix": ["python -m vllm.entrypoints.openai.api_server"
-                      " --model Qwen/Qwen2.5-7B-Instruct --port {port} --max-model-len 8192"],
-            "win": ["wsl -- python -m vllm.entrypoints.openai.api_server"
-                    " --model Qwen/Qwen2.5-7B-Instruct --port {port} --max-model-len 8192"],
-        },
-        "launch_note": "Windows 原生跑不了 vLLM，要在 WSL2 里起（上面这条已带 wsl 前缀）。",
-        "hint": "先起服务，再回上面点「测试联通」。OpenAI 兼容接口在 /v1 下。",
-    },
-    {
-        "id": "lmstudio",
-        "label": "LM Studio",
-        "local": True,
-        "default_base": "http://127.0.0.1:1234/v1",
-        "default_model": "qwen2.5-7b-instruct",
-        "launch": {
-            "posix": ["lms server start --port {port}"],
-            "win": ["lms server start --port {port}",
-                    "# 或者不用命令行：LM Studio → Local Server → 端口改成 {port} → Start"],
-        },
-        "launch_note": "lms 命令行要在 LM Studio 里先打开（Settings → Developer → Enable CLI）；"
-                       "用图形界面起服务同样可以。",
-        "hint": "模型要先在 LM Studio 里 Load 进内存，否则 /v1/models 返回空列表。",
-    },
-    {
-        "id": "ollama",
-        "label": "Ollama",
-        "local": True,
-        "default_base": "http://127.0.0.1:11434/v1",
-        "default_model": "qwen2.5:7b",
-        "launch": {
-            "posix": ["ollama pull qwen2.5:7b", "ollama serve"],
-            "win": ["ollama pull qwen2.5:7b", "ollama serve"],
-        },
-        "launch_note": "装完 Ollama 后台服务一般已经在跑；只有 11434 连不上时才手动 serve。"
-                       "pull 必须在 serve 之后（或后台已运行时）执行。",
-        "hint": "Ollama 自带 OpenAI 兼容层，直接用 /v1 路径即可。",
-    },
-    {
-        "id": "deepseek",
-        "label": "DeepSeek",
-        "local": False,
-        "default_base": "https://api.deepseek.com",
-        # 不预设模型名：DeepSeek 的模型线换过好几轮（chat / reasoner / flash / v4…），
-        # 预设一个过期的名字只会让新用户第一步就撞 404。填好密钥点"探测"，
-        # 从返回的列表里点选真实存在的那个。
-        "default_model": "",
-        "launch": {},
-        "launch_note": "",
-        "hint": "密钥在弹窗里直接填，保存后以密文记到本机，重启不用重填。"
-                "填完点「探测」，从返回的模型列表里点选一个。",
-    },
-    {
-        "id": "bailian",
-        "label": "阿里云百炼（DashScope）",
-        "local": False,
-        # 官方文档：华北2(北京) 的 OpenAI 兼容入口。
-        # 新加坡地域是 https://dashscope-intl.aliyuncs.com/compatible-mode/v1
-        "default_base": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        "default_model": "qwen-plus",
-        "launch": {},
-        "launch_note": "",
-        "hint": "百炼的 OpenAI 兼容入口；换成新加坡地域要把地址改成 dashscope-intl。"
-                "密钥在弹窗里直接填，保存后以密文记到本机。",
+        "default_base": "http://127.0.0.1:8090/v1",
+        "hint": "选一个本地 .gguf，点「启动」就会起一个 OpenAI 兼容端点；模型和端口都跟模型走。",
     },
     {
         "id": "openai",
-        "label": "OpenAI 兼容云 API",
+        "label": "自定义 OpenAI 兼容",
         "local": False,
         "default_base": "https://api.openai.com/v1",
-        "default_model": "gpt-4o-mini",
-        "launch": {},
-        "launch_note": "",
-        "hint": "密钥在弹窗里直接填，保存后以密文记到本机；也可以用 api_key_env 指向环境变量。",
-    },
-    {
-        "id": "custom",
-        "label": "自定义 OpenAI 兼容服务",
-        "local": True,
-        "default_base": "http://127.0.0.1:8080/v1",
-        "default_model": "",
-        # 以前这里只有一行注释（"任何实现 /v1/chat/completions 的服务都行"），
-        # 看着像给了命令，复制过去却什么都不会发生。给一条能照抄的真例子。
-        "launch": {
-            "posix": ["llama-server -m /path/to/model.gguf --port {port}"],
-            "win": ["llama-server.exe -m C:\\path\\to\\model.gguf --port {port}"],
-        },
-        "launch_note": "例子是 llama.cpp；TGI / one-api / 任何实现 /v1/chat/completions"
-                       " 的服务都行，把命令换成你自己的即可。",
-        "hint": "填你自己的端口即可。启动顺序无所谓，随时可以回来点探测。",
-    },
-    {
-        "id": "mock",
-        "label": "Mock（不联网）",
-        "local": True,
-        "default_base": "",
-        "default_model": "mock",
-        "launch": {},
-        "launch_note": "",
-        "hint": "只用来验证「检索→装填→引用校验→SSE」链路，输出不是答案。",
+        "hint": "填地址 + 密钥 + 模型名即可。任何实现 /v1/chat/completions 的服务都算。",
     },
 )
 KIND_MAP = {k["id"]: k for k in KINDS}
+DEFAULT_KIND = "openai"
 NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{1,23}$")
-WINDOWS = os.name == "nt"
 
 
-def _port_of(url: str | None, default: str = "") -> str:
-    try:
-        p = urlparse(url or "").port
-    except ValueError:
-        return default
-    return str(p) if p else default
+def _norm_kind(kind: str | None, base_url: str | None = None) -> str:
+    """老配置里可能写着 vllm / lmstudio / deepseek 这些已删的类型。
+
+    归类规则：
+      - vllm / lmstudio / ollama 一定在跑在本机，算 local；
+      - custom / 空 / 不认识 —— 只能看地址。老配置里的 custom 既可能是本机的
+        llama.cpp，也可能是别人的网关，按名字猜必错；
+      - 其余（deepseek / bailian / openai …）都是云端。
+    不能抛异常：配置文件是旧版本留下的，抛了服务就起不来。
+    """
+    k = (kind or "").strip().lower()
+    if k in KIND_MAP:
+        return k
+    if k in {"vllm", "lmstudio", "ollama"}:
+        return "local"
+    host = (urlparse(base_url or "").hostname or "").lower()
+    return "local" if host in {"127.0.0.1", "localhost", "0.0.0.0", "::1"} else DEFAULT_KIND
 
 
-def _render_launch(kind: dict[str, Any], port: str) -> dict[str, str]:
-    """把 {port} 换成实际端口，并按当前系统挑一套命令出来。"""
-    spec = kind.get("launch") or {}
-    def fmt(lines: list[str] | None) -> str:
-        return "\n".join((ln or "").replace("{port}", port) for ln in (lines or [])).strip()
-    win, posix = fmt(spec.get("win")), fmt(spec.get("posix"))
-    if WINDOWS:
-        return {"launch": win or posix, "launch_alt": posix if win else "",
-                "launch_os": "Windows"}
-    return {"launch": posix or win, "launch_alt": win if posix else "",
-            "launch_os": "Linux / macOS"}
-
-
-def kinds(cfg: Config | None = None) -> list[dict[str, Any]]:
-    """给 UI 的类型清单。`launch` 已经是能直接复制的、属于当前系统的命令。"""
-    out = []
-    for k in KINDS:
-        item = dict(k)
-        # 端口取自该类型现有实例的 base_url：用户把服务开在 1235，命令就该写 1235
-        port = _port_of(k.get("default_base"))
-        if cfg is not None:
-            for name, p in cfg.generation.providers.items():
-                if (p.kind or name) == k["id"] and (p.base_url or ""):
-                    port = _port_of(p.base_url, port)
-                    break
-        item.update(_render_launch(k, port or "8080"))
-        out.append(item)
-    return out
-
-
-def kind_of(name: str) -> dict[str, Any]:
-    return KIND_MAP.get(name, KIND_MAP["custom"])
+def kind_of(name: str, base_url: str | None = None) -> dict[str, Any]:
+    return KIND_MAP.get(_norm_kind(name, base_url), KIND_MAP[DEFAULT_KIND])
 
 
 # --------------------------------------------------------------------- 文件
 
 
+def read() -> dict[str, Any]:
+    return _read_yaml(MODELS_CONFIG)
+
+
 def persist(cfg: Config) -> dict[str, Any]:
-    """把后端清单 + 角色分工写回 models.yaml。对外只暴露这一个入口：
-    调用方不需要知道落盘的细节，也不该绕过清洗直接写文件。"""
+    """把端点清单 + 角色分工写回 models.yaml。对外只暴露这一个入口。"""
     return _persist(cfg)
 
 
-def read() -> dict[str, Any]:
-    return _read_yaml(MODELS_CONFIG)
+def _spec_of(p: ProviderCfg) -> dict[str, Any]:
+    spec: dict[str, Any] = {"base_url": p.base_url, "model": p.model, "kind": p.kind}
+    if p.model_list:
+        spec["models"] = [m.model_dump(exclude_none=True) for m in p.model_list]
+    if p.api_key_env:
+        spec["api_key_env"] = p.api_key_env
+    return spec
 
 
 def _persist(cfg: Config) -> dict[str, Any]:
@@ -208,29 +99,17 @@ def _persist(cfg: Config) -> dict[str, Any]:
     out: dict[str, Any] = {}
     deleted: list[str] = []
     for name, p in cfg.generation.providers.items():
-        spec: dict[str, Any] = {
-            "base_url": p.base_url,
-            "model": p.model,
-            "kind": p.kind,
-        }
-        if p.model_list:
-            spec["model_list"] = [m.model_dump(exclude_none=True) for m in p.model_list]
+        spec = _spec_of(p)
         b = base.get(name)
-        same = b is not None and spec == {
-            "base_url": b.base_url,
-            "model": b.model,
-            "kind": b.kind,
-        }
-        if not same:
-            out[name] = spec
+        if b is not None and spec == _spec_of(b):
+            continue
+        out[name] = spec
     for name in base:
         if name not in cfg.generation.providers:
             deleted.append(name)
 
     from .roles import normalize
 
-    # 角色分工跟后端清单同住一份文件：删掉某个后端时，指向它的角色也一起失效，
-    # 不会留下一个"翻译成空气"的配置。
     roles = normalize(getattr(cfg.generation, "roles", {}),
                       known=cfg.generation.providers)
 
@@ -240,9 +119,24 @@ def _persist(cfg: Config) -> dict[str, Any]:
         return {"path": str(MODELS_CONFIG), "removed": True, "providers": {}, "deleted": []}
 
     header = (
-        "# 后端注册表：只记录与 default.yaml 不同的条目 + 被删除的内置后端。\n"
-        "# roles 是角色分工（哪个后端干翻译、哪个干输出），没配就所有活儿都归\n"
-        "# 当前后端。由 Web UI 的「模型服务 / 站点」页维护，改完重启生效（或点重读）。\n\n"
+        "# 端点注册表。只记录与 default.yaml 不同的条目。\n"
+        "#\n"
+        "# providers:\n"
+        "#   <名字>:                     小写字母数字，2-24 字符\n"
+        "#     kind: local | openai      local 表示模型带 .gguf、本机能起\n"
+        "#     base_url: http://...      OpenAI 兼容地址，末尾到 /v1\n"
+        "#     model: <默认模型 id>\n"
+        "#     api_key_env: <变量名>      可选；密钥也可以只放界面里\n"
+        "#     models:\n"
+        "#       - id: <发给接口的 model 字段>\n"
+        "#         path: D:/models/x.gguf  本地 gguf；有这个才能点「启动」\n"
+        "#         port: 8090              本机监听端口；不写就自动挑\n"
+        "#         context: 4096           上下文长度\n"
+        "#         max_output: 1024        单次输出上限\n"
+        "#\n"
+        "# roles: 哪个端点+模型干哪件事，值写成 `端点::模型`\n"
+        "#   translate: local::qwen2.5-3b -- 翻译用\n"
+        "#   generate:  local::qwen2.5-3b -- 生成答案用\n\n"
     )
     body: dict[str, Any] = {"deleted": deleted, "providers": out}
     if roles:
@@ -274,34 +168,44 @@ def validate_url(url: str, *, allow_empty: bool = False) -> str:
     return url.rstrip("/")
 
 
-def _clean_model_list(raw: list[dict[str, Any]] | None) -> list[ModelEntry]:
+def _num(val: Any, cap: int = 100_000_000) -> int | None:
+    if val in (None, "", 0, "0"):
+        return None
+    try:
+        n = int(str(val).strip().lower().replace(",", ""))
+    except (TypeError, ValueError):
+        return None
+    return n if 0 < n <= cap else None
+
+
+def clean_models(raw: list[dict[str, Any]] | None) -> list[ModelEntry]:
     """清洗模型清单：去空行、去重、长度做上限，坏值不抛异常只忽略。
 
-    清单是手填的，脏数据是常态（空行、重复、把上下文长度填成 "128k"）。
-    这里的原则是"能救就救，救不了就丢"，绝不因为一行写错就让整份配置存不下去。
+    清单多半来自手填或扫描，脏数据是常态（空行、重复 id、把上下文填成 "128k"）。
+    原则是"能救就救，救不了就丢"，绝不因为一行写错就让整份配置存不下去。
     """
     out: list[ModelEntry] = []
     seen: set[str] = set()
     for item in raw or []:
         if not isinstance(item, dict):
+            # 不接受 `- qwen2.5` 这种简写：一个模型现在带 path / port / context，
+            # 光有名字说明不了它本机能不能起、该占哪个端口。留个裸字符串在这里
+            # 只会让"点了启动没反应"变成常态。
             continue
         mid = str(item.get("id") or "").strip()
         if not mid or mid in seen or len(out) >= 50:
             continue
         seen.add(mid)
-
-        def _num(key: str) -> int | None:
-            val = item.get(key)
-            if val in (None, "", 0, "0"):
-                return None
-            try:
-                n = int(str(val).strip().lower().replace(",", ""))
-            except (TypeError, ValueError):
-                return None
-            return n if 0 < n <= 100_000_000 else None
-
-        out.append(ModelEntry(id=mid[:120], context=_num("context"),
-                              max_output=_num("max_output")))
+        path = str(item.get("path") or "").strip() or None
+        port = _num(item.get("port"), 65535)
+        out.append(ModelEntry(
+            id=mid[:120],
+            alias=str(item.get("alias") or "").strip()[:80],
+            context=_num(item.get("context")),
+            max_output=_num(item.get("max_output")),
+            path=path[:400] if path else None,
+            port=port,
+        ))
     return out
 
 
@@ -311,56 +215,57 @@ def upsert(
     *,
     base_url: str,
     model: str,
-    kind: str = "custom",
-    model_list: list[dict[str, Any]] | None = None,
+    kind: str = DEFAULT_KIND,
+    models: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """新增或修改一个后端。改完立刻生效——LLMClient 持有的是同一个 cfg 对象。"""
+    """新增或修改一个端点。改完立刻生效——LLMClient 持有的是同一个 cfg 对象。"""
     name = (name or "").strip().lower()
     if not NAME_RE.match(name):
         raise ValueError("名字只能用小写字母、数字、- 和 _，2-24 个字符（它会被写进配置文件）")
-    if kind not in KIND_MAP:
-        raise ValueError(f"未知类型：{kind}")
+    kind = _norm_kind(kind, base_url)
 
     model = (model or "").strip()
     if not model:
-        raise ValueError("模型名不能为空（本地服务在 /v1/models 里能看到的名字）")
+        raise ValueError("模型名不能为空（本地模型填文件名，云端填接口返回的 id）")
     if len(model) > 120:
         raise ValueError("模型名过长")
 
-    is_mock = kind == "mock"
-    clean_url = validate_url(base_url, allow_empty=is_mock) or None
-    # 密钥不在这里存：它由调用方放进口内存注册表（knowtune.secrets），
+    clean_url = validate_url(base_url) or None
+    # 密钥不在这里存：它由调用方放进内存注册表（knowtune.secrets），
     # 这里只管地址/模型/类型这些"可以见人"的字段。
     #
-    # model_list 传 None 表示"这次不改清单"——卡片上切个模型只改 model 一个字段，
+    # models 传 None 表示"这次不改清单"——卡片上切个模型只改 model 一个字段，
     # 要是把 None 当成"清空"，切换一次模型就把人维护的清单全删了。
     prev = cfg.generation.providers.get(name)
-    if model_list is None:
+    if models is None:
         entries = list(prev.model_list) if prev else []
     else:
-        entries = _clean_model_list(model_list)
+        entries = clean_models(models)
+    if entries and model not in {m.id for m in entries}:
+        entries.insert(0, ModelEntry(id=model))
     cfg.generation.providers[name] = ProviderCfg(
-        base_url=clean_url, model=model, kind=kind, model_list=entries
+        base_url=clean_url, model=model, kind=kind, model_list=entries,
+        api_key_env=prev.api_key_env if prev else None,
     )
-    if name not in cfg.generation.providers or cfg.generation.provider not in cfg.generation.providers:
+    if cfg.generation.provider not in cfg.generation.providers:
         cfg.generation.provider = name
     return {"name": name, **_persist(cfg), "active": cfg.generation.provider}
 
 
 def remove(cfg: Config, name: str) -> dict[str, Any]:
     if name not in cfg.generation.providers:
-        raise ValueError("后端不存在")
+        raise ValueError("端点不存在")
     if len(cfg.generation.providers) <= 1:
-        raise ValueError("至少要留一个后端")
+        raise ValueError("至少要留一个端点")
     if cfg.generation.provider == name:
-        raise ValueError(f"「{name}」是当前使用的后端，先切换到别的再删")
+        raise ValueError(f"「{name}」是当前使用的端点，先切换到别的再删")
     del cfg.generation.providers[name]
     return {"deleted": name, **_persist(cfg)}
 
 
 def set_active(cfg: Config, name: str) -> dict[str, Any]:
     if name not in cfg.generation.providers:
-        raise ValueError("后端不存在")
+        raise ValueError("端点不存在")
     cfg.generation.provider = name
     return {"active": name}
 
@@ -369,57 +274,56 @@ def set_active(cfg: Config, name: str) -> dict[str, Any]:
 
 
 def readiness(cfg: Config, name: str | None = None) -> dict[str, Any]:
-    """这个后端"配好了没有"——注意与"连不连得通"是两件事。
+    """这个端点"配好了没有"——注意与"连不连得通"是两件事。
 
     界面上必须把这两者分开：地址填错、端口没起是运行时故障，重试或改地址就能救；
-    而没填模型名、没配密钥是配置缺失，重试一万次也没用，只能去补字段。用户看到的
-    提示语因此必须不同，否则他会对着一个"连接超时"反复点重试，而真正缺的是模型名。
+    而没填模型名、没配密钥是配置缺失，重试一万次也没用，只能去补字段。
     """
-    import os
-
     target = name or cfg.generation.provider
     p = cfg.generation.providers.get(target)
     if p is None:
-        return {
-            "provider": target, "ready": False, "code": "no_provider",
-            "reason": f"后端「{target}」不在注册表里，重新选一个",
-        }
-    kind = p.kind if p.kind in KIND_MAP else "custom"
-    if kind == "mock":
+        return {"provider": target, "ready": False, "code": "no_provider",
+                "reason": f"端点「{target}」不在注册表里，重新选一个"}
+    # mock 是"没有任何端点时验证链路"的替身，不需要地址。
+    if target == "mock" or ((p.model or "").strip() == "mock" and not (p.base_url or "").strip()):
         return {"provider": target, "ready": True, "code": "mock", "reason": ""}
     if not (p.base_url or "").strip():
-        return {"provider": target, "ready": False, "code": "no_url",
-                "reason": "还没填地址"}
+        return {"provider": target, "ready": False, "code": "no_url", "reason": "还没填地址"}
     if not (p.model or "").strip():
-        return {"provider": target, "ready": False, "code": "no_model",
-                "reason": "还没填模型名"}
-    # 云端后端要密钥；本地的不强求（自建网关常常不鉴权）。
-    # 判据走 api_key() 的三级回落：临时填的 > 内存（含落盘恢复）> 环境变量。
-    if not p.api_key(target) and KIND_MAP.get(
-            p.kind if p.kind in KIND_MAP else "custom", {}).get("local") is False:
-        # 卡片上已经是"缺配置"那一行，说清缺什么就够；"只存内存、重启要重填"
-        # 这类通用说明放在页面底部的折叠区，不必每张卡重复一遍。
+        return {"provider": target, "ready": False, "code": "no_model", "reason": "还没填模型名"}
+    # 本地端点不强求密钥（自建服务常常不鉴权），云端必须有。
+    if _norm_kind(p.kind, p.base_url) == "openai" and not p.api_key(target):
         return {"provider": target, "ready": False, "code": "no_key",
                 "reason": "缺密钥：点编辑填 API Key"}
     return {"provider": target, "ready": True, "code": "ok", "reason": ""}
 
 
+def _model_view(m: ModelEntry, state: dict[str, Any] | None) -> dict[str, Any]:
+    return {
+        "id": m.id,
+        "label": m.label,
+        "context": m.context,
+        "max_output": m.max_output,
+        "path": m.path,
+        "port": m.port,
+        "local": m.local,
+        "state": (state or {}).get("state", "unknown") if m.local else "",
+        "pid": (state or {}).get("pid"),
+        "running_url": (state or {}).get("base_url", ""),
+    }
+
+
 def listing(cfg: Config) -> dict[str, Any]:
-    import os
+    from . import localmodels as local_mod
+    from . import secrets as secrets_mod
 
     base = defaults_config().generation.providers
+    live = local_mod.running()
     items = []
     for name, p in cfg.generation.providers.items():
-        # 老配置里没有 kind 字段，靠名字兜底：否则 vllm 会显示成"云 API"，
-        # 而用户正是靠这个标签判断"这是不是本地的"。
-        kind = p.kind if p.kind in KIND_MAP else ("openai" if p.kind else name)
-        if kind not in KIND_MAP:
-            kind = "custom"
+        kind = _norm_kind(p.kind, p.base_url)
         meta = kind_of(kind)
         ready = readiness(cfg, name)
-        # 卡片上的启动命令按**这个后端自己的端口**渲染，而不是类型默认端口：
-        # 同一个类型可能配了两个实例（1234 / 1235），命令指错等于白起一次。
-        launch = _render_launch(meta, _port_of(p.base_url) or _port_of(meta["default_base"]) or "8080")
         items.append({
             "name": name,
             "kind": kind,
@@ -427,30 +331,24 @@ def listing(cfg: Config) -> dict[str, Any]:
             "local": bool(meta["local"]),
             "base_url": p.base_url,
             "model": p.model,
-            # 只报"内存里有没有"，绝不把密钥本身吐给前端
             "key_present": bool(p.api_key(name)),
-            "model_list": [m.model_dump(exclude_none=True) for m in p.model_list],
+            "models": [_model_view(m, live.get(_live_key(name, m))) for m in p.model_list],
             "active": name == cfg.generation.provider,
             "builtin": name in base,
             "ready": ready["ready"],
             "ready_reason": ready["reason"],
-            "launch": launch["launch"],
-            "launch_alt": launch["launch_alt"],
-            "launch_os": launch["launch_os"],
-            "launch_note": meta.get("launch_note", ""),
             "hint": meta["hint"],
         })
     items.sort(key=lambda x: (not x["active"], not x["local"], x["name"]))
-    from . import secrets as secrets_mod
 
-    # 扁平目录：所有后端 × 所有已知模型，一条一个可选项。
+    # 扁平目录：所有端点 × 所有模型，一条一个可选项。
     #
-    # 为什么要有它：对话页的"生成模型"以前只能列**当前后端**的候选，用户想用
-    # 另一个后端上的某个模型，得先切后端再切模型——两层嵌套，而且第二层
-    # 常常是空的（探测缓存被失效过）。看起来就是"我加过的模型选不到"。
-    # 这里把两层压成一层，前端的下拉直接照这个渲染。
+    # 为什么要有它：对话页的"生成模型"以前只能列当前端点的候选，想用另一个
+    # 端点上的某个模型，得先切端点再切模型——两层嵌套，第二层还常常是空的。
+    # 看起来就是"我加过的模型选不到"。这里压成一层。
     catalog = []
     for name, p in cfg.generation.providers.items():
+        kind = _norm_kind(p.kind, p.base_url)
         ready = readiness(cfg, name)
         ids = [m.id for m in p.model_list]
         if p.model and p.model not in ids:
@@ -458,30 +356,39 @@ def listing(cfg: Config) -> dict[str, Any]:
         for mid in ids:
             if not mid:
                 continue
+            entry = p.entry(mid)
             catalog.append({
                 "provider": name,
                 "model": mid,
+                "label": entry.label if entry else mid,
                 "current": bool(p.model) and mid == p.model,
                 "provider_active": name == cfg.generation.provider,
                 "ready": ready["ready"],
+                "local": kind == "local",
             })
 
+    active_p = cfg.generation.providers.get(cfg.generation.provider)
     return {
         "active": cfg.generation.provider,
         "active_ready": readiness(cfg)["ready"],
         "active_reason": readiness(cfg)["reason"],
-        # 全局"当前"是「后端 + 模型」两段，分开给，界面才能一次说清"现在在用哪套"
-        "active_model": (cfg.generation.providers.get(cfg.generation.provider).model
-                         if cfg.generation.provider in cfg.generation.providers else ""),
+        # 全局"当前"是「端点 + 模型」两段，分开给，界面才能一次说清"现在在用哪套"
+        "active_model": active_p.model if active_p else "",
         "providers": items,
         "catalog": catalog,
-        "kinds": kinds(cfg),
-        # 密钥是否被"记住到本机"（默认 True：填了就存，DPAPI 密文）
+        "kinds": [dict(k) for k in KINDS],
         "keys_persisted": secrets_mod.persisted(),
-        # 保存策略本身：True = 填了就落盘；False = 用户选了"仅本次会话"
         "key_autosave": secrets_mod.autosave(),
-        # 落盘用的是哪种保护（Windows 账户加密 / 不支持）。界面要如实写，
-        # 别让人以为"记住"等于明文躺在一个文件里。
         "key_cipher": secrets_mod.backend_label(),
+        "env": local_mod.describe_env(),
         "file": {"path": str(MODELS_CONFIG), "exists": MODELS_CONFIG.exists()},
     }
+
+
+def _live_key(endpoint: str, m: ModelEntry) -> str:
+    """本地实例的状态按什么名字存。
+
+    用 `端点/模型` 而不是模型 id：两个端点下可能有同名模型（一个本机一个云端），
+    只按模型名存会让它们互相覆盖状态。
+    """
+    return f"{endpoint}/{m.id}"

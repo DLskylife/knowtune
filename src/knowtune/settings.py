@@ -284,6 +284,10 @@ def coerce(p: Param, cfg: Config, value: Any) -> Any:
     if p.kind == "enum":
         opts = options_of(p, cfg)
         if value not in opts:
+            # 还没配任何端点时，`generation.provider` 只能是空串。这是全新安装
+            # 的合法状态，不该逼用户"先去配个端点"才能改别的参数。
+            if value == "" and not opts:
+                return ""
             raise ValueError(f"{p.label} 只能是 {' / '.join(opts)}，收到 {value!r}")
         return value
 

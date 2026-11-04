@@ -7,6 +7,7 @@
     knowtune ask "问题" [--kb 1]      单次问答（走当前 provider）
     knowtune debug "问题"             打印两路召回与融合排序（调检索必用）
     knowtune serve [--port 8000]      启动 Web UI
+    knowtune previsit [--port 8900]   启动预问诊站点（独立端口）
 """
 
 from __future__ import annotations
@@ -247,8 +248,32 @@ def cmd_eval(args) -> int:
 def cmd_serve(args) -> int:
     import uvicorn
 
-    print(f"Web UI: http://127.0.0.1:{args.port}")
+    host = "127.0.0.1" if args.host in ("0.0.0.0", "127.0.0.1", "localhost") else args.host
+    # 固定入口的实际端口写进环境：挂在本进程里的预问诊、以及后来起来的
+    # 独立子进程，都按这个地址找网关，不用各自猜端口。
+    import os
+
+    os.environ["KNOWTUNE_GATEWAY"] = f"http://{host}:{args.port}/v1"
+    print(f"Web UI: http://{host}:{args.port}")
+    # 本地模型实例的端口会变，这个不会——外部程序一律写死它。
+    print(f"API:    http://{host}:{args.port}/v1  (OpenAI 兼容 /v1/chat/completions)")
+    if args.host == "0.0.0.0":
+        from knowtune import localmodels
+
+        ip = localmodels._lan_ip()
+        if ip:
+            print(f"LAN:    http://{ip}:{args.port}/v1  (同一局域网可调用，无鉴权)")
     uvicorn.run("knowtune.api.app:app", host=args.host, port=args.port, log_level="info")
+    return 0
+
+
+def cmd_previsit(args) -> int:
+    """预问诊站点：独立进程、独立端口，复用主服务的模型后端与已存密钥。"""
+    import uvicorn
+
+    print(f"预问诊: http://127.0.0.1:{args.port}")
+    uvicorn.run("knowtune.previsit.app:create_app", host=args.host, port=args.port,
+                log_level="info", factory=True)
     return 0
 
 
@@ -295,6 +320,11 @@ def main(argv: list[str] | None = None) -> int:
     p_srv.add_argument("--port", type=int, default=8000)
     p_srv.add_argument("--host", default="127.0.0.1")
     p_srv.set_defaults(func=cmd_serve)
+
+    p_pv = sub.add_parser("previsit", help="启动预问诊站点（独立端口）")
+    p_pv.add_argument("--port", type=int, default=8900)
+    p_pv.add_argument("--host", default="127.0.0.1")
+    p_pv.set_defaults(func=cmd_previsit)
 
     args = parser.parse_args(argv)
     return int(args.func(args))

@@ -159,37 +159,78 @@ class RefusalCfg(BaseModel):
 
 
 class ModelEntry(BaseModel):
-    """模型清单里的一条。抄的是 ccswitch 的思路：**清单是人定的，不是探测出来的**。
+    """一个模型。它现在是配置里的一等实体，不再是后端下面的一个字符串。
 
-    探测只能回答"这个地址上有什么"，回答不了"我打算用哪些"。云厂商一次返回
-    上百个（含图像/语音/实时类），把原始列表当选项就是在让人踩雷。所以清单
-    由用户显式维护，探测结果只作为"要不要加进清单"的建议。
+    为什么要变成实体：以前「模型」只是 `model: "xxx"` 一个字段，加上
+    `model_list` 里的一串 id。于是「这个模型的上下文多大」「它的 gguf 在哪」
+    「它该监听哪个端口」这三件事没有地方放，只能散落在代码常量和 UI 提示里。
+    本地实例一多，端口冲突和上下文超限就都变成运行时才发现的坑。
+
+    现在这三件事跟着模型走：
+      - `id`   发给 OpenAI 接口的 model 字段
+      - `path` 本地 .gguf 的绝对路径；有它才说明"这个模型本机能起"
+      - `port` 本机起服务时占的端口；空 = 启动时自动挑
     """
 
     id: str
+    # 界面上显示的名字。留空用 id——文件名常常带着量化后缀，展示时不该照搬。
+    alias: str = ""
     context: int | None = None      # 上下文长度，0/None = 未填
     max_output: int | None = None   # 单次最大输出，0/None = 未填
+    path: str | None = None         # 本地 gguf；非空 = 本机可起
+    port: int | None = None         # 本机监听端口
+
+    @property
+    def label(self) -> str:
+        return self.alias or self.id
+
+    @property
+    def local(self) -> bool:
+        return bool(self.path)
 
 
 class ProviderCfg(BaseModel):
+    """一个 OpenAI 兼容端点。只有两种：本机能起的（local）和别的（openai）。
+
+    以前这里有八种 kind（vllm / lmstudio / ollama / deepseek / bailian /
+    openai / custom / mock），每种都带一段"怎么启动它"的命令模板。问题在于
+    那八种说的是**同一个协议**，区别只在"谁在跑"和"怎么起"——而"怎么起"
+    在本地模型这件事上早就有更好的答案（见 localmodels.py：直接读 gguf 起
+    llama.cpp），云端则根本没有启动命令可给。八种类型带来的全部收益，就是
+    八套会过期的提示文案。
+
+    现在只留两种语义：
+      local  —— 本机能起。模型带 path，界面给「启动 / 停止」。
+      openai —— 任何兼容 /v1 的地址。云端、别人搭的网关、容器里的服务都算。
+    """
+
     base_url: str | None = None
-    model: str = "mock"
-    # 只用于 UI 展示（启动命令、本地/云端分组）。协议永远只有一种：
-    # OpenAI 兼容。kind 不参与任何请求逻辑，改错了最多是提示不准。
-    kind: str = "openai"
-    # 该后端"我打算用"的模型清单。空 = 没维护过，界面按只有一个 model 处理。
-    model_list: list[ModelEntry] = Field(default_factory=list)
+    model: str = ""
+    kind: str = "openai"            # local | openai，只用于界面分组
+    # 该端点"我打算用"的模型清单。现在是实体列表，带路径和端口。
+    # YAML 里写成 `models:`——`model_list` 是旧名字，保留字段名兼容已有代码，
+    # 但配置一律用新写法（populate_by_name 让两种都能解析）。
+    model_list: list[ModelEntry] = Field(default_factory=list, alias="models")
     # 环境变量名（不是密钥本身）。配了就读它，用于"密钥完全不进这个应用"的部署。
-    # 默认 None：不去猜 DEEPSEEK_API_KEY 这类别人也可能在用的通用变量名。
     api_key_env: str | None = None
     # 探测时用：按"刚敲进去的地址+密钥"试一次，不经过注册表
     _inline_key: str = PrivateAttr(default="")
 
+    model_config = {"populate_by_name": True}
+
     def set_inline_key(self, key: str | None) -> None:
         self._inline_key = (key or "").strip()
 
+    def entry(self, model_id: str = "") -> ModelEntry | None:
+        """按 id 找清单里的那条。找不到返回 None（调用方自己决定回退）。"""
+        want = (model_id or self.model or "").strip()
+        for m in self.model_list:
+            if m.id == want:
+                return m
+        return None
+
     def api_key(self, name: str | None = None) -> str | None:
-        """取密钥。优先级：本次探测临时填的 > 内存里（含落盘恢复）的 > 环境变量。
+        """取密钥。优先级：本次探测临时填的 > 内存（含落盘恢复）的 > 环境变量。
 
         第三级是给服务器 / CI 用的：把密钥放进 `api_key_env` 指向的环境变量，
         这个应用就永远不需要人手填，也不会有密钥落在 data 目录里。
@@ -223,10 +264,13 @@ class RetryCfg(BaseModel):
 
 
 class GenerationCfg(BaseModel):
-    provider: str = "mock"
+    # 空字符串 = 还没配任何端点。这是合法状态：全新安装时配置里一条模型都没有，
+    # 界面上引导用户「扫描本地模型」或「加一个 OpenAI 兼容地址」，而不是先塞一个
+    # 指向某个端口的占位后端——那种占位在用户机器上永远是红的，只会让人以为坏了。
+    provider: str = ""
     providers: dict[str, ProviderCfg] = {}
-    # 角色分工：{"translate": "hunyuan", "generate": "local-qwen"}。
-    # 留空 = 所有活儿都由 provider 干（老行为），配了才分工。
+    # 角色分工：{"translate": "local::qwen2.5-3b", "generate": "local::qwen2.5-3b"}。
+    # 留空 = 所有活儿都由 provider 干，配了才分工。
     roles: dict[str, str] = {}
     # 0.1 会让 7B 这一档的输出高度模板化（三条短句 + 一句空话收尾），
     # 事实约束靠下方【资料】与引用校验，不靠把温度压到接近贪心。
@@ -436,9 +480,11 @@ def _apply_models_file(tree: dict[str, Any]) -> dict[str, Any]:
         providers.pop(str(name), None)
 
     if not providers:
-        providers = {"mock": {"model": "mock", "kind": "mock"}}
+        # 一条都没配不是错误，是全新安装的默认状态。以前这里塞一个 mock 兜底，
+        # 于是界面上永远挂着一个"能选但没用"的后端，用户分不清那是占位还是故障。
+        providers = {}
     if gen.get("provider") not in providers:
-        gen["provider"] = next(iter(providers))
+        gen["provider"] = next(iter(providers), "")
     gen["providers"] = providers
     # 角色分工和后端清单同住 models.yaml：它们说的是同一件事（哪个后端干什么），
     # 分两份文件的话，删一个后端就可能留下一份指向空气的 roles。

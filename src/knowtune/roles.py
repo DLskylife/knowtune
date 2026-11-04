@@ -24,6 +24,11 @@ from typing import Any, Mapping
 
 ROLES: tuple[str, ...] = ("translate", "generate")
 
+# 角色值的完整形态是「后端::模型」。只写后端名也合法（用后端自己的 model），
+# 所以这个分隔符必须足够不可能出现在后端名或模型名里——`/` 在 HuggingFace 的
+# 模型 id 里到处都是（`Qwen/Qwen2.5-7B-Instruct`），用它就是自找麻烦。
+SEP = "::"
+
 ROLE_LABELS: dict[str, str] = {
     "translate": "提问译中文去检索 + 中文成稿译回维吾尔语",
     "generate": "读检索资料组织答案",
@@ -33,23 +38,43 @@ ROLE_LABELS: dict[str, str] = {
 FALLBACK_ROLE = "generate"
 
 
-def normalize(raw: Any, *, known: Mapping[str, Any] | None = None) -> dict[str, str]:
-    """清洗配置里的 roles：只留已知角色、值是后端名、去空、未知后端丢掉。
+def split(ref: Any) -> tuple[str, str]:
+    """把角色值拆成 `(后端名, 模型名)`。没写模型时第二项是空串。
 
-    手改 YAML 最容易写错的就是这种小字典，而写错它的代价是"整个站点起不来"，
-    所以这里一律宽容：不认识的就当没写。
+    这里必须宽容：YAML 手写、前端旧版本、接口直传三种来源都会进来，其中任何一种
+    多打一个空格都不该让站点起不来。
+    """
+    s = str(ref or "").strip()
+    if SEP not in s:
+        return s, ""
+    name, _, model = s.partition(SEP)
+    return name.strip(), model.strip()
+
+
+def join(provider: Any, model: Any = "") -> str:
+    """拼回角色值。模型为空就只留后端，保证「没选模型」和「选了默认模型」
+       在配置里长得一样——否则同一个意思会有两种写法。"""
+    p = str(provider or "").strip()
+    m = str(model or "").strip()
+    return f"{p}{SEP}{m}" if p and m else p
+
+
+def normalize(raw: Any, *, known: Mapping[str, Any] | None = None) -> dict[str, str]:
+    """清洗配置里的 roles：只留已知角色、校验后端那一半、去空、未知后端丢掉。
+
+    校验只看 `::` 前面的后端名：模型名写错了不该把整个角色丢掉，那会让站点
+    悄悄退回默认后端，而用户以为自己配好了。模型名对不对，交给真实调用去打脸。
     """
     if not isinstance(raw, dict):
         return {}
     out: dict[str, str] = {}
     for role in ROLES:
-        val = raw.get(role)
-        name = str(val or "").strip()
+        name, model = split(raw.get(role))
         if not name:
             continue
         if known is not None and name not in known:
             continue
-        out[role] = name
+        out[role] = join(name, model)
     return out
 
 
@@ -62,7 +87,7 @@ def resolve(
     default_provider: str = "",
     known: Mapping[str, Any] | None = None,
 ) -> str:
-    """按"谁更具体谁优先"的顺序找一个可用的后端名。"""
+    """按"谁更具体谁优先"的顺序找一个可用的角色值（可能带 `::模型`）。"""
     chain = (
         (instance_roles or {}).get(role),
         (global_roles or {}).get(role),
@@ -70,13 +95,13 @@ def resolve(
         default_provider,
     )
     for cand in chain:
-        name = str(cand or "").strip()
+        name, _model = split(cand)
         if not name:
             continue
         # 后端被改名或删掉了：这一级当作没配，继续往下退
         if known is not None and name not in known:
             continue
-        return name
+        return join(name, _model)
     return str(default_provider or "").strip()
 
 

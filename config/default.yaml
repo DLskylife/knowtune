@@ -110,34 +110,17 @@ evidence:
   mid_ratio: 0.6
 
 generation:
-  # 三档后端统一走 OpenAI 兼容协议，切换只改这里或 UI 下拉框。
-  # mock 不发起任何网络请求，只用于验证"检索→装填→引用校验→SSE"链路是否贯通，
-  # 它的输出不是答案，UI 会打 MOCK 标记。
-  provider: vllm
-  providers:
-    vllm:
-      # 8100：8000 是 knowtune 自己的 Web 服务端口，撞在一起时只能看到"vLLM 起不来"
-      base_url: "http://127.0.0.1:8100/v1"
-      api_key_env: null              # 内网 vLLM 通常无鉴权
-      model: "Qwen2.5-7B-Instruct"
-      kind: vllm                     # 仅用于 UI 提示（启动命令 / 本地或云端），不参与请求协议
-    lmstudio:
-      base_url: "http://127.0.0.1:1234/v1"
-      api_key_env: null
-      model: "qwen2.5-7b-instruct"
-      kind: lmstudio
-    openai:
-      base_url: "https://api.openai.com/v1"
-      # 环境变量名，不是密钥本身。配了就在这里读——服务器 / CI 用这条路，
-      # 密钥完全不进 data 目录，也不用每次重启手填。留 null 就只认界面上填的。
-      api_key_env: KNOWTUNE_LLM_API_KEY
-      model: "gpt-4o-mini"
-      kind: openai
-    mock:
-      base_url: null
-      api_key_env: null
-      model: "mock"
-      kind: mock
+  # 出厂不带任何端点。第一次打开「模型服务」页时：扫本地 .gguf，或者加一个
+  # OpenAI 兼容地址。以前这里预置了 vllm / lmstudio / openai / mock 四条——
+  # 在用户机器上它们全都是红的（端口没起、密钥没填），界面一打开就是四行故障，
+  # 分不清"我还没配"和"配了但坏了"。
+  #
+  # 端点清单和模型清单都在 config/models.yaml，由界面维护，这里只留结构默认值。
+  provider: ''
+  providers: {}
+  # 角色分工：哪个端点+模型干哪件事。值写成 `端点::模型`。
+  # 留空 = 所有活儿都交给当前端点。
+  roles: {}
   # 0.1 太死板：实测同一个问题连问三次，回答措辞几乎逐字相同，"1. … 2. … 3. …"
   # 的条目式模板一用到底。0.3 仍远低于自由发挥的区间（RAG 靠资料约束事实，
   # 不靠低温压住），但能让措辞有变化、愿意把话说完整。

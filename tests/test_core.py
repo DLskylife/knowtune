@@ -563,11 +563,23 @@ class TestKbConfig:
 
 
 class TestModelRegistry:
-    """后端注册表：只落差异、内置可删、当前后端不能删。"""
+    """端点注册表：只落差异、当前端点不能删、空清单是合法状态。
+
+    2026-11-04 重构后出厂配置里一条端点都没有（预置的那些在用户机器上全是
+    红的），所以这里自带两条测试端点，不再依赖"内置后端"这个概念。
+    """
 
     def _cfg(self):
-        # 同上：出厂配置，避免用户 local.yaml / models.yaml 里的条目被算成"差异"。
-        return defaults_config().model_copy(deep=True)
+        from knowtune.config import ProviderCfg
+
+        cfg = defaults_config().model_copy(deep=True)
+        cfg.generation.providers = {
+            "local": ProviderCfg(base_url="http://127.0.0.1:8090/v1",
+                                 model="m", kind="local"),
+            "cloud": ProviderCfg(base_url="https://api.x/v1", model="g", kind="openai"),
+        }
+        cfg.generation.provider = "local"
+        return cfg
 
     def test_write_only_diff(self, tmp_path, monkeypatch):
         import yaml
@@ -579,13 +591,13 @@ class TestModelRegistry:
         cfg = self._cfg()
 
         modelcfg.upsert(cfg, "myserver", base_url="http://127.0.0.1:9000/v1",
-                        model="qwen3-8b", kind="custom")
+                        model="qwen3-8b", kind="local")
         raw = yaml.safe_load(path.read_text(encoding="utf-8"))
-        assert set(raw["providers"]) == {"myserver"}
+        assert "myserver" in raw["providers"]
         assert raw["deleted"] == []
         assert cfg.generation.providers["myserver"].base_url == "http://127.0.0.1:9000/v1"
 
-    def test_editing_builtin_is_recorded(self, tmp_path, monkeypatch):
+    def test_editing_existing_endpoint_is_recorded(self, tmp_path, monkeypatch):
         import yaml
 
         from knowtune import modelcfg
@@ -593,11 +605,12 @@ class TestModelRegistry:
         path = tmp_path / "models.yaml"
         monkeypatch.setattr(modelcfg, "MODELS_CONFIG", path)
         cfg = self._cfg()
-        modelcfg.upsert(cfg, "vllm", base_url="http://127.0.0.1:9000/v1", model="x", kind="vllm")
+        modelcfg.upsert(cfg, "local", base_url="http://127.0.0.1:9000/v1",
+                        model="x", kind="local")
         raw = yaml.safe_load(path.read_text(encoding="utf-8"))
-        assert raw["providers"]["vllm"]["model"] == "x"
+        assert raw["providers"]["local"]["model"] == "x"
 
-    def test_deleting_builtin_leaves_a_marker(self, tmp_path, monkeypatch):
+    def test_deleting_endpoint_persists_without_it(self, tmp_path, monkeypatch):
         import yaml
 
         from knowtune import modelcfg
@@ -605,10 +618,10 @@ class TestModelRegistry:
         path = tmp_path / "models.yaml"
         monkeypatch.setattr(modelcfg, "MODELS_CONFIG", path)
         cfg = self._cfg()
-        modelcfg.remove(cfg, "openai")
+        modelcfg.remove(cfg, "cloud")
         raw = yaml.safe_load(path.read_text(encoding="utf-8"))
-        assert "openai" not in cfg.generation.providers
-        assert "openai" in raw["deleted"]
+        assert "cloud" not in cfg.generation.providers
+        assert "cloud" not in raw["providers"]
 
     def test_cannot_delete_active_provider(self, tmp_path, monkeypatch):
         from knowtune import modelcfg
@@ -630,14 +643,32 @@ class TestModelRegistry:
         with pytest.raises(ValueError):
             modelcfg.upsert(cfg, "ok", base_url="http://127.0.0.1:1/v1", model="")
 
+    def test_empty_registry_is_legal(self):
+        """全新安装：一条端点都没有。listing 不能炸，ready 必须是 False 且有理由。
+
+        不能用 load_config()——那是用户机器上的真实配置，用户加过端点后
+        这里就不再是"空注册表"了（实测：界面点一次「加入」，这条测试就红）。
+        """
+        from knowtune import modelcfg
+
+        cfg = defaults_config().model_copy(deep=True)
+        cfg.generation.providers = {}
+        cfg.generation.provider = ""
+        data = modelcfg.listing(cfg)
+        assert isinstance(data["providers"], list)
+        assert data["active_ready"] is False
+        assert data["active_reason"], "空配置也要说清为什么不可用"
+
     def test_listing_marks_local_and_active(self):
         from knowtune import modelcfg
 
-        data = modelcfg.listing(load_config())
+        data = modelcfg.listing(self._cfg())
         active = [p for p in data["providers"] if p["active"]]
         assert len(active) == 1
-        assert active[0]["name"] == load_config().generation.provider
+        assert active[0]["name"] == "local"
         assert all(p["kind_label"] for p in data["providers"])
+        assert {p["name"]: p["local"] for p in data["providers"]} == {
+            "local": True, "cloud": False}
 
 
 class TestReadiness:
@@ -799,6 +830,66 @@ class TestPerCallOverrides:
 
         monkeypatch.setattr(llm_mod.httpx, "Client", FakeClient)
         return LLMClient(cfg)
+
+    def test_role_ref_model_reaches_payload(self, monkeypatch):
+        """「后端::模型」里的模型必须真的进 payload。
+
+        这是这套配置的唯一价值：值里写了模型、请求里没带，等于没配，而且
+        不报任何错——用户只会觉得"换了模型没变化"。只能靠抓包钉住。
+        """
+        captured = []
+        llm = self._llm(monkeypatch, captured)
+        "".join(llm.stream([{"role": "user", "content": "hi"}],
+                           provider="fake::hy-mt2-1.8b"))
+        assert captured[0]["model"] == "hy-mt2-1.8b"
+
+    def test_explicit_model_beats_role_ref(self, monkeypatch):
+        """调用点显式传 model 时优先于角色值里的模型：更具体的那层赢。"""
+        captured = []
+        llm = self._llm(monkeypatch, captured)
+        "".join(llm.stream([{"role": "user", "content": "hi"}],
+                           provider="fake::a", model="b"))
+        assert captured[0]["model"] == "b"
+
+    def test_result_model_comes_from_response(self, monkeypatch):
+        """LLMResult.model 取响应里的 model，不是配置里的那个。
+
+        LM Studio 对**不存在的模型名**不报错，而是静默回落到上次加载的模型。
+        如果这里回填配置值，用户配了个拼错的模型名也会"测试通过"，界面上一片
+        绿、实际跑的是别的模型。响应体里的 model 是唯一能拆穿它的东西。
+        """
+        import knowtune.generate.llm as llm_mod
+        from knowtune.config import Config, ProviderCfg
+        from knowtune.generate.llm import LLMClient
+
+        cfg = Config()
+        cfg.generation.providers["fake"] = ProviderCfg(
+            base_url="http://127.0.0.1:9999/v1", model="wanted", kind="openai")
+        cfg.generation.provider = "fake"
+
+        body = {"model": "actually-ran",
+                "choices": [{"message": {"content": "好"}}], "usage": {}}
+
+        class FakeResp:
+            status_code = 200
+            text = ""
+            def json(self):
+                return body
+
+        class FakeClient:
+            def __init__(self, *a, **k): pass
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                return False
+            def post(self, url, json=None, headers=None):
+                return FakeResp()
+            def close(self): pass
+
+        monkeypatch.setattr(llm_mod.httpx, "Client", FakeClient)
+        got = LLMClient(cfg).complete(
+            [{"role": "user", "content": "hi"}], provider="fake::wanted")
+        assert got.model == "actually-ran", "回落到的模型必须能看见"
 
     def test_model_and_sampling_reach_payload(self, monkeypatch):
         captured = []
@@ -1505,34 +1596,61 @@ class TestAutoCoverageOnTask:
         assert A._coverage_digest(1) is None
 
 
-class TestLaunchCommands:
-    """启动命令（2026-10-28）：按系统给、端口和卡片一致、不留占位符。
+class TestLocalModels:
+    """本地模型扫描（2026-11-04）。
 
-    之前那几条命令是照着 Linux 写的，还把 vLLM 的端口定在 8000——而 8000
-    正是本系统 Web 服务的端口，照抄的人只会看到"vLLM 起不来"。
+    以前这里测的是"每种后端都给一条能照抄的启动命令"。那条路走不通：
+    命令写死在代码里，用户换个安装位置就失效，而且 Windows / WSL / 容器
+    各一套，永远有没覆盖到的场景。现在改成直接扫 `.gguf` 并起进程，
+    测的就该是"扫得准不准、找不到可执行文件时说不说得清"。
     """
 
-    def test_port_placeholder_is_filled(self):
-        from knowtune import modelcfg
+    def test_quant_tag_is_recognised(self):
+        from knowtune.localmodels import _quant_of
 
-        r = modelcfg._render_launch(modelcfg.KIND_MAP["lmstudio"], "1235")
-        assert "{port}" not in r["launch"]
-        assert "1235" in r["launch"], "命令里的端口必须和卡片上的地址一致"
+        assert _quant_of("qwen2.5-7b-instruct-q4_k_m.gguf") == "Q4_K_M"
+        assert _quant_of("model-f16.gguf") == "F16"
+        assert _quant_of("plain-name.gguf") == ""
 
-    def test_vllm_port_does_not_collide_with_web_ui(self):
-        from knowtune import modelcfg
+    def test_scan_picks_gguf_and_ignores_others(self, tmp_path):
+        from knowtune import localmodels
 
-        assert ":8000" not in modelcfg.KIND_MAP["vllm"]["default_base"], \
-            "8000 是 knowtune 自己的 Web 服务端口，撞上就只剩'起不来'三个字"
+        (tmp_path / "a.gguf").write_bytes(b"x" * 4096)
+        (tmp_path / "notes.txt").write_text("nope", encoding="utf-8")
+        nested = tmp_path / "vendor" / "model"
+        nested.mkdir(parents=True)
+        (nested / "c.GGUF").write_bytes(b"x")
 
-    def test_every_local_kind_has_a_copyable_command(self):
-        """以前 custom 那一栏只有一行注释，复制过去什么都不会发生。"""
-        from knowtune import modelcfg
+        got = localmodels.scan([str(tmp_path)])
+        assert {m.name for m in got} == {"a", "c"}
+        assert all(m.size_mb >= 0 for m in got)
 
-        for k in modelcfg.kinds():
-            if k["local"] and k["id"] != "mock":
-                assert k["launch"].strip(), f"{k['id']} 没给能照抄的命令"
-            assert "{port}" not in (k["launch"] or "")
+    def test_scan_of_missing_dir_is_empty_not_an_error(self, tmp_path):
+        from knowtune import localmodels
+
+        assert localmodels.scan([str(tmp_path / "nope")]) == []
+
+    def test_missing_server_says_how_to_fix_it(self, monkeypatch, tmp_path):
+        from knowtune import localmodels
+
+        monkeypatch.setattr(localmodels.shutil, "which", lambda _n: None)
+        monkeypatch.delenv(localmodels.ENV_SERVER, raising=False)
+        with pytest.raises(localmodels.LocalError) as exc:
+            localmodels.find_server(str(tmp_path / "nowhere"))
+        msg = str(exc.value)
+        assert "llama-server" in msg
+        assert localmodels.ENV_SERVER in msg, "得告诉用户可以用环境变量指过去"
+
+    def test_port_range_does_not_collide_with_web_ui(self):
+        from knowtune import localmodels
+
+        assert localmodels.PORT_MIN > 8000
+        assert not (localmodels.PORT_MIN <= 8000 <= localmodels.PORT_MAX)
+
+    def test_status_of_unknown_model_is_unknown(self):
+        from knowtune import localmodels
+
+        assert localmodels.status("never-started-xyz")["state"] == "unknown"
 
 
 class TestDeleteKb:
@@ -1808,6 +1926,39 @@ class TestModelRoles:
                        default_provider="def", known=known) == "def"
         assert normalize({"translate": "nope", "generate": "def", "bogus": "x"},
                          known=known) == {"generate": "def"}
+
+    def test_role_value_can_pin_model(self):
+        """角色值可写成「后端::模型」。
+
+        翻译和推理常常落在同一个本地服务上、用不同模型（hy-mt2-1.8b 专翻、
+        doctor-7b 专答）。只认后端名等于把这个组合锁死，用户只能去改后端自己
+        的 model，然后推理也跟着一起变。
+        """
+        from knowtune.roles import join, normalize, resolve, split
+
+        assert split("lmstudio::hy-mt2-1.8b") == ("lmstudio", "hy-mt2-1.8b")
+        assert split("lmstudio") == ("lmstudio", "")
+        # 手写 YAML 多打空格是常态，不该因此让站点起不来
+        assert split("  lmstudio :: hy-mt2-1.8b  ") == ("lmstudio", "hy-mt2-1.8b")
+        # 模型名里带斜杠很常见（HuggingFace id），分隔符绝不能选 `/`
+        assert split("siliconflow::Qwen/Qwen2.5-7B-Instruct") == (
+            "siliconflow", "Qwen/Qwen2.5-7B-Instruct")
+        assert join("lmstudio", "") == "lmstudio"
+        assert join("lmstudio", "hy-mt2-1.8b") == "lmstudio::hy-mt2-1.8b"
+
+        known = {"lmstudio": 1, "def": 1}
+        # 校验只看后端那半截：模型名写错不该把整个角色丢掉，否则站点静默
+        # 退回默认后端，而用户以为自己配好了。
+        assert normalize({"translate": "lmstudio::no-such-model"}, known=known) == {
+            "translate": "lmstudio::no-such-model"}
+        assert normalize({"translate": "gone::x"}, known=known) == {}
+
+        assert resolve("translate",
+                       instance_roles={"translate": "lmstudio::hy-mt2-1.8b"},
+                       default_provider="def", known=known) == "lmstudio::hy-mt2-1.8b"
+        # 后端没了就退到下一级，不能把那一级的模型一起带过来
+        assert resolve("translate", instance_roles={"translate": "gone::x"},
+                       default_provider="def", known=known) == "def"
 
     def test_site_uses_different_providers_per_role(self, tmp_path):
         """翻译走翻译模型、输出走输出模型 —— 分工的唯一验收标准。"""
@@ -2302,6 +2453,34 @@ class TestLanguageFollow:
         assert got == "مىزاج دېگەن نېمە؟"
         assert len(calls) == 2, "最多重试一次，别在翻译上无限消耗"
         assert err and "translation_dropped" in err and "抄回" in err
+
+    def test_reverse_direction_drops_builtin_fewshot(self):
+        """内置 few-shot 只适用「维语→中文」，方向反过来时必须不用它。
+
+        样例两边的文字是写死的（维语句子 → 中文句子）。中文→维语时它会变成
+        「维吾尔语：气质是什么？」——标签和内容对不上，小参数专用翻译模型会
+        照着样例的语言走。实测 hy-mt2-1.8b 拿这份提示词，把四十字的中文
+        答成了一句无关的维吾尔语（"省是什么？"）。
+        """
+        from knowtune.lang import translate_query
+
+        seen = {}
+
+        class _Out:
+            text = "ياخشى، بۈگۈن ھاۋاسى ياخشى."
+            model = "hy-mt2-1.8b"
+
+        class _LLM:
+            def complete(self, msgs, **kw):
+                seen["msgs"] = msgs
+                return _Out()
+
+        got, err = translate_query(_LLM(), "你好，今天天气不错。", src="zh", dst="ug")
+        assert got.startswith("ياخشى"), "译文本身要能用"
+        assert err is None
+        blob = "".join(m["content"] for m in seen["msgs"])
+        assert "مىزاج" not in blob, "方向不符时不能带那段维→中样例"
+        assert "你好" in blob, "原文必须还在提示词里"
 
     def test_clean_translation_is_kept(self):
         from knowtune.lang import translate_query
@@ -2990,10 +3169,10 @@ class TestModelListAndRemember:
 
         secrets.wipe_file()
 
-    def test_clean_model_list_dedupes_and_tolerates_junk(self):
-        from knowtune.modelcfg import _clean_model_list
+    def testclean_models_dedupes_and_tolerates_junk(self):
+        from knowtune.modelcfg import clean_models
 
-        got = _clean_model_list([
+        got = clean_models([
             {"id": "qwen-plus", "context": "128000", "max_output": 8192},
             {"id": "qwen-plus"},              # 重复
             {"id": "   "},                    # 空
@@ -3015,12 +3194,12 @@ class TestModelListAndRemember:
         r = c.put("/api/models/bailian", json={
             "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
             "model": "qwen-plus", "kind": "bailian",
-            "model_list": [{"id": "qwen-plus", "context": 128000, "max_output": 8192},
+            "models": [{"id": "qwen-plus", "context": 128000, "max_output": 8192},
                            {"id": "glm-5.3-prime"}],
         })
         assert r.status_code == 200, r.text
         me = [p for p in r.json()["listing"]["providers"] if p["name"] == "bailian"][0]
-        assert [m["id"] for m in me["model_list"]] == ["qwen-plus", "glm-5.3-prime"]
+        assert [m["id"] for m in me["models"]] == ["qwen-plus", "glm-5.3-prime"]
         text = (tmp_path / "models.yaml").read_text(encoding="utf-8")
         assert "qwen-plus" in text and "glm-5.3-prime" in text
 
@@ -3149,7 +3328,7 @@ class TestSwitchModelKeepsList:
         cfg = Config()
         cfg.generation.providers["tt"] = ProviderCfg(
             base_url="https://api.x/v1", model="a", kind="openai",
-            model_list=[{"id": "a", "context": 1000}, {"id": "b"}],
+            models=[{"id": "a", "context": 1000}, {"id": "b"}],
         )
         modelcfg.upsert(cfg, "tt", base_url="https://api.x/v1", model="b", kind="openai")
         got = [m.id for m in cfg.generation.providers["tt"].model_list]
@@ -3163,10 +3342,10 @@ class TestSwitchModelKeepsList:
         cfg = Config()
         cfg.generation.providers["tt"] = ProviderCfg(
             base_url="https://api.x/v1", model="a", kind="openai",
-            model_list=[{"id": "a"}],
+            models=[{"id": "a"}],
         )
         modelcfg.upsert(cfg, "tt", base_url="https://api.x/v1", model="a",
-                        kind="openai", model_list=[])
+                        kind="openai", models=[])
         assert cfg.generation.providers["tt"].model_list == []
 
 
@@ -4261,7 +4440,7 @@ class TestModelCatalogAndActiveModel:
             r = c.put(f"/api/models/{name}", json={
                 "base_url": "http://127.0.0.1:9/v1", "model": models[0],
                 "kind": "custom",
-                "model_list": [{"id": m} for m in models],
+                "models": [{"id": m} for m in models],
             })
             assert r.status_code == 200, r.text
 
@@ -4284,7 +4463,7 @@ class TestModelCatalogAndActiveModel:
         c = TestClient(self.app.app)
         c.put("/api/models/acta", json={
             "base_url": "http://127.0.0.1:9/v1", "model": "first-model",
-            "kind": "custom", "model_list": [{"id": "first-model"}, {"id": "second-model"}],
+            "kind": "custom", "models": [{"id": "first-model"}, {"id": "second-model"}],
         })
         assert c.post("/api/models/active", json={
             "name": "acta", "model": "second-model"}).status_code == 200
@@ -4385,3 +4564,354 @@ class TestVectorStoreLoad:
         hits = vs.search(self._Conn(rows, docs), np.ones(dim, dtype=np.float32), top_k=5)
         assert [h.chunk_id for h in hits] == [1, 4], "矩阵行与 chunk_id 错位了"
         assert hits[0].score > hits[1].score, "全 1 向量该比全 0 向量更相似"
+
+
+class TestGateway:
+    """固定 API 入口（2026-11-04）。
+
+    sky 要的是"启动后暴露一个地址，以后其他地方就调这个接口"。本地实例一个
+    模型一个端口，外部程序记不住也不该记；主服务自己的 /v1 才是那个不变量。
+    这组测试锁住三件事：地址不随上游端口变、上游挂了 /v1/models 仍能列模型、
+    roles 形式的 model 能正确路由并拆成纯模型名。
+    """
+
+    def _client(self, monkeypatch):
+        from fastapi.testclient import TestClient
+
+        from knowtune.api import app as app_mod
+        from knowtune.config import Config, ProviderCfg
+
+        cfg = Config()
+        cfg.generation.provider = "edge"
+        cfg.generation.providers = {
+            "edge": ProviderCfg(base_url="http://127.0.0.1:19091/v1", model="m1",
+                                kind="local", models=[{"id": "m1"}, {"id": "m2"}]),
+            "cloud": ProviderCfg(base_url="https://api.example.com/v1", model="c1",
+                                 kind="openai", models=[{"id": "c1"}]),
+        }
+        monkeypatch.setattr(app_mod.state, "cfg", cfg)
+        return TestClient(app_mod.app), cfg
+
+    def test_fixed_address_ignores_upstream_port_change(self, monkeypatch):
+        c, cfg = self._client(monkeypatch)
+        first = c.get("/api/gateway").json()
+        assert first["base_url"].endswith("/v1")
+        assert first["chat_url"].endswith("/v1/chat/completions")
+        assert first["models_url"].endswith("/v1/models")
+        assert "m1" in first["curl"]
+
+        # 模拟实例换端口：外部程序写死的那个地址一个字都不该变
+        cfg.generation.providers["edge"].base_url = "http://127.0.0.1:19092/v1"
+        assert c.get("/api/gateway").json()["base_url"] == first["base_url"]
+
+    def test_models_falls_back_to_catalog_when_upstream_is_down(self, monkeypatch):
+        c, _ = self._client(monkeypatch)
+        r = c.get("/v1/models")
+        assert r.status_code == 200, r.text
+        assert {m["id"] for m in r.json()["data"]} == {"m1", "m2"}
+        assert r.headers["x-knowtune-upstream"] == "edge"
+
+    def test_explicit_provider_query_is_honoured(self, monkeypatch):
+        c, _ = self._client(monkeypatch)
+        r = c.get("/v1/models?provider=cloud")
+        assert r.status_code == 200
+        assert r.headers["x-knowtune-upstream"] == "cloud"
+
+    def test_unknown_provider_is_rejected_loudly(self, monkeypatch):
+        c, _ = self._client(monkeypatch)
+        r = c.get("/v1/models?provider=nope")
+        assert r.status_code == 400
+
+    def test_role_style_model_is_routed_and_rewritten(self, monkeypatch):
+        import httpx
+
+        c, _ = self._client(monkeypatch)
+        seen = {}
+
+        async def fake_post(self, url, **kw):
+            seen.update(url=url, payload=kw.get("json"), headers=kw.get("headers"))
+            return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+        r = c.post("/v1/chat/completions",
+                   json={"model": "cloud::c1", "messages": [{"role": "user", "content": "hi"}]})
+        assert r.status_code == 200, r.text
+        assert seen["url"] == "https://api.example.com/v1/chat/completions"
+        assert seen["payload"]["model"] == "c1", "roles 形式必须拆成纯模型名再发给上游"
+
+    def test_preflight_allows_browser_clients(self, monkeypatch):
+        c, _ = self._client(monkeypatch)
+        r = c.options("/v1/chat/completions", headers={"Origin": "http://localhost:3000"})
+        assert r.status_code == 204
+        assert r.headers["access-control-allow-origin"] == "*"
+
+
+class TestLocalApiAddress:
+    def test_api_info_gives_every_url_a_caller_needs(self, tmp_path):
+        from knowtune import localmodels
+
+        inst = localmodels.Instance(
+            name="edge/m1", path=str(tmp_path / "m1.gguf"), port=8093, pid=1,
+            started_at=0.0, ctx=4096, model="m1")
+        info = localmodels.api_info(inst)
+        assert info["base_url"] == "http://127.0.0.1:8093/v1"
+        assert info["chat_url"].endswith("/chat/completions")
+        assert info["models_url"].endswith("/models")
+        assert '"model": "m1"' in info["curl"]
+        assert info["lan_base_url"] == "", "没绑 0.0.0.0 就不该给局域网地址"
+
+    def test_configured_port_is_never_silently_changed(self):
+        """外部程序写死了端口，被占时悄悄换一个等于把那个地址弄失效。"""
+        import socket
+
+        from knowtune import localmodels
+
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            s.listen(1)
+            taken = s.getsockname()[1]
+            with pytest.raises(localmodels.LocalError, match="不能悄悄换端口"):
+                localmodels._pick_port(taken, strict=True)
+            # 没配端口时仍然可以自动挑
+            assert localmodels._pick_port() >= localmodels.PORT_MIN
+
+
+class TestGateway:
+    """固定 API 入口（2026-11-04）。
+
+    sky 要的是"启动后暴露一个地址，以后其他地方就调这个接口"。本地实例一个
+    模型一个端口，外部程序记不住也不该记；主服务自己的 /v1 才是那个不变量。
+    这组测试锁住三件事：地址不随上游端口变、上游挂了 /v1/models 仍能列模型、
+    roles 形式的 model 能正确路由并拆成纯模型名。
+    """
+
+    def _client(self, monkeypatch):
+        from fastapi.testclient import TestClient
+
+        from knowtune.api import app as app_mod
+        from knowtune.config import Config, ProviderCfg
+
+        cfg = Config()
+        cfg.generation.provider = "edge"
+        cfg.generation.providers = {
+            "edge": ProviderCfg(base_url="http://127.0.0.1:19091/v1", model="m1",
+                                kind="local", models=[{"id": "m1"}, {"id": "m2"}]),
+            "cloud": ProviderCfg(base_url="https://api.example.com/v1", model="c1",
+                                 kind="openai", models=[{"id": "c1"}]),
+        }
+        monkeypatch.setattr(app_mod.state, "cfg", cfg)
+        return TestClient(app_mod.app), cfg
+
+    def test_fixed_address_ignores_upstream_port_change(self, monkeypatch):
+        c, cfg = self._client(monkeypatch)
+        first = c.get("/api/gateway").json()
+        assert first["base_url"].endswith("/v1")
+        assert first["chat_url"].endswith("/v1/chat/completions")
+        assert first["models_url"].endswith("/v1/models")
+        assert "m1" in first["curl"]
+
+        # 模拟实例换端口：外部程序写死的那个地址一个字都不该变
+        cfg.generation.providers["edge"].base_url = "http://127.0.0.1:19092/v1"
+        assert c.get("/api/gateway").json()["base_url"] == first["base_url"]
+
+    def test_models_falls_back_to_catalog_when_upstream_is_down(self, monkeypatch):
+        c, _ = self._client(monkeypatch)
+        r = c.get("/v1/models")
+        assert r.status_code == 200, r.text
+        assert {m["id"] for m in r.json()["data"]} == {"m1", "m2"}
+        assert r.headers["x-knowtune-upstream"] == "edge"
+
+    def test_explicit_provider_query_is_honoured(self, monkeypatch):
+        c, _ = self._client(monkeypatch)
+        r = c.get("/v1/models?provider=cloud")
+        assert r.status_code == 200
+        assert r.headers["x-knowtune-upstream"] == "cloud"
+
+    def test_unknown_provider_is_rejected_loudly(self, monkeypatch):
+        c, _ = self._client(monkeypatch)
+        r = c.get("/v1/models?provider=nope")
+        assert r.status_code == 400
+
+    def test_role_style_model_is_routed_and_rewritten(self, monkeypatch):
+        import httpx
+
+        c, _ = self._client(monkeypatch)
+        seen = {}
+
+        async def fake_post(self, url, **kw):
+            seen.update(url=url, payload=kw.get("json"), headers=kw.get("headers"))
+            return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+        r = c.post("/v1/chat/completions",
+                   json={"model": "cloud::c1", "messages": [{"role": "user", "content": "hi"}]})
+        assert r.status_code == 200, r.text
+        assert seen["url"] == "https://api.example.com/v1/chat/completions"
+        assert seen["payload"]["model"] == "c1", "roles 形式必须拆成纯模型名再发给上游"
+
+    def test_preflight_allows_browser_clients(self, monkeypatch):
+        c, _ = self._client(monkeypatch)
+        r = c.options("/v1/chat/completions", headers={"Origin": "http://localhost:3000"})
+        assert r.status_code == 204
+        assert r.headers["access-control-allow-origin"] == "*"
+
+
+class TestLocalApiAddress:
+    def test_api_info_gives_every_url_a_caller_needs(self, tmp_path):
+        from knowtune import localmodels
+
+        inst = localmodels.Instance(
+            name="edge/m1", path=str(tmp_path / "m1.gguf"), port=8093, pid=1,
+            started_at=0.0, ctx=4096, model="m1")
+        info = localmodels.api_info(inst)
+        assert info["base_url"] == "http://127.0.0.1:8093/v1"
+        assert info["chat_url"].endswith("/chat/completions")
+        assert info["models_url"].endswith("/models")
+        assert '"model": "m1"' in info["curl"]
+        assert info["lan_base_url"] == "", "没绑 0.0.0.0 就不该给局域网地址"
+
+    def test_configured_port_is_never_silently_changed(self):
+        """外部程序写死了端口，被占时悄悄换一个等于把那个地址弄失效。"""
+        import socket
+
+        from knowtune import localmodels
+
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            s.listen(1)
+            taken = s.getsockname()[1]
+            with pytest.raises(localmodels.LocalError, match="不能悄悄换端口"):
+                localmodels._pick_port(taken, strict=True)
+            # 没配端口时仍然可以自动挑
+            assert localmodels._pick_port() >= localmodels.PORT_MIN
+
+
+class TestGatewayRouting:
+    """模型配置暴露固定入口后，预问诊 / 评测台都必须真的走它（2026-11-04）。
+
+    光在界面上写个地址不算打通。这组测试锁住三件事：默认走网关、网关挂了
+    能退回备用客户端、以及参数面板钉的端点确实作为路由头传了出去。
+    """
+
+    def test_default_is_gateway_and_can_be_turned_off(self, monkeypatch):
+        from previsit.llm import GatewayLLM
+
+        monkeypatch.setenv("KNOWTUNE_GATEWAY", "http://127.0.0.1:9010/v1")
+        fallback = object()
+        gw = GatewayLLM.wrap({"provider": "", "model": ""}, fallback)
+        assert isinstance(gw, GatewayLLM)
+        assert gw.base_url == "http://127.0.0.1:9010/v1"
+        assert GatewayLLM.wrap({"llm_gateway": "direct"}, fallback) is fallback
+        assert GatewayLLM.wrap({"llm_gateway": False}, fallback) is fallback
+
+    def test_complete_uses_gateway_and_reports_source(self, monkeypatch):
+        import httpx
+
+        from previsit.llm import GatewayLLM
+
+        seen = {}
+
+        def fake_post(url, **kw):
+            seen.update(url=url, payload=kw.get("json"), headers=kw.get("headers"))
+            return httpx.Response(200, json={"choices": [{"message": {"content": " 好的 "}}]})
+
+        monkeypatch.setattr(httpx, "post", fake_post)
+        gw = GatewayLLM("http://127.0.0.1:9010/v1", model="m1", provider="local")
+        assert gw.complete([{"role": "user", "content": "hi"}]) == "好的"
+        assert seen["url"].endswith("/v1/chat/completions")
+        assert seen["payload"]["model"] == "m1"
+        assert seen["headers"]["X-KnowTune-Provider"] == "local"
+        assert gw.source == "gateway"
+        assert gw.provider.startswith("gateway:")
+
+    def test_gateway_failure_falls_back_without_hanging_every_turn(self, monkeypatch):
+        import httpx
+
+        from previsit.llm import GatewayLLM
+
+        calls = {"gw": 0, "fb": 0}
+
+        def fake_post(url, **kw):
+            calls["gw"] += 1
+            raise httpx.ConnectError("refused")
+
+        class Fallback:
+            provider = "direct:local"
+
+            def complete(self, msgs, **kw):
+                calls["fb"] += 1
+                return "规则兜底"
+
+        monkeypatch.setattr(httpx, "post", fake_post)
+        gw = GatewayLLM("http://127.0.0.1:9010/v1", Fallback(), model="m1",
+                        retry_after=999)
+        assert gw.complete([]) == "规则兜底"
+        assert gw.complete([]) == "规则兜底"
+        assert calls["gw"] == 1, "失败后不该每轮问诊都白等一次超时"
+        assert calls["fb"] == 2
+        assert gw.source == "fallback"
+        assert gw.provider == "direct:local"
+
+    def test_model_is_taken_from_gateway_when_not_pinned(self, monkeypatch):
+        import httpx
+
+        from previsit.llm import GatewayLLM
+
+        monkeypatch.setattr(httpx, "get", lambda *a, **kw: httpx.Response(
+            200, json={"data": [{"id": "active-model"}]}))
+        seen = {}
+        monkeypatch.setattr(httpx, "post", lambda url, **kw: (
+            seen.update(model=kw["json"]["model"]) or httpx.Response(
+                200, json={"choices": [{"message": {"content": "ok"}}]})))
+        gw = GatewayLLM("http://127.0.0.1:9010/v1")
+        assert gw.complete([]) == "ok"
+        assert seen["model"] == "active-model"
+
+
+class TestEvalBoardGateway:
+    """打分台从 /v1 取模型清单，主服务没起才退回 YAML。"""
+
+    @staticmethod
+    def _mod():
+        import importlib.util
+        from pathlib import Path
+
+        path = Path(__file__).resolve().parents[1] / "evals" / "backends.py"
+        spec = importlib.util.spec_from_file_location("_evals_backends", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def test_gateway_builds_one_endpoint_for_every_model(self, monkeypatch):
+        mod = self._mod()
+        monkeypatch.setenv("KNOWTUNE_GATEWAY", "http://127.0.0.1:9010/v1")
+
+        def fake(url, timeout=1.0):
+            if url.endswith("/api/gateway"):
+                return {"base_url": "http://127.0.0.1:9010/v1", "model": "m2"}
+            if url.endswith("/v1/models"):
+                return {"data": [{"id": "m1"}, {"id": "m2"}]}
+            if url.endswith("/api/models"):
+                return {"providers": [{"name": "cloud", "base_url": "https://x/v1",
+                                       "models": [{"id": "c1"}]}]}
+            return {}
+
+        monkeypatch.setattr(mod, "_get_json", fake)
+        eps = mod.entries()
+        assert len(eps) == 1
+        ep = eps[0]
+        assert ep["name"] == "gateway" and ep["source"] == "gateway"
+        assert ep["base_url"] == "http://127.0.0.1:9010/v1"
+        assert ep["models"][0] == "m2", "在用的模型要排第一"
+        assert "cloud::c1" in ep["models"], "别的端点也要能从同一个地址打到"
+        assert ep["api_key"] == "" and ep["alive"] is True
+        assert mod.fill("gateway::cloud::c1")["base_url"] == ep["base_url"]
+
+    def test_main_service_down_falls_back_to_yaml(self, monkeypatch):
+        mod = self._mod()
+        monkeypatch.setenv("KNOWTUNE_GATEWAY", "http://127.0.0.1:9010/v1")
+        monkeypatch.setattr(mod, "_get_json",
+                            lambda *a, **kw: (_ for _ in ()).throw(OSError("down")))
+        assert mod._gateway_entries() is None
+        assert mod.gateway_status()["ok"] is False
+        assert isinstance(mod.entries(), list), "降级后仍要能列出配置里的端点"

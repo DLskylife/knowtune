@@ -60,7 +60,7 @@ all = ["knowtune[extract,local,dev]"]
 knowtune = "knowtune.cli:main"   # S1 提供
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/knowtune"]
+packages = ["src/knowtune", "src/previsit"]
 
 [tool.ruff]
 line-length = 100

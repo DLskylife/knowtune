@@ -176,6 +176,16 @@ def build_site(spec, state: Any) -> FastAPI:
     """
     app = FastAPI(title=spec.title or spec.name, docs_url=None, redoc_url=None)
 
+    # 预问诊挂在同一个站点下（/previsit/），终端用户不用换端口、不用记第二个
+    # 地址。挂载失败只影响这一个入口，绝不能把整个问答站点带崩——所以吞异常
+    # 但要留痕：静默吞掉的话，现象就是"入口点进去 404"，而日志里什么都没有。
+    try:
+        from ..previsit.app import create_app as _previsit_app
+        app.mount("/previsit", _previsit_app())
+    except Exception as exc:
+        logbus.note(f"预问诊挂载失败，站点其余功能不受影响："
+                    f"{type(exc).__name__}: {exc}", level="ERROR", source="sites")
+
     name = spec.name
     _warned = False
 

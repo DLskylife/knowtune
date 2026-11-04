@@ -6,11 +6,11 @@ instances:
   lang: ug
   kb_lang: zh
   answer_mode: translate
+  # 留空 = 跟随「模型服务」页当前的端点。以前这里钉死成
+  # translate: siliconflow / generate: lmstudio，云端配置一删，站点就指向空气。
+  # 要固定成某个本地模型，写成 `local::hy-mt2-1.8b` 这种形式。
   provider: ''
-  roles:
-    translate: deepseek
-    generate: deepseek
-  kb_name: ئۇيغۇر تېبابىتى بىلىم ئامبىرى
+  roles: {}
   title: ئۇيغۇر تېبابىتى بىلىم سوئال-جاۋاب سىستېمىسى
   subtitle: بىلىم ئامبىرىدىن ئىزدەپ، مەنبەسىنى كۆرسىتىپ جاۋاب بېرىدۇ
   welcome: ئەسسالامۇ ئەلەيكۇم! ئۇيغۇر تېبابىتى بويىچە سوئالىڭىزنى يېزىڭ.
@@ -20,6 +20,7 @@ instances:
   - قان ئازلىقنى ئۇيغۇر تېبابىتىدە قانداق داۋالايدۇ؟
   disclaimer: بۇ سىستېما بىلىم ئامبىرىدىكى ماتېرىيالغا ئاساسەن جاۋاب بېرىدۇ، داۋالاش
     ئۈچۈن دوختۇرغا كۆرۈنۈڭ.
+  kb_name: ئۇيغۇر تېبابىتى بىلىم ئامبىرى
   autostart: true
   public: false
   alt:

@@ -1489,9 +1489,27 @@ DOM、自己持有引用，谁的数据进谁的卡，容器 `#taskDock` 竖排�
 
 **下拉里必须带后端的下文**（2026-10-28 修订）：只列一个后端名字，用户不知道
 选了会发生什么——尤其云端后端缺密钥/欠费时会静默退到默认后端，看起来就是
-"配了没生效"。所以每个选项写成 `名字（本地/云端 · 模型名 · 状态）`，
-状态取 `/api/models` 的 `ready` / `status`。界面上两个角色直接叫
-**翻译模型 / 推理模型**，不用"translate / generate"这种内部词。
+"配了没生效"。所以每个后端是一个 `optgroup`，组标签写
+`名字（本地/云端 · 状态）`，状态取 `/api/models` 的 `ready` / `status`；
+组内第一项是「默认 · 后端自己的模型」，其余是这个后端能用的模型。界面上两个
+角色直接叫**翻译模型 / 推理模型**，不用"translate / generate"这种内部词。
+
+**角色值可以精确到模型**（2026-11-04 追加）：值写成 `后端::模型`，例如
+`translate: lmstudio::hy-mt2-1.8b`。只写后端名仍然合法（用后端自己的 `model`），
+旧配置不用改。
+
+为什么非加不可：翻译和推理经常落在**同一个本地服务**上、用不同模型——hy-mt2-1.8b
+专翻、doctor-7b 专答。只能选后端就等于把这个组合锁死，用户为了换个翻译模型
+得去改后端自己的 `model`，推理也跟着一起变。
+
+实现上只在两处拆：`LLMClient.resolve/_target` 拆开 `后端::模型`，所以
+`llm.stream/complete` 的所有调用点都不用改；`lang.translate_query` 另外拆一次，
+因为查提示词模板要的是后端名（带 `::` 永远查不到覆盖，会静默退回默认模板）。
+`roles.normalize/resolve` 只校验 `::` 前半截——模型名写错留给真实调用去打脸，
+把它一起拒掉的话，用户看到的是"配了没生效"，比报错更难查。
+
+分隔符是 `::` 而不是 `/`：HuggingFace 的模型 id 里斜杠是常态
+（`Qwen/Qwen2.5-7B-Instruct`），用它当分隔符就是自找麻烦。
 
 **改完立即生效，不用重启站点**：`site.py::_provider` 每次请求都重新读
 `state.cfg.generation.roles`（站点实例与主应用共享同一个 state 对象），
@@ -2701,3 +2719,128 @@ F1–F5 的逐条对照见 **§14**（含未完成项与原因）。
 79.2% 这个数只代表现行配置。真要出严格的前后对比，得把旧向量另存一份再跑。
 
 回归测试 230 passed（新增 `TestChunkSizeVsEmbedWindow` 3 条 + 批量删除 5 条）。
+
+### 12.46 模型配置推倒重来：八种 kind → 两种 + 本地实例托管（2026-11-04 追加）
+
+**起因**：八种后端类型（vllm / lmstudio / ollama / deepseek / bailian / openai /
+custom / mock）说的是同一个协议（OpenAI 兼容），区别只剩"谁在跑"和"怎么起"。
+而"怎么起"早有更好的答案（localmodels.py 直接读 .gguf 拉 llama-server），
+云端则根本没有启动命令可给。八种类型的全部收益是八套会过期的提示文案。
+
+**新模型**（`config.py` + `modelcfg.py` 重写）：
+
+- `ProviderCfg.kind` 只剩 `local` / `openai`，仅用于界面分组，不参与请求逻辑。
+  老配置里的 vllm/lmstudio/ollama 按 base_url 是不是本机地址归入 local，
+  其余归 openai——旧文件不抛错，服务起得来。
+- `ModelEntry` 成为一等实体：`id`（发给接口的 model）、`alias`（展示名）、
+  `context` / `max_output`（预算收敛）、`path`（.gguf 绝对路径，非空 = 本机
+  可起）、`port`（本机监听端口）。YAML 键名 `models:`，`model_list` 是兼容旧名。
+- roles 值形如 `后端::模型`，校验只看前半截；`LLMClient._target` 拆开后半截
+  作为请求的 model 字段。
+
+**本地实例**（新模块 `localmodels.py`）：扫描目录列 .gguf → 一键写进端点清单
+（带 path/port）→ 「启动」拉起 llama-server（`/v1` 兼容，`/models` 探活，
+pid 与日志落 `data/localmodels/`）→「停止」。llama-server 路径按
+`KNOWTUNE_LLAMA_SERVER` > PATH > 常见安装位找。
+
+**删掉的**：`KIND_MAP` 的八套 launch 命令模板与 `_render_launch`、
+`TestLaunchCommands`、mock 的特殊分支（mock 不再是 kind，`_is_mock` 按端点名
+判断）、前端「本地后端启动命令」整块折叠区、重复定义的 `modelPick`。
+
+**保留的**：密钥三级取值（inline > secrets > 环境变量）、只落差异的
+models.yaml、探测缓存（services.py 原样不动）。
+
+**接口**（`api/app.py`）：`/api/models` 返回的模型清单是实体（含 path/port/
+运行状态）；新增 `/api/models/scan`（扫目录）、`/api/models/start`、
+`/api/models/stop`、`/api/models/instances`（在跑的实例）。upsert 的
+`model_list` 参数名兼容旧值，内部统一 `models`。
+
+**效果**：预置云端后端全清空，`config/models.yaml` 从 5 个 provider 变成带
+完整注释的模板；站点 `uyghur-med` 的 roles 留空跟随当前端点，不再钉死一个
+已被删掉的云端。回归 347 passed。
+
+### 12.47 固定 API 入口 /v1：让别处写死一个地址（2026-11-04 追加）
+
+**起因**：本地实例「一个模型一个进程一个端口」，端口还会因为配置的口被占而
+变化。sky 的需求是「启动后暴露本机 api 地址，以后其他地方就调用这个 api
+接口」——让 dify / ccswitch / 脚本 / 预问诊站点去记 8090、8091 是不现实的。
+
+**做法**：主服务自己提供 OpenAI 兼容入口，转发给当前端点。
+
+- `GET /api/gateway`：返回固定地址（`base_url` / `chat_url` / `models_url`）、
+  默认模型、可直接粘的 curl、以及所有在跑实例的直连地址。
+- `GET /v1/models`：转发上游 `/models`；上游没起时兜底返回配置清单——
+  OpenAI 客户端接入的第一步不该因为模型没加载就 502。
+- `POST /v1/chat/completions`、`POST /v1/completions`：原样转发 body，
+  支持 stream（`aiter_raw` 逐块透传，不解析、不缓冲），响应带
+  `X-KnowTune-Upstream` 标明实际打到哪个端点。
+- 路由优先级：`?provider=` / `X-KnowTune-Provider` 头 > body 里的
+  `端点::模型` 或命中某端点清单的 model > 当前活动端点。roles 形式在转发前
+  拆成纯模型名，上游只认后者。
+- `/v1/*` 单独放行 CORS 与 OPTIONS 预检（浏览器里的第三方工具要发）；
+  其余路径仍走原来的 no-store/no-cache 规则。
+
+**地址稳定性**：`localmodels.start()` 把实际端口写回模型清单；清单里显式配了
+port 时被占用**直接报错**，不再悄悄换一个——换口等于让外部写死的地址失效。
+`Instance` 增加 host / model，`api_info()` 一处拼出所有地址与 curl（启动返回、
+状态接口、界面卡片三处共用，避免漂移）。默认绑 127.0.0.1；界面勾「允许局域网
+调用」后绑 0.0.0.0 并给出局域网地址，主服务需 `--host 0.0.0.0`（**无鉴权**）。
+
+**启动日志**现在同时打印 Web UI 与 API 两个地址；「模型服务」页新增「API 接入
+· 固定地址」卡片，地址、curl、直连地址各带复制按钮，本地模型行运行中时也
+显示直连地址。回归 355 passed（新增 TestGateway 6 条 + TestLocalApiAddress 2 条）。
+
+### 12.48 让页面自己用上 /v1：预问诊、评测台接入 + 五视图样式统一（2026-11-04 追加）
+
+**起因**：12.47 把固定入口 `/v1` 暴露出来了，但站内三个页面各自还有一套模型配置。
+sky 要的是「打通」——不是卡片上多一个地址，而是这些页面的请求真的从那一个口
+走；维医前台问答站点先不动。
+
+**范围**（站点页三张卡）：
+
+| 卡 | 处理 |
+|---|---|
+| 维医前台 `uyghur-med` | **不改**。仍走主站内部 `roles` 与 `LLMClient` |
+| 预问诊 | 改走 `/v1` |
+| 评测台 | 改走 `/v1` |
+
+**预问诊**（`previsit/llm.py` 新增 `GatewayLLM`）：包装任意 `complete()` 客户端，
+优先 POST `{gateway}/chat/completions`，失败后 20 秒内不再重试、退回备用客户端
+（挂在主服务里是 `KnowtuneLLMAdapter`，独立部署是 `OpenAICompatLLM`）。模型名
+没显式指定时问 `/v1/models` 取当前在用的那个，缓存 30 秒。参数面板 runtime 新增
+`llm_source` / `llm_gateway` / `llm_gateway_error`，界面直接显示「经网关调用 /
+已降级直连」。网关地址优先级：`PREVISIT_LLM_GATEWAY` > `KNOWTUNE_GATEWAY`
+（`knowtune serve` 按实际端口写入）> `config/previsit.yaml` 的 `llm_gateway` >
+默认 8000；`llm_gateway: false/direct` 完全不走网关。
+
+独立包与 `previsit_site/` 镜像保持逐字节一致；`previsit/app.py` 增加
+`set_llm_factory()`，主项目注入自己的适配器，两边共用同一套路由。
+
+**评测台**（`evals/backends.py`）：`entries()` 先问 `/api/gateway` + `/v1/models`
++ `/api/models`，把网关包装成一个 `gateway` 端点；清单里除了上游模型 id，还把
+每个端点的 `端点::模型` 补进来，所有模型都从同一个地址打。主服务没起才退回
+读 `default.yaml` / `models.yaml` 的老路径，8 秒缓存，`refresh()` 清掉。
+`/api/evalboard/start|restart` 按真实 `request.base_url` 把地址显式写进子进程
+环境变量，不靠继承（直接 `uvicorn` 启动时父进程没设那个变量）。
+
+**修掉一个真的断路**：`config/previsit.overrides.yaml` 里还钉着
+`provider: lmstudio`——12.46 把预置后端全删后这个名字已经不存在，网关回 400、
+备用链路报「未知 provider」，整场问诊悄悄退化成规则兜底。现在覆盖层清空跟随
+当前端点；`_main_llm_factory` 也会把注册表里认不出的名字当「跟随」，
+`GatewayLLM` 收到 400 且带路由头时去掉头重试一次，旧配置能自愈。
+
+**样式统一**（`api/static/style.css`）：新增 `--card-bg / --card-line /
+--card-radius / --card-pad-x / --card-pad-y / --card-head-bg / --card-gap`，
+`.card / .svc-card / .site-block / .ev-card / .gateway-card / .kpi /
+.stat-strip` 全部收敛到这一组。原来评测台卡是另起炉灶的「黑卡」（`#05070a`
+底、两层渐变、34px 投影、整套 `--ev-*` 私有线色），现在只留顶边一条渐变线
+当识别标记。`.card-head / .sbk-head / .ev-head` 同高、同内边距、同底线。
+重复的内联 `style="margin-top:8px"` 之类 38 处换成 `.u-*` 工具类，
+`app.js` 内联样式 68 → 30（剩下的都是宽度/百分比这类动态值）。
+`evals/look_sites.py` 是回归探针：五个视图里各类卡片的 background/border/
+radius 合并后只有 **1 种组合**，且 JS 无报错。
+
+**冒烟**：假上游 8090 + 主服务 8010 实跑。预问诊一次 start+reply 在假上游
+留下 5 条 `chat` 记录，全部经 `/v1` 转发；`runtime.llm_source=gateway`；
+评测台 `gateway_status().ok=True`、默认项变成 `gateway::Hy-MT2-1.8B-Q4_K_M`；
+站点页两张卡各一行「模型入口」可复制。回归 **361 passed**（新增 6 条网关路由测试）。
