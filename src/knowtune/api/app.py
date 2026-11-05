@@ -572,6 +572,12 @@ async def no_stale_static(request: Request, call_next):
 # --------------------------------------------------------------------- 基础
 
 
+@app.get("/favicon.ico")
+async def favicon() -> Response:
+    # 浏览器会自动请求 favicon；没图标就回 204，避免控制台 404 噪音。
+    return Response(status_code=204)
+
+
 @app.get("/")
 def index() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html")
@@ -987,7 +993,7 @@ def local_status() -> dict:
 # 都没写就用当前活动端点；请求里的 model 命中别的端点清单时自动路由过去。
 
 
-def _gateway_target(request: Request, payload: dict) -> tuple[str, ProviderCfg, str]:
+def _gateway_target(request: Request, payload: dict, allow_empty: bool = False) -> tuple[str, ProviderCfg | None, str]:
     providers = state.cfg.generation.providers
     want = (request.query_params.get("provider")
             or request.headers.get("x-knowtune-provider") or "").strip()
@@ -1005,8 +1011,15 @@ def _gateway_target(request: Request, payload: dict) -> tuple[str, ProviderCfg, 
                 break
     if not want:
         want = state.cfg.generation.provider
-    if want not in providers or not want:
-        raise HTTPException(400, f"端点「{want or '（空）'}」不存在；"
+    if not want:
+        # 列表类接口（/v1/models）允许空：返回哨兵让调用方给客户端空列表，
+        # 而不是 400。真正要转发的 chat/completions 不带 allow_empty，仍走 400。
+        if allow_empty:
+            return "", None, ""
+        raise HTTPException(400, f"端点「（空）」不存在；"
+                                f"可用：{', '.join(sorted(providers)) or '（还没配任何端点）'}")
+    if want not in providers:
+        raise HTTPException(400, f"端点「{want}」不存在；"
                                 f"可用：{', '.join(sorted(providers)) or '（还没配任何端点）'}")
 
     p = providers[want]
@@ -1070,15 +1083,24 @@ def gateway_info(request: Request) -> dict:
 
 @app.get("/v1/models")
 async def gateway_models(request: Request):
-    """OpenAI 客户端接入时第一个打的接口：告诉它有哪些模型。"""
-    name, p, base = _gateway_target(request, {})
+    """OpenAI 客户端接入时第一个打的接口：告诉它有哪些模型。
+
+    容错优先：没配端点、端点没填地址、上游暂时连不上，都返回配置清单
+    （或空列表），而不是把 400/503/502 抛给客户端——符合 OpenAI 规范，
+    也方便客户端在配置阶段就拿到可用的 model id。
+    """
+    name, p, base = _gateway_target(request, {}, allow_empty=True)
+    if p is None:
+        return JSONResponse({"object": "list", "data": []},
+                            headers={"X-KnowTune-Upstream": ""})
     try:
-        async with httpx.AsyncClient(timeout=_gateway_timeout(), trust_env=False) as c:
-            r = await c.get(base + "/models", headers=_upstream_headers(p, name))
-        if r.status_code < 400:
-            return Response(content=r.content, status_code=r.status_code,
-                            media_type=r.headers.get("content-type", "application/json"),
-                            headers={"X-KnowTune-Upstream": name})
+        if base:
+            async with httpx.AsyncClient(timeout=_gateway_timeout(), trust_env=False) as c:
+                r = await c.get(base + "/models", headers=_upstream_headers(p, name))
+            if r.status_code < 400:
+                return Response(content=r.content, status_code=r.status_code,
+                                media_type=r.headers.get("content-type", "application/json"),
+                                headers={"X-KnowTune-Upstream": name})
     except httpx.HTTPError:
         pass
     # 上游没起也别让客户端拿到 502：配置清单本身就是"有哪些模型"的可靠答案。
