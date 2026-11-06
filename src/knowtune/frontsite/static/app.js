@@ -22,7 +22,7 @@
 
 /* 构建号：和 index.html 里那份必须一致，不一致说明浏览器拿的是旧 JS，
    页面加载完会强制换一次（见 index.html 里的自检脚本）。 */
-window.SITE_BUILD = "1.7.13";
+window.SITE_BUILD = "1.7.14";
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
@@ -753,7 +753,11 @@ function splitLeads(line) {
    句末，读起来像"序号写在句子后面"。解析成 <ol> 后序号由浏览器按书写方向
    摆到正确的一侧，且缩进对齐。 */
 function renderRich(text) {
-  const lines = String(text ?? "").replace(/\r/g, "").split("\n");
+  const lines = String(text ?? "")
+    // 写坏的引用记号（[n1] / [1n]）先还原：旧存档和中文原稿里都可能带着它，
+    // 不还原就是页面上凭空多出一段方括号字面量，点不动、也数不进来源。
+    .replace(/\[[nN](\d{1,2})\]/g, "[$1]").replace(/\[(\d{1,2})[nN]\]/g, "[$1]")
+    .replace(/\r/g, "").split("\n");
   const out = [];
   let para = [];
   let list = null;
