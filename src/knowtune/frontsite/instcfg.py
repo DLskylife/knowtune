@@ -70,7 +70,15 @@ class InstanceSpec:
     #       "samples": [...], "disclaimer": ...}
     # 缺的字段由 default_copy(lang) 补齐，所以只写要改的那几项就行。
     alt: dict[str, Any] = field(default_factory=dict)
-    # 「古籍问答」怎么认：文档标题里含这些词的归古籍，其余归维医。
+    # 「古籍问答」绑定一个**独立**的知识库。0 / 库不存在 = 退回老办法：
+    # 在主库里按标题含 classic_keywords 分出古籍那一拨。
+    #
+    # 为什么要独立库：维医指南和《黄帝内经》混在一个库里时，后台看起来是
+    # "同一个知识库 31 篇"，谁也说不清哪几篇归古籍板块；分库之后归属落在
+    # 数据上，而不是落在一个标题字符串上——标题改了、换了电脑、重导一次
+    # 都不会串味。检索时两路各自只在自己的 kb_id 里找，隔离是数据库给的。
+    classic_kb_id: int = 0
+    # 「古籍问答」怎么认（仅在没配 classic_kb_id 时用）：
     #
     # 库里同时躺着《黄帝内经》《本草纲目》和维吾尔医诊疗指南，混在一次检索里
     # 的结果就是"肚子疼"召回到《本草纲目》的"腹中虚冷"，再被模型当成维医方案
@@ -163,6 +171,7 @@ def _coerce(raw: dict[str, Any]) -> InstanceSpec:
     return InstanceSpec(
         name=name,
         kb_id=kb_id,
+        classic_kb_id=max(0, int(raw.get("classic_kb_id") or 0)),
         port=port,
         lang=lang,
         kb_lang=kb_lang,
@@ -178,7 +187,14 @@ def _coerce(raw: dict[str, Any]) -> InstanceSpec:
         autostart=bool(raw.get("autostart")),
         public=bool(raw.get("public")),
         alt=coerce_alt(raw.get("alt")),
+        classic_keywords=_coerce_keywords(raw.get("classic_keywords")),
     )
+
+
+def _coerce_keywords(raw: Any) -> list[str]:
+    if not isinstance(raw, list):
+        return ["古籍"]
+    return [str(k).strip() for k in raw if str(k).strip()]
 
 
 def coerce_alt(raw: Any) -> dict[str, Any]:
@@ -276,3 +292,7 @@ def validate(spec: InstanceSpec, *, kb_exists) -> None:
         raise ValueError(f"语言只能是 {LANGS}")
     if not kb_exists(spec.kb_id):
         raise ValueError(f"知识库 #{spec.kb_id} 不存在")
+    if spec.classic_kb_id and not kb_exists(spec.classic_kb_id):
+        raise ValueError(f"古籍知识库 #{spec.classic_kb_id} 不存在")
+    if spec.classic_kb_id == spec.kb_id:
+        raise ValueError("古籍知识库不能和主知识库是同一个（那就不用分库了）")

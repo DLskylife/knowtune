@@ -4104,6 +4104,30 @@ async function resetKbParams() {
 
 /* ------------------------------------------------------------ 内容 / 会话 */
 
+/* 文档换库：只改归属，不重新导入。弹窗里把"不用重索引"说清楚，否则用户
+   会以为这一下要等十分钟，或者担心引用编号全变了。 */
+async function moveDoc(doc) {
+  let kbs = state.kbs || [];
+  if (!kbs.length) kbs = await api("/api/kb").catch(() => []);
+  const others = kbs.filter((k) => k.id !== state.kbId);
+  if (!others.length) { toast("还没有别的知识库，先在侧栏新建一个", "err"); return; }
+  showModal(`移动「${esc(doc.title || `文档 ${doc.id}`)}」`, `
+    <p class="hint">这篇文档连同它的 chunk、向量、引用编号一起换到目标库，
+      不需要重新索引，问答里的来源也不会断。</p>
+    <div class="form-row"><label>目标知识库</label>
+      <select id="moveKbSel">${others.map((k) =>
+        `<option value="${k.id}">${esc(k.name)}（${Number(k.docs || 0)} 篇）</option>`).join("")}</select>
+    </div>`,
+    async () => {
+      const r = await jsonPost(`/api/doc/${doc.id}/move`, {
+        kb_id: Number($("moveKbSel").value),
+      });
+      toast(r.moved ? `已移到「${r.kb_name}」` : "这篇文档本来就在那个库里");
+      await loadKb();
+      await renderKbPage();
+    }, { okLabel: "移动" });
+}
+
 async function renderKbDocs() {
   const pane = $("kbPane");
   if (!pane) return;
@@ -4132,6 +4156,8 @@ async function renderKbDocs() {
           <button class="mini" data-dact="preview" data-id="${d.id}">预览</button>
           <button class="mini" data-dact="check" data-id="${d.id}"
             title="重新抽取源文件，核对里面的文字有多少真的进了库">自检</button>
+          <button class="mini" data-dact="move" data-id="${d.id}"
+            title="移到另一个知识库（chunk 与向量原样保留，不用重索引）">移动</button>
           <button class="mini" data-dact="reindex" data-id="${d.id}">${
             d.missing_source ? "重新上传" : "重索引"}</button>
           <button class="mini" data-dact="delete" data-id="${d.id}">删除</button>
@@ -4169,6 +4195,7 @@ async function renderKbDocs() {
         }
         return;
       }
+      if (btn.dataset.dact === "move") { moveDoc(doc); return; }
       if (btn.dataset.dact === "reindex") {
         if (doc.missing_source) {
           const r = await restoreDocSource(doc, btn);
@@ -6301,6 +6328,9 @@ function siteGroups(i, meta, plan, defProv) {
     `<option value="${v}"${String(cur) === String(v) ? " selected" : ""}>${esc(label)}</option>`;
   const kbOpts = (d.kbs || []).map((k) =>
     `<option value="${k.id}"${k.id === i.kb_id ? " selected" : ""}>${esc(k.name)}</option>`).join("");
+  const classicCur = i.classic_kb_id || 0;
+  const classicOpts = opt(0, "不单独分库（按标题分）", classicCur)
+    + (d.kbs || []).map((k) => opt(k.id, k.name, classicCur)).join("");
   const lo = d.port_range ? d.port_range[0] : 8800;
   const hi = d.port_range ? d.port_range[1] : 8899;
 
@@ -6324,8 +6354,10 @@ function siteGroups(i, meta, plan, defProv) {
   const used = `实际：译 ${roleText(resolved.translate)} · 答 ${roleText(resolved.generate)}`;
 
   return [
-    group("绑定", "一个站点绑一个知识库、占一个端口", [
+    group("绑定", "主库 + 可选一个古籍库、占一个端口", [
       row("知识库", `<select data-f="kb_id">${kbOpts}</select>`),
+      row("古籍知识库", `<select data-f="classic_kb_id">${classicOpts}</select>`,
+        "古籍问答只在这个库里检索；选 0 则仍按主库文档标题分"),
       row("端口", `<input data-f="port" type="number" min="${lo}" max="${hi}" value="${i.port}">`,
         "改这里会重启站点"),
       row("界面与回答语言", `<select data-f="lang">
@@ -6461,7 +6493,9 @@ function readSiteBlock(block) {
   block.querySelectorAll("[data-f]").forEach((el) => {
     const f = el.dataset.f;
     if (el.type === "checkbox") { out[f] = el.checked; return; }
-    if (f === "port" || f === "kb_id") { out[f] = Number(el.value) || 0; return; }
+    if (f === "port" || f === "kb_id" || f === "classic_kb_id") {
+      out[f] = Number(el.value) || 0; return;
+    }
     if (f === "samples") { out[f] = split(el.value); return; }
     if (f.startsWith("alt_")) {
       // 整套 alt 一次发全：PUT 是"这份配置长这样"，只发改过的那个键，
@@ -6866,6 +6900,10 @@ async function openSiteEditor(cur) {
   const kbOptions = (d.kbs || []).map((k) =>
     `<option value="${k.id}" ${cur && cur.kb_id === k.id ? "selected" : ""
     }>${esc(k.name)}</option>`).join("");
+  const classicOptions = `<option value="0">不单独分库（主库里按标题分）</option>`
+    + (d.kbs || []).map((k) =>
+      `<option value="${k.id}" ${cur && cur.classic_kb_id === k.id ? "selected" : ""
+      }>${esc(k.name)}</option>`).join("");
   const provOptions = `<option value="">跟随后台默认</option>`
     + (d.providers || []).map((p) =>
       `<option value="${esc(p)}" ${cur && cur.provider === p ? "selected" : ""}>${esc(p)}</option>`).join("");
@@ -6876,8 +6914,12 @@ async function openSiteEditor(cur) {
         <input id="sName" value="${cur ? esc(cur.name) : ""}" placeholder="uyghur-med"
           ${cur ? "disabled" : ""}>
         <span class="hint" id="sNameTip"></span></div>
-      <div class="form-row"><label>知识库</label>
+      <div class="form-row"><label>知识库（维医问答 / 预问诊的主库）</label>
         <select id="sKb">${kbOptions}</select></div>
+      <div class="form-row"><label>古籍问答用的知识库（可选）</label>
+        <select id="sClassicKb">${classicOptions}</select>
+        <span class="hint">选了独立库，古籍问答就只在这个库里检索；选「不单独分库」
+          则仍按主库里文档标题是否含「古籍」来分。</span></div>
       <div class="form-row"><label>端口</label>
         <input id="sPort" type="number" value="${suggested}"></div>
       <div class="form-row"><label>界面与回答语言</label>
@@ -6929,6 +6971,7 @@ async function openSiteEditor(cur) {
       const payload = {
         name,
         kb_id: Number($("sKb").value),
+        classic_kb_id: Number($("sClassicKb").value),
         port: Number($("sPort").value),
         lang: $("sLang").value,
         kb_lang: $("sKbLang").value,

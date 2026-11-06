@@ -319,17 +319,49 @@ def build_site(spec, state: Any) -> FastAPI:
         """
         return provider_for(role, spec=s or _cur(), kb_cfg=kb_cfg, cfg=state.cfg)
 
+    def _classic_kb_id(conn, s) -> int:
+        """古籍板块真正绑的是哪个库。0 = 没独立库，退回按标题分。
+
+        库被删了、或者库里一篇 ready 文档都没有，都当作"还没分库"：
+        这样先改配置后搬数据（或者反过来搬完又撤销）的窗口里，板块不会
+        突然变成一片空白，问答也不会拿维医指南冒充古籍。
+        """
+        cid = max(0, int(getattr(s, "classic_kb_id", 0) or 0))
+        if not cid or cid == int(s.kb_id):
+            return 0
+        if conn.execute("SELECT 1 FROM kb WHERE id=?", (cid,)).fetchone() is None:
+            return 0
+        if conn.execute(
+            "SELECT 1 FROM document WHERE kb_id=? AND status='ready' LIMIT 1", (cid,)
+        ).fetchone() is None:
+            return 0
+        return cid
+
+    def _scope_kb(conn, s, scope: str) -> int:
+        """检索时该传哪个 kb_id。判据必须和 _corpora 完全一致。"""
+        return _classic_kb_id(conn, s) if scope == "classic" else int(s.kb_id)
+
+    def _info_kb_ids(conn, s) -> list[int]:
+        """界面上"这个站点有多少资料"要数上所有板块库。"""
+        ids = [int(s.kb_id)]
+        cid = _classic_kb_id(conn, s)
+        if cid:
+            ids.append(cid)
+        return ids
+
     def _corpora(conn, s) -> dict[str, list[int]]:
-        """把库里的文档分成「维医」与「古籍」两拨，返回各自的 doc_id。
+        """把资料分成「维医」与「古籍」两拨，返回各自的 doc_id。
 
-        为什么要分：这个库里同时躺着《黄帝内经》《本草纲目》和维吾尔医诊疗
-        指南。混着检索时，"肚子疼"会命中《本草纲目》的"腹中虚冷"，模型再把它
-        当维医方案讲出来——用户看到的是一段有引用、有剂量、但根本不是维医的
-        答案。分板块之后，各自只在自己的语料里检索，这类串味从源头消失。
+        为什么要分：库里同时躺着《黄帝内经》《本草纲目》和维吾尔医诊疗
+        指南。混着检索时，"肚子疼"会命中《本草纲目》的"腹中虚冷"，模型再
+        把它当维医方案讲出来——用户看到的是一段有引用、有剂量、但根本
+        不是维医的答案。分板块之后，各自只在自己的语料里检索。
 
-        认法只有一条：标题里含 classic_keywords（默认「古籍」）。不看来源路径、
-        不看导入批次——那两样在换了电脑或重导一次之后就对不上了，而标题是
-        导入时人写的、也是用户在来源里看到的同一个字符串。
+        两种模式：
+        * classic_kb_id 指向一个装了资料的库 → 古籍就是那个库的全部文档，
+          主库剩下的归维医。归属落在数据上，不靠标题字符串。
+        * 没配（或独立库是空的）→ 沿用老办法，在主库里按标题含
+          classic_keywords 分。这条兜底让配置文件和数据迁移不必同秒生效。
         """
         keys = [str(k) for k in (getattr(s, "classic_keywords", None) or []) if str(k)]
         rows = conn.execute(
@@ -337,6 +369,20 @@ def build_site(spec, state: Any) -> FastAPI:
             (s.kb_id,),
         ).fetchall()
         out: dict[str, list[int]] = {"med": [], "classic": []}
+        cid = _classic_kb_id(conn, s)
+        if cid:
+            out["classic"] = [
+                int(r["id"]) for r in conn.execute(
+                    "SELECT id FROM document WHERE kb_id=? AND status='ready'", (cid,))
+            ]
+            # 独立库接管之后主库剩下的都算维医；但标题还带"古籍"的残留
+            # 仍然排除，免得搬到一半时古籍串进维医答案。
+            for r in rows:
+                title = str(r["title"] or "")
+                if keys and any(k in title for k in keys):
+                    continue
+                out["med"].append(int(r["id"]))
+            return out
         for r in rows:
             title = str(r["title"] or "")
             if keys and any(k in title for k in keys):
@@ -366,14 +412,23 @@ def build_site(spec, state: Any) -> FastAPI:
         kb = conn.execute("SELECT id, name, description FROM kb WHERE id=?", (s.kb_id,)).fetchone()
         if kb is None:
             raise HTTPException(404, "实例绑定的知识库已不存在")
+        # 分库之后"31 篇文档"要数上古籍库，否则用户搬完资料会以为少了 5 篇。
+        kb_ids = _info_kb_ids(conn, s)
+        marks = ",".join("?" for _ in kb_ids)
         docs = conn.execute(
-            "SELECT COUNT(*) c FROM document WHERE kb_id=? AND status='ready'", (s.kb_id,)
+            f"SELECT COUNT(*) c FROM document WHERE kb_id IN ({marks}) AND status='ready'",
+            kb_ids,
         ).fetchone()["c"]
         chunks = conn.execute(
             "SELECT COUNT(*) c FROM chunk c JOIN document d ON d.id=c.doc_id"
-            " WHERE d.kb_id=? AND c.generation=d.active_gen", (s.kb_id,)
+            f" WHERE d.kb_id IN ({marks}) AND c.generation=d.active_gen", kb_ids,
         ).fetchone()["c"]
         corp = _corpora(conn, s)
+        cid = _classic_kb_id(conn, s)
+        classic_name = ""
+        if cid:
+            row = conn.execute("SELECT name FROM kb WHERE id=?", (cid,)).fetchone()
+            classic_name = str(row["name"] or "") if row else ""
         main_copy_raw = {
             "title": s.title, "subtitle": s.subtitle, "welcome": s.welcome,
             "samples": s.samples, "disclaimer": s.disclaimer,
@@ -410,6 +465,7 @@ def build_site(spec, state: Any) -> FastAPI:
             "alt": {"lang": alt_lang, "dir": "rtl" if alt_lang == "ug" else "ltr",
                     "kb_name": alt_name, **alt_copy},
             "kb_id": s.kb_id,
+            "kb_ids": kb_ids,
             "kb_name": main_name,
             "kb_name_raw": kb["name"],
             "kb_desc": kb["description"] or "",
@@ -426,9 +482,13 @@ def build_site(spec, state: Any) -> FastAPI:
             # 空板块的入口应该说明原因，而不是让用户点进去问一个永远没有
             # 引用的答案。
             "corpora": {
-                "med": {"docs": len(corp["med"]), "available": bool(corp["med"])},
+                "med": {"docs": len(corp["med"]), "available": bool(corp["med"]),
+                        "kb_id": int(s.kb_id)},
                 "classic": {"docs": len(corp["classic"]),
-                            "available": bool(corp["classic"])},
+                            "available": bool(corp["classic"]),
+                            "kb_id": cid or int(s.kb_id),
+                            # 切到古籍板块时侧栏该显示哪个库的名字
+                            "kb_name": classic_name or kb["name"]},
             },
             "previsit": {"available": True, "mount": "previsit"},
             "roles": role_plan(
@@ -449,8 +509,16 @@ def build_site(spec, state: Any) -> FastAPI:
     def ask(req: SiteAsk) -> StreamingResponse:
         trace_id = str(uuid.uuid4())
         s = _cur()
+        conn0 = state.db.conn()
+        # 板块决定这次检索落在哪个知识库：维医问答用主库，古籍问答用
+        # classic_kb_id。配置和生成参数也必须跟着这个库走，不能拿主库的
+        # 覆盖值去答古籍题（分库之后两边的参数可以各自调）。
+        scope = str(getattr(req, "corpus", "") or "").strip().lower()
+        if scope not in ("med", "classic"):
+            scope = ""
+        scope_kb_id = _scope_kb(conn0, s, scope)
         lang, kb_lang = _langs(s)
-        kb_cfg = state.effective_cfg(s.kb_id)
+        kb_cfg = state.effective_cfg(scope_kb_id)
         # 同一个后端干所有活儿是默认值，不是原则：翻译和输出可以用不同的模型。
         # 这里各取一次，/api/info 里能看到实际用了谁。
         gen_provider = _provider("generate", kb_cfg, s)
@@ -472,14 +540,13 @@ def build_site(spec, state: Any) -> FastAPI:
 
         session_id = req.session_id
         if session_id:
-            conn0 = state.db.conn()
             exists = conn0.execute("SELECT id FROM session WHERE id=?", (session_id,)).fetchone()
             if not exists:
                 now = _utcnow()
                 conn0.execute(
                     "INSERT INTO session (id, kb_id, title, created_at, updated_at)"
                     " VALUES (?,?,?,?,?)",
-                    (session_id, s.kb_id, (req.question or "")[:30], now, now),
+                    (session_id, scope_kb_id, (req.question or "")[:30], now, now),
                 )
 
         def stream() -> Iterator[str]:
@@ -522,10 +589,9 @@ def build_site(spec, state: Any) -> FastAPI:
                                  "provider": tr_provider,
                                  "error": terr})
 
-            # 板块范围：维医问答 / 古籍问答 是同一套问答、不同的检索范围。
-            # 不传（或者传了不认识的值）= 整库检索，行为与 1.7.5 之前完全一致，
+            # 板块范围：维医问答 / 古籍问答 是同一套问答、不同的检索范围
+            # （现在还是不同的知识库）。不传或传了不认识的值 = 整库检索，
             # 老前端、直接打 /api/ask 的脚本因此不会因为新增字段而变形。
-            scope = str(getattr(req, "corpus", "") or "").strip().lower()
             doc_ids = None
             if scope in ("med", "classic"):
                 doc_ids = _corpora(conn, s).get(scope) or []
@@ -541,7 +607,7 @@ def build_site(spec, state: Any) -> FastAPI:
 
             t0 = time.perf_counter()
             result = state.engine.search(
-                conn, query, kb_id=s.kb_id, doc_ids=doc_ids, cfg=kb_cfg,
+                conn, query, kb_id=scope_kb_id, doc_ids=doc_ids, cfg=kb_cfg,
             )
             timings.update(result.timings)
 
@@ -603,6 +669,7 @@ def build_site(spec, state: Any) -> FastAPI:
                 "answer_mode": getattr(s, "answer_mode", "direct"),
                 "two_stage": two_stage,
                 "corpus": scope,
+                "kb_id": scope_kb_id,
                 "evidence": grade,
                 "evidence_top": top_score,
                 "evidence_min": kb_cfg.refusal.min_score,

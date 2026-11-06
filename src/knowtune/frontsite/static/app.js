@@ -22,7 +22,7 @@
 
 /* 构建号：和 index.html 里那份必须一致，不一致说明浏览器拿的是旧 JS，
    页面加载完会强制换一次（见 index.html 里的自检脚本）。 */
-window.SITE_BUILD = "1.7.7";
+window.SITE_BUILD = "1.7.8";
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
@@ -1060,6 +1060,12 @@ function renderNav() {
 function applyViewCopy() {
   const c = copy();
   const pvOn = view === "pv";
+  // 古籍问答读的是另一个知识库，侧栏就报那个库的名字；切回维医问答仍用站点
+  // 配的（含维语译名）那套。预问诊不读知识库，保持主库名不动。
+  const classicName = (info.corpora && info.corpora.classic
+    && info.corpora.classic.kb_name) || "";
+  $("sideName").textContent = view === "classic" && classicName
+    ? classicName : (c.kb_name || info.kb_name || "");
   if (pvOn) {
     $("siteSub").textContent = t.pvSub || "";
     $("q").placeholder = t.pvPh || "";

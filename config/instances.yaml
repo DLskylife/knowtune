@@ -2,6 +2,9 @@
 instances:
 - name: uyghur-med
   kb_id: 2
+  # 古籍问答单独一个库，5 篇中医古籍已从维医知识库移过去。
+  # 0 / 删掉这一行 = 退回在主库里按标题含「古籍」分板块。
+  classic_kb_id: 4
   port: 8800
   lang: ug
   kb_lang: zh

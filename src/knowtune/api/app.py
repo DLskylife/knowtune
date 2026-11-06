@@ -440,6 +440,12 @@ class ReindexReq(BaseModel):
     plan: dict[str, object] | None = None
 
 
+class DocMove(BaseModel):
+    """把文档换到另一个知识库。`doc_ids` 给批量用，单篇走路径参数。"""
+    kb_id: int = Field(gt=0)
+    doc_ids: list[int] = Field(default_factory=list, max_length=200)
+
+
 class FeedbackReq(BaseModel):
     message_id: int
     verdict: str = Field(pattern="^(up|down)$")
@@ -2682,6 +2688,68 @@ def _coverage_of(source: str, chunks: list[str], k: int = 24) -> dict:
     }
 
 
+def _move_docs(doc_ids: list[int], kb_id: int) -> dict:
+    """把文档整体挪到另一个知识库，索引一行都不用重建。
+
+    chunk 挂在 doc_id 上、FTS 的 rowid 与 chunk.id 对齐、embedding 按
+    content_hash 全局共用——文档换库不动这三样，引用编号和切分结果原样保留。
+    唯一必须刷掉的是 VectorStore 里那份 (chunk → kb_id) 内存掩码：它是加载时
+    的快照，不刷会让 dense 路继续按旧库过滤，表现成"文档明明在库里却搜不到"。
+    """
+    ids = sorted({int(i) for i in doc_ids if int(i) > 0})
+    if not ids:
+        raise HTTPException(400, "没有指定要移动的文档")
+    conn = state.conn
+    target = conn.execute("SELECT id, name FROM kb WHERE id=?", (kb_id,)).fetchone()
+    if target is None:
+        raise HTTPException(404, f"目标知识库 #{kb_id} 不存在")
+    marks = ",".join("?" for _ in ids)
+    rows = conn.execute(
+        f"SELECT id, kb_id, title, source_uri FROM document WHERE id IN ({marks})", ids
+    ).fetchall()
+    if len(rows) != len(ids):
+        missing = sorted(set(ids) - {int(r["id"]) for r in rows})
+        raise HTTPException(404, f"这些文档不存在：{missing}")
+    # document 上有 UNIQUE(kb_id, source_uri)。目标库里已有同一个源文件时
+    # 不能硬插，否则 SQLite 抛 IntegrityError，用户只看到一句 500。
+    for r in rows:
+        dup = conn.execute(
+            "SELECT id FROM document WHERE kb_id=? AND source_uri=?",
+            (kb_id, r["source_uri"]),
+        ).fetchone()
+        if dup and int(dup["id"]) != int(r["id"]):
+            raise HTTPException(
+                409, f"「{r['title']}」在「{target['name']}」里已有一份（文档 #{dup['id']}）")
+    todo = [int(r["id"]) for r in rows if int(r["kb_id"]) != kb_id]
+    if not todo:
+        return {"moved": 0, "kb_id": kb_id, "kb_name": target["name"], "ids": []}
+    try:
+        conn.execute("BEGIN")
+        conn.executemany(
+            "UPDATE document SET kb_id=? WHERE id=?", [(kb_id, i) for i in todo])
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    state.vectors.invalidate()
+    logbus.note(
+        f"移动 {len(todo)} 篇文档到知识库「{target['name']}」#{kb_id}（索引未重建）",
+        source="kb",
+    )
+    return {"moved": len(todo), "kb_id": kb_id, "kb_name": target["name"], "ids": todo}
+
+
+@app.post("/api/docs/move")
+def move_docs(req: DocMove) -> dict:
+    """批量移动。给脚本/一次性整理用，UI 上逐篇点「移动」走下面那个。"""
+    return _move_docs(req.doc_ids, req.kb_id)
+
+
+@app.post("/api/doc/{doc_id}/move")
+def move_doc(doc_id: int, req: DocMove) -> dict:
+    return _move_docs([doc_id, *req.doc_ids], req.kb_id)
+
+
 @app.delete("/api/doc/{doc_id}")
 def delete_doc(doc_id: int) -> dict:
     """删除走**后台任务**：几千块的文档要逐条清 FTS + 级联删 chunk，前端
@@ -3836,6 +3904,7 @@ class InstanceIn(BaseModel):
     """
     name: str | None = None
     kb_id: int | None = None
+    classic_kb_id: int | None = None
     port: int | None = None
     lang: str | None = None
     kb_lang: str | None = None
@@ -4192,6 +4261,9 @@ def put_instance(name: str, req: InstanceIn) -> dict:
     spec = instcfg.InstanceSpec(
         name=name,
         kb_id=int(req.kb_id if req.kb_id is not None else keep("kb_id", 0)),
+        classic_kb_id=int(req.classic_kb_id if req.classic_kb_id is not None
+                          else keep("classic_kb_id", 0)),
+        classic_keywords=list(keep("classic_keywords", ["古籍"])),
         port=port,
         lang=(req.lang or keep("lang", "ug")),
         kb_lang=(req.kb_lang or keep("kb_lang", "zh")),
