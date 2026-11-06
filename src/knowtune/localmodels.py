@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -278,8 +279,12 @@ def find_server(explicit: str = "") -> str:
         if g.exists():
             return str(g)
     raise LocalError(
-        "没找到 llama-server。三个办法任选：\n"
-        "1) 去 github.com/ggerganov/llama.cpp/releases 下对应系统的压缩包，"
+        "没找到 llama-server。最省事的一条命令：\n"
+        f"  python scripts/get_llama.py\n"
+        "它会挑对系统和后端（Windows 默认 Vulkan，走显卡驱动、不用另装 CUDA），"
+        f"下载后解压到 {ROOT / 'tools' / 'llama'}。\n"
+        "也可以手工三选一：\n"
+        "1) 去 github.com/ggml-org/llama.cpp/releases 下对应系统的压缩包，"
         "解压后把 llama-server 所在目录加进 PATH；\n"
         f"2) 设环境变量 {ENV_SERVER}=<llama-server 的完整路径>；\n"
         f"3) 直接放进 {ROOT / 'tools' / 'llama'} 目录。"
@@ -487,6 +492,13 @@ def start(
         "--host", host,
         "--port", str(chosen),
         "-c", str(max(512, int(ctx))),
+        # 单槽位。llama-server 默认开 4 个并发槽，每个槽各留一份 ctx 大小的
+        # KV 缓存：7B + 4×4096 在 6G 卡上光 KV 就占 2G。本地实例本来就是给
+        # 一个人用的，多出来的槽位只是把显存从权重手里拿走。
+        # 实测（RTX 3060 6G，Qwen2.5-7B Q4）：出词速度 27.8 → 27.0 tok/s，
+        # 看不出差别——省下的显存被自动卸载策略放回了权重，而瓶颈不在这。
+        # 保留它的理由是语义正确 + 给更大的 ctx 留空间，不是"提速"。
+        "--parallel", "1",
         "--no-webui",          # 我们只要 /v1，自带网页会多占一屏显存和一份静态资源
         "--jinja",             # 用 gguf 自带的 chat template，否则多轮格式会错
     ]
@@ -606,4 +618,40 @@ def describe_env() -> dict[str, Any]:
         "dirs": default_dirs(),
         "port_range": [PORT_MIN, PORT_MAX],
         "platform": sys.platform,
+        "devices": devices(exe) if ok else [],
     }
+
+
+_DEVS: tuple[float, list[dict[str, Any]]] | None = None
+_DEV_CACHE_S = 60.0
+
+
+def devices(server: str = "") -> list[dict[str, Any]]:
+    """llama-server 能用的计算设备（Vulkan0 / CUDA0 …）。
+
+    为什么值得单独查：同样一个 7B，跑在 3060 上是 28 tok/s，跑在 CPU 上是 5。
+    用户点启动前就该看到"这次会用哪块卡"，而不是等答案一个字一个字蹦出来才
+    怀疑哪里不对。缓存 60 秒——这个函数要起一次子进程。
+    """
+    global _DEVS
+    now = time.time()
+    if _DEVS and now - _DEVS[0] < _DEV_CACHE_S:
+        return _DEVS[1]
+    out: list[dict[str, Any]] = []
+    try:
+        exe = find_server(server)
+        r = subprocess.run(
+            [exe, "--list-devices"], capture_output=True, text=True, timeout=15,
+            creationflags=0x08000000 if os.name == "nt" else 0,
+        )
+        for line in (r.stdout or "").splitlines():
+            m = re.match(r"\s*([A-Za-z]+\d+):\s*(.+?)\s*\((\d+)\s*MiB,\s*(\d+)\s*MiB free\)", line)
+            if m:
+                out.append({
+                    "id": m.group(1), "name": m.group(2),
+                    "total_mb": int(m.group(3)), "free_mb": int(m.group(4)),
+                })
+    except (LocalError, OSError, subprocess.SubprocessError):
+        pass
+    _DEVS = (now, out)
+    return out

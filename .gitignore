@@ -29,3 +29,6 @@ evals/runs/
 # 与本仓库无关的项目文档（立项/需求分析类 PDF 与渲染图，29 MB）
 # 文件仍在本地，只是不上传；要一起传就把下面这行去掉
 _pm/
+
+# llama.cpp 可执行文件（约 100MB，按需下载：python scripts/get_llama.py）
+tools/llama/

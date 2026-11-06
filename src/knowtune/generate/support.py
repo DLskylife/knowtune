@@ -37,7 +37,7 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Callable, Mapping, Sequence
 
-from .cite import CITE_RE, SENT_SPLIT
+from .cite import CITE_RE, META_RE, is_fact_sentence, split_sentences
 
 # 进统计的最短句长。比 cite.py 的 25 字低：支撑度要抓的恰恰是「短句里塞一个
 # 具体结论」这种形态，门槛定高了等于把它放过去。
@@ -154,11 +154,15 @@ def split_facts(answer: str) -> list[str]:
       不全，而剥引用这一步反正锚点也要做。
     """
     out: list[str] = []
-    for raw in SENT_SPLIT.split(answer or ""):
+    for raw in split_sentences(answer or ""):
         s = raw.strip()
         if len(s) < FACT_MIN_CHARS:
             continue
-        if s.startswith(STRUCT_PREFIX):
+        if s.startswith(STRUCT_PREFIX) or META_RE.match(s):
+            continue
+        # 以冒号收尾的是引导语（「……如下：」），内容在后面的列表里。它没有
+        # 任何可核对的主张，进分母只会把 grounded 压低一格。
+        if s.endswith(("：", ":")):
             continue
         if s.count(" ") / len(s) > 0.25:
             continue

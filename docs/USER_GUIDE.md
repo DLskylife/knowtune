@@ -34,6 +34,7 @@ cd sky_agent
 
 - 第三行红点 = 生成后端没配好，提问只会返回引用不会返回答案。去「模型服务」页加端点。
 - 精排显示「已关闭」时把鼠标停上去，会告诉你是全局关的还是这个库单独关的。
+- 不想调云端、本机有 `.gguf` 的话，见 §11：一条命令装好 llama-server 就能离线跑。
 
 ---
 
@@ -255,8 +256,104 @@ python calibrate.py --kb 2 --cases refusal_cases_wy.jsonl --keep-support ...
 # 没有真模型时验证「生成→引用→支撑度」整条链路
 python scripts/fake_llm.py --port 18080 --mode good   # 抄资料，应判 grounded
 python scripts/fake_llm.py --port 18080 --mode bad    # 改数字，应被锚点抓住
+
+# 本地模型：装 llama-server、把某个 .gguf 起成一个 OpenAI 端点
+python scripts/get_llama.py                    # Windows 默认 Vulkan 版（35MB）
+python scripts/get_llama.py --backend cpu      # 没独显 / 想最小体积
 ```
 
 `fake_llm.py` 是个假 OpenAI 端点：它把送进来的资料抄一句出来挂上引用，或者
 故意把数字改错。用它可以把「引用编号有没有被保留」「编造会不会被支撑度抓住」
 这两条链路测通，不需要真的模型。
+
+---
+
+## 11. 本地模型（.gguf）：不联网也能出答案
+
+云端 API 要密钥、要配额、要外网。本机有 `.gguf` 的话可以完全离线跑，代价是
+慢一点、答得笨一点。
+
+### 11.1 装 `llama-server`（只做一次）
+
+```bash
+python scripts/get_llama.py
+```
+
+脚本会挑对系统和后端，下完解压到 `tools/llama/`，程序立刻能找到它。
+Windows 默认下 **Vulkan 版**：单包 35MB，直接吃显卡驱动，不用另装 CUDA 运行时
+（CUDA 版要配 `cudart` 包，两个加起来 630MB，还要对应驱动版本）。
+
+> 为什么有这么个脚本：`github.com` 的 release 下载在国内网络常被挡（实测这台机器
+> 直连就是 `CONNECT 502`），但 `api.github.com` 通——所以「能查到版本号」不等于
+> 「能下到文件」。脚本按镜像列表逐个试，并且**断点续传**：镜像不是连不上，是
+> 下到一半断（实测 11.1/23.6 MB 处断开，还不报错）。只按 HTTP 200 判断成功，
+> 拿到的是半个 zip，解压时才炸，报一个跟下载无关的「File is not a zip file」。
+
+装好后「模型服务 → 扫描本地模型」这一行会从「没找到 llama-server（只能加进来，
+起不了）」变成：
+
+```
+本地模型  4 个 .gguf · llama-server 就绪 · NVIDIA GeForce RTX 3060 Laptop GPU 6G（可用 5G）
+```
+
+有 GPU 就写卡名，没有就写「只有 CPU（出词会慢 5 倍以上）」。
+
+### 11.2 起一个模型
+
+「扫描本地模型」→ 每个 `.gguf` 右边点「加入」→ 卡片里点「启动」。启动要等权重
+读进显存，7B 约 20 秒，期间按钮显示「启动中…」。起来后卡片显示端口与 ctx，
+`http://127.0.0.1:8097/v1` 就是标准的 OpenAI 兼容地址。
+
+一个模型一个进程一个端口，端口写在模型清单里，在 8090-8189 之间挑。同时起两个
+模型就是两个进程两块显存——6G 卡只够一个 7B。
+
+### 11.3 实测速度（RTX 3060 Laptop 6G，Qwen2.5-7B-Instruct Q4_K_M）
+
+| 项 | 数值 |
+|---|---|
+| 加载 | 21 秒（从磁盘读 4.4GB 进显存） |
+| prompt 处理 | 947 tok/s（3660 token 的 RAG 上下文约 3.9 秒） |
+| 出词 | 27 tok/s（300 token 的答案约 11 秒） |
+| 一次完整问答 | 22 秒 |
+| 显存 | 5.5G / 6G |
+
+对照云端 `deepseek-ai/DeepSeek-V4.1-Flash`：同样的库同样的问题，5 秒左右。
+**本地 7B 的价值是离线和隐私，不是速度。** 想要接近云端的质量要 14B 以上，
+那张卡装不下。
+
+### 11.4 启动参数里的两个默认值
+
+程序按下面这套参数起 `llama-server`，不需要你手写：
+
+- `--parallel 1`：默认是 4 个并发槽，每槽各留一份 ctx 的 KV 缓存，7B 在
+  4×4096 下光 KV 就吃 2G。本地是单人用，多出来的槽位只是把显存从权重手里拿走。
+  *实测出词速度没变（27.8 → 27.0 tok/s）*——省下的显存被自动卸载放回了权重，
+  瓶颈不在这。留着它是为了给更大的 ctx 腾地方。
+- **不传 `-ngl`**：llama.cpp 会自己做显存拟合，有多少显存放多少层。手动写死
+  `-ngl 99` 反而会关掉这个机制（日志里那句
+  `failed to fit params to free device memory: n_gpu_layers already set by user to 99`
+  就是在说这件事）。
+
+ctx 默认 4096。RAG 的上下文（5 个块 + 提示词）大约 3600 token，够用；要喂更多
+证据就在模型清单里改 `context`。7B 的 KV 每 4096 token 约 230MB。
+
+### 11.5 切到本地生成
+
+对话页顶部的后端下拉里选 `local`，或：
+
+```bash
+curl -X PATCH http://127.0.0.1:8765/api/kb/2/config \
+  -H 'Content-Type: application/json' \
+  -d '{"values":{"generation.provider":"local"}}'
+```
+
+### 11.6 起不来时看哪里
+
+| 现象 | 原因 | 怎么办 |
+|---|---|---|
+| 「没找到 llama-server」 | 二进制不在 `tools/llama`、PATH、`KNOWTUNE_LLAMA_SERVER` 里 | `python scripts/get_llama.py` |
+| 启动后立刻退出 | 显存不够（看卡片旁的日志尾部） | 换更小的量化（Q4 以下）或更小的模型，或把 `context` 降到 2048 |
+| 端口被占用 | 配置里写死的端口有别人在用，程序**不会**悄悄换一个 | 停掉占用者，或在清单里改 `port` |
+| 进程显示「已停止」 | 服务重启过，子进程跟着没了 | 重新点启动 |
+| 答得比云端笨 | 7B Q4 在中文长答上就是不如 DeepSeek | 本地是离线兜底，不是替代 |
+

@@ -5333,11 +5333,17 @@ async function openScanPanel(dirs) {
   }
   const rows = r.models || [];
   const env = r.env || {};
+  // 设备这一行不是装饰：同一个 7B，GPU 上 28 tok/s、纯 CPU 上 5 tok/s。点启动
+  // 之前就该看见这次会用哪块卡，而不是等答案一个字一个字蹦出来才怀疑。
+  const dev = (env.devices || [])[0];
+  const devText = dev
+    ? ` · ${esc(dev.name.replace(/\(.*?\)/g, "").trim())} ${Math.round(dev.total_mb / 1024)}G（可用 ${Math.round(dev.free_mb / 1024)}G）`
+    : (env.available ? " · 只有 CPU（出词会慢 5 倍以上）" : "");
   const head = `<div class="card">
     <div class="kb-actions">
       <b>本地模型</b>
       <span class="hint">${rows.length} 个 .gguf · ${
-        env.available ? `llama-server: ${esc(env.server)}` : "没找到 llama-server（只能加进来，起不了）"}</span>
+        env.available ? `llama-server 就绪` : "没找到 llama-server（只能加进来，起不了）"}${devText}</span>
       <span class="sp"></span>
       <input id="scanDirs" placeholder="换目录：D:/models, E:/gguf"
         value="${esc((r.dirs || []).join(", "))}" style="min-width:300px">

@@ -21,5 +21,25 @@ deleted: []
 providers:
   siliconflow:
     base_url: https://api.siliconflow.cn/v1
-    model: deepseek-ai/DeepSeek-V4.1-Flash
+    model: Qwen/Qwen2.5-7B-Instruct
     kind: openai
+    models:
+    - id: Qwen/Qwen2.5-7B-Instruct
+      alias: ''
+  local:
+    base_url: http://127.0.0.1:8097/v1
+    model: Qwen2.5-7B-Instruct-Q4_K_M
+    kind: local
+    models:
+    - id: Qwen2.5-7B-Instruct-Q4_K_M
+      alias: ''
+      context: 4096
+      path: D:/llamafactory/models/lmstudio-ai/Qwen2.5-7B-Instruct-GGUF/Qwen2.5-7B-Instruct-Q4_K_M.gguf
+      port: 8097
+  deepseek:
+    base_url: https://api.deepseek.com
+    model: deepseek-flash
+    kind: openai
+    models:
+    - id: deepseek-flash
+      alias: ''

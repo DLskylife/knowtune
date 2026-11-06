@@ -14,6 +14,33 @@ from dataclasses import dataclass, field
 CITE_RE = re.compile(r"\[(\d{1,2})\]")
 SENT_SPLIT = re.compile(r"(?<=[。！？!?\n])")
 
+# 写在句号**之后**的引用标记。中文写作里「……适应症。[1]」才是最自然的写法，
+# 真实模型（本地 7B / DeepSeek）都这么写；而 SENT_SPLIT 按句号切，[1] 会落到
+# 下一段的开头。后果是每一句都"没有引用"：实测一篇 5 句全带 [1] 的答案，
+# 覆盖率算出 0.0、n_cited 算出 0，而支撑度又显示 grounded 0.6——同一篇答案
+# 两个指标互相打架。这不是模型写错了，是分句器把引用算到了别人头上。
+_LEADING_CITES = re.compile(r"^\s*(?:\[\d{1,2}\]\s*)+")
+
+
+def split_sentences(text: str) -> list[str]:
+    """按句切分，并把「句号后的引用编号」归回它真正标注的那一句。
+
+    引用校验和支撑度都必须用这一份切法：两处各写一遍，就会一边认得出引用、
+    另一边认不出，指标再次自相矛盾。
+    """
+    out: list[str] = []
+    for piece in SENT_SPLIT.split(text or ""):
+        if not piece or not piece.strip():
+            continue
+        m = _LEADING_CITES.match(piece)
+        if m and out:
+            out[-1] = out[-1].rstrip() + m.group(0).strip()
+            piece = piece[m.end():]
+            if not piece.strip():
+                continue
+        out.append(piece)
+    return [s.strip() for s in out if s.strip()]
+
 # 假引用的两种典型形态（2026-11-01 实测抓到的：问词库外的"甲信"，模型答
 # "资料中未找到相关依据"却挂满 [1][2][3][4][5]，覆盖率照算 100%——指标被
 # "礼貌性全引"轻松绕过，界面上"低置信"和"覆盖 100%"同时出现，信号自相矛盾）：
@@ -23,6 +50,34 @@ HEDGE_RE = re.compile(
     r"未找到|未检索到|未出现|未提及|没有相关|资料中未|无相关依据|找不到相关|未提供具体"
 )
 RUN_RE = re.compile(r"(?:\[\d{1,2}\]\s*){3,}")
+
+# 谈自己怎么引用的句子。
+# 「以上信息均来自《……》资料。」这种句子不含事实主张，只描述引用动作，
+# 放到分母里必然找不到语义支撑，等于每答一次自扣一分。原来只认「第 N 条资料」
+# 这一种写法（见 support._REF_POINTER），换成"以上信息均来自"就漏了。
+META_RE = re.compile(
+    r"^(?:以上|上述|前述|本(?:文|回答|答案|次回答))[^。！？]{0,24}"
+    r"(?:来自|出自|依据|参考|基于|根据)"
+)
+
+
+def is_fact_sentence(s: str) -> bool:
+    """这句是不是一条可核对的事实主张。
+
+    三类不算：
+    - 引导语：以「：」结尾的空壳（「沙疗的适应证和禁忌证如下：」），真正的内容
+      在它后面的列表里；把它算进分母，覆盖率永远差一句；
+    - 元话语：见 META_RE；
+    - 结构性套话：见 STRUCT_LEAD（"可能的原因"这类）。
+    """
+    if s.endswith(("：", ":")):
+        return False
+    if META_RE.match(s):
+        return False
+    return not s.startswith(STRUCT_LEAD)
+
+
+STRUCT_LEAD = ("可能的原因", "如确认")
 
 
 @dataclass
@@ -50,7 +105,7 @@ def verbatim_ratio(answer: str, sources: list[str]) -> float:
     """
     if not answer or not sources:
         return 0.0
-    sents = [s.strip() for s in SENT_SPLIT.split(answer) if len(s.strip()) >= 12]
+    sents = [s for s in split_sentences(answer) if len(s) >= 12]
     if not sents:
         return 0.0
     pool = [c for c in sources if c]
@@ -72,7 +127,7 @@ def verify(answer: str, n_context: int) -> CiteReport:
             lambda m: "" if m.group(1) in bad else m.group(0), answer
         )
 
-    sentences = [s.strip() for s in SENT_SPLIT.split(cleaned) if s.strip()]
+    sentences = split_sentences(cleaned)
     # 只统计"事实性长句"：短句、"可能的原因"这类结构性文字不计入分母，
     # 否则覆盖率会被格式文字稀释成一个永远不及格的数字。
     #
@@ -80,11 +135,7 @@ def verify(answer: str, n_context: int) -> CiteReport:
     # 但 startswith 把**整条列表项**一起排掉了。真实模型几乎只用编号列表回答，
     # 于是分母只剩下开头那句和结尾那句（实测一篇 5 段的答案只认出 2 句）。
     # 纯编号行长度不到 25，早被下面的长度条件滤掉，这几条纯属误伤。
-    factual = [
-        s
-        for s in sentences
-        if len(s) >= 20 and not s.startswith(("可能的原因", "如确认"))
-    ]
+    factual = [s for s in sentences if len(s) >= 20 and is_fact_sentence(s)]
     uncited = [s for s in factual if not CITE_RE.search(s)]
     if factual:
         coverage = (len(factual) - len(uncited)) / len(factual)
