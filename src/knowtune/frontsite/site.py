@@ -445,6 +445,23 @@ def build_site(spec, state: Any) -> FastAPI:
         if cid:
             row = conn.execute("SELECT name FROM kb WHERE id=?", (cid,)).fetchone()
             classic_name = str(row["name"] or "") if row else ""
+        # 每个板块各自的片段数。侧栏顶部那行"多少篇文档 · 多少片段"必须和
+        # 紧挨着的库名说同一件事：以前只有全站合计，切到古籍板块会出现
+        # 「古籍知识库 · 31 篇文档 · 1442 个片段」，而那个库实际只有 5 篇。
+        chunk_by_doc = {
+            int(r["doc_id"]): int(r["n"]) for r in conn.execute(
+                "SELECT d.id AS doc_id, COUNT(*) AS n FROM chunk c"
+                " JOIN document d ON d.id=c.doc_id"
+                f" WHERE d.kb_id IN ({marks}) AND c.generation=d.active_gen"
+                " GROUP BY d.id", kb_ids)
+        }
+
+        def corpus_stat(ids: list[int]) -> dict:
+            return {
+                "docs": len(ids),
+                "chunks": sum(chunk_by_doc.get(i, 0) for i in ids),
+                "available": bool(ids),
+            }
         main_copy_raw = {
             "title": s.title, "subtitle": s.subtitle, "welcome": s.welcome,
             "samples": s.samples, "disclaimer": s.disclaimer,
@@ -504,10 +521,10 @@ def build_site(spec, state: Any) -> FastAPI:
             # 空板块的入口应该说明原因，而不是让用户点进去问一个永远没有
             # 引用的答案。
             "corpora": {
-                "med": {"docs": len(corp["med"]), "available": bool(corp["med"]),
-                        "kb_id": int(s.kb_id)},
-                "classic": {"docs": len(corp["classic"]),
-                            "available": bool(corp["classic"]),
+                "med": {**corpus_stat(corp["med"]),
+                        "kb_id": int(s.kb_id),
+                        "kb_name": main_name},
+                "classic": {**corpus_stat(corp["classic"]),
                             "kb_id": cid or int(s.kb_id),
                             # 切到古籍板块时侧栏该显示哪个库的名字
                             "kb_name": classic_name or kb["name"]},

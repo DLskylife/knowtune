@@ -22,7 +22,7 @@
 
 /* 构建号：和 index.html 里那份必须一致，不一致说明浏览器拿的是旧 JS，
    页面加载完会强制换一次（见 index.html 里的自检脚本）。 */
-window.SITE_BUILD = "1.7.9";
+window.SITE_BUILD = "1.7.10";
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
@@ -63,6 +63,15 @@ const T = {
     rawFallback: "تەرجىمە تاماملانمىدى، تۆۋەندىكىسى ئەسلى نۇسخا.",
     docs: "ھۆججەت",
     chunks: "پارچە",
+    // 侧栏顶部那行规模与导航右侧的计数：数字后面必须有单位，光一个「26」
+    // 会被当成消息条数或未读数。
+    stat: (d, c) => `${d} ھۆججەت · ${c} پارچە`,
+    docUnit: "ھۆججەت",
+    pvTag: "ئىزدەش يوق",
+    pvMeta: "ئالامەت توپلاش",
+    // 古籍库的名字只有中文一份，维语界面直接挂四个汉字很扎眼——
+    // 库名本身没带语言信息时，用界面语言的叫法顶上。
+    classicName: "قەدىمكى كىتابلار ئامبىرى",
     netErr: "تور ئۇلىنىشى ئۈزۈلدى، قايتا سىناڭ.",
     srvErr: "مۇلازىمەت ۋاقىتلىق ئىشلىمەيۋاتىدۇ.",
     modelErr: "جاۋاب مۇلازىمىتى تېخى ئۇلانمىدى، سەل تۇرۇپ قايتا سىناڭ.",
@@ -133,6 +142,11 @@ const T = {
     rawFallback: "翻译未完成，以下是原文（未译成目标语言）。",
     docs: "篇文档",
     chunks: "个片段",
+    stat: (d, c) => `${d} 篇文档 · ${c} 个片段`,
+    docUnit: "篇",
+    pvTag: "不检索",
+    pvMeta: "症状采集 · 不检索资料",
+    classicName: "古籍知识库",
     netErr: "网络连接中断，请重试。",
     srvErr: "服务暂时不可用。",
     modelErr: "答案服务还没连上，稍后再试。",
@@ -179,6 +193,11 @@ const T = {
     took: (s) => `${s}s`, toBottom: "Latest",
     welHint: "Pick a sample below, or type your own question.",
     docs: "docs", chunks: "chunks",
+    stat: (d, c) => `${d} docs · ${c} chunks`,
+    docUnit: "docs",
+    pvTag: "no search",
+    pvMeta: "Symptom intake",
+    classicName: "Classic texts",
     netErr: "Connection lost. Please retry.",
     srvErr: "Service temporarily unavailable.",
     modelErr: "The answer service is not connected yet. Please retry shortly.",
@@ -988,12 +1007,8 @@ function applyChrome() {
   $("siteTitle").textContent = c.title || info.kb_name;
   $("siteSub").textContent = c.subtitle || "";
   document.title = c.title || info.kb_name;
-  // 知识库名也是界面文字：库里存的是中文名，切到维语界面还挂四个汉字，
-  // 比按钮没翻更显眼。站点可以给另一套语言单独配一个名字（alt.kb_name）。
-  $("sideName").textContent = c.kb_name || info.kb_name || "";
-  $("sideName").dir = "auto";
-  $("sideMeta").textContent =
-    `${info.docs} ${t.docs} · ${info.chunks} ${t.chunks}`;
+  // 侧栏顶部（库名 + 规模）由 renderSideHead 统一管：它要跟着板块换库，
+  // 不能在这里按全站合计写死。
   $("welText").textContent = c.welcome || "";
   $("welHint").textContent = t.welHint || "";
   $("disclaimer").textContent = c.disclaimer || "";
@@ -1065,8 +1080,11 @@ function renderNav() {
     // 它，右侧留空比给一个假数诚实。
     const info_ = key === "pv" ? null : (corp[key] || {});
     const empty = info_ && !info_.available;
-    const meta = info_
-      ? `<span class="ni-meta">${esc(empty ? t.navEmpty : info_.docs)}</span>` : "";
+    // 数字带单位（26 篇 / 5 篇）。预问诊不读知识库，给它一个"症状采集"的
+    // 说明标签，比右边空一格更像"这里本来就不同"，也不至于被看成漏了数据。
+    const meta = !info_
+      ? `<span class="ni-meta is-tag">${esc(t.pvTag || "")}</span>`
+      : `<span class="ni-meta">${esc(empty ? t.navEmpty : `${info_.docs} ${t.docUnit}`)}</span>`;
     return `<button type="button" class="nav-item${on}${empty ? " is-empty" : ""}"`
       + ` data-view="${key}">${NAV_ICONS[key]}`
       + `<span class="ni-label">${esc(navLabel(key))}</span>${meta}</button>`;
@@ -1076,15 +1094,48 @@ function renderNav() {
 /* 顶栏副标题、输入框占位符、免责声明都跟着板块走。
    三个栏目共用一套骨架，如果这三处还留着"基于知识库检索"那句，用户在古籍
    问答里就会以为古籍也能按现代规范回答。 */
+/* 侧栏顶部那块：库名 + 这个库的规模。
+   三栏并排之后，名字和数字必须说同一件事——切到古籍问答时报的是古籍库的
+   名字，下面那行也只能报古籍库的 5 篇 / 1120 片段，不能还挂着两个库的
+   合计（以前就是这样：名字换了、数字没换）。
+   预问诊不读知识库，这里如实写"不检索资料"，而不是挂着主库篇数装作它也查。 */
+function renderSideHead() {
+  const c = copy();
+  const name = $("sideName");
+  const meta = $("sideMeta");
+  if (!name || !meta || !info) return;
+  name.dir = "auto";
+  if (view === "pv") {
+    name.textContent = c.kb_name || info.kb_name || "";
+    meta.textContent = t.pvMeta || "";
+    return;
+  }
+  const cur = (info.corpora && info.corpora[view]) || {};
+  // 维医这一栏用站点配的显示名（维语界面写维语、中文界面写中文）；古籍是
+  // 独立库，名字只有库表里那一份。库名里带着汉字、界面又不是中文时，用
+  // 界面语言的叫法顶上——否则整个维语侧栏里孤零零挂四个汉字。
+  const kbName = view === "med"
+    ? (c.kb_name || cur.kb_name || info.kb_name || "")
+    : (cur.kb_name || c.kb_name || info.kb_name || "");
+  name.textContent = (view === "classic" && uiLang !== "zh"
+    && /[\u3400-\u9fff]/.test(kbName))
+    ? (t.classicName || kbName) : kbName;
+  // 这一栏没有资料时别报「0 篇文档」：名字可能还挂着主库（古籍没独立建库
+  // 的兜底模式下就是主库名），配 0 篇会读成"主库空了"。跟导航一致说"未导入"。
+  if (cur.available === false) {
+    meta.textContent = t.navEmpty || "";
+    return;
+  }
+  // 老后端没有 corpora.*.chunks 时退回全站合计，至少不会显示成 0。
+  const docs = Number.isFinite(cur.docs) ? cur.docs : (info.docs || 0);
+  const chunks = Number.isFinite(cur.chunks) ? cur.chunks : (info.chunks || 0);
+  meta.textContent = t.stat(docs, chunks);
+}
+
 function applyViewCopy() {
   const c = copy();
   const pvOn = view === "pv";
-  // 古籍问答读的是另一个知识库，侧栏就报那个库的名字；切回维医问答仍用站点
-  // 配的（含维语译名）那套。预问诊不读知识库，保持主库名不动。
-  const classicName = (info.corpora && info.corpora.classic
-    && info.corpora.classic.kb_name) || "";
-  $("sideName").textContent = view === "classic" && classicName
-    ? classicName : (c.kb_name || info.kb_name || "");
+  renderSideHead();
   if (pvOn) {
     $("siteSub").textContent = t.pvSub || "";
     $("q").placeholder = t.pvPh || "";

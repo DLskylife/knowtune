@@ -141,6 +141,7 @@ body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
 .side-meta {
   margin: 1px 0 0; font-size: 11px; color: var(--ink-3); line-height: 1.5;
   text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 /* ------------------------------------------------------------ 板块导航
@@ -169,7 +170,16 @@ body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
 }
 /* 右侧那个数字是"这一栏有多少篇资料"。维医和古籍的差别就在语料上，
    不写出来，用户不知道两个入口为什么答案风格差这么远。 */
-.nav-item .ni-meta { font-size: 11px; font-weight: 500; color: var(--ink-3); }
+.nav-item .ni-meta {
+  flex: none; font-size: 11px; font-weight: 500; color: var(--ink-3);
+  /* 等宽数字：26 篇 / 5 篇 上下对齐，扫一眼就能比出两个库的体量差 */
+  font-variant-numeric: tabular-nums;
+}
+/* 预问诊那栏没有"多少篇"，给的是一个说明标签而不是留空：同一个位置、
+   更弱一级，既不会让人以为数字没加载出来，也不会和上面两个计数混淆。 */
+.nav-item .ni-meta.is-tag {
+  font-size: 10px; letter-spacing: .02em; opacity: .8;
+}
 .nav-item:hover { background: color-mix(in srgb, var(--ink) 6%, transparent); color: var(--ink); }
 .nav-item.on {
   background: var(--surface); color: var(--brand);
