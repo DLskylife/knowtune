@@ -6,7 +6,7 @@
 数据全部落在本地 SQLite，LLM 接任意 OpenAI 兼容端点（vLLM / LM Studio / Ollama / 云端）。
 不联网也能跑，不把你的文档发给任何人。
 
-![tests](https://img.shields.io/badge/tests-372%20passed-brightgreen) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![license](https://img.shields.io/badge/license-MIT-lightgrey)
+![python](https://img.shields.io/badge/python-3.11%2B-blue) ![license](https://img.shields.io/badge/license-MIT-lightgrey)
 
 评估基线：**Recall@5 95.0% · MRR 0.779 · p50 17ms**。需求覆盖 32 项：24 已落地 / 4 部分 / 4 未做（逐条对照见 [docs/ARCHITECTURE.md §14](docs/ARCHITECTURE.md)）。
 
@@ -34,31 +34,44 @@ KnowTune 的做法是把"猜"变成"查"：
 | **生成** | 流式输出，只喂检索到的块，强制挂引用编号，越界编号当场剥离 |
 | **诚实** | 引用覆盖率、逐句引用存疑、低置信标注、硬拒与软拒两档。宁可说不知道 |
 | **可调** | 9 组 46 项参数全部可改，每个知识库一套独立值，改完自动重建索引 |
-| **可量** | 内置 22 条评估集，一次跑完 Recall@5 / MRR / 误拒率 / 漏拒率，支持存基线与阈值标定 |
+| **可量** | 支持命令行评估：Recall@5 / MRR / 误拒率 / 漏拒率（需自备评估集 JSONL）；内置拒答阈值标定工具 |
 | **多站点** | 一个知识库可以开多个前台问答站（维吾尔语 / 中文 / English），每个站一个端口 |
 
-## 快速开始
+## 下载与使用
 
 需要 Python 3.11+。下面以 Windows Git Bash 为例，Linux/macOS 把 `.venv/Scripts` 换成 `.venv/bin`。
+
+### 0. 获取代码
+
+```bash
+git clone https://github.com/DLskylife/knowtune.git
+cd knowtune
+```
+
+或直接在 GitHub 仓库页面下载 ZIP 解压。
 
 ### 1. 装
 
 ```bash
 python -m venv .venv && . .venv/Scripts/activate
-pip install -e ".[extract,local,dev]"
+pip install -e ".[extract,local]"
 
 # CPU 版 torch 必须走官方 index，直接 pip install 会拉 CUDA 版（体积差 10 倍）
 pip install torch --index-url https://download.pytorch.org/whl/cpu
 ```
 
-### 2. 抓模型
+### 2. 下载模型
+
+嵌入模型（中文，必需）与可选精排模型从 HuggingFace 下载到 `data/models/`：
 
 ```bash
-./scripts/fetch_model.sh BAAI/bge-small-zh-v1.5     # 必需
-./scripts/fetch_model.sh BAAI/bge-reranker-base     # 可选，不下则精排自动降级
+# 国内访问不便时先设镜像：export HF_ENDPOINT=https://hf-mirror.com
+huggingface-cli download BAAI/bge-small-zh-v1.5 --local-dir data/models/BAAI--bge-small-zh-v1.5
+# 可选：重排模型，不下载则精排自动降级
+huggingface-cli download BAAI/bge-reranker-base --local-dir data/models/BAAI--bge-reranker-base
 ```
 
-国内直连 HuggingFace 必挂，脚本事先配了镜像。
+无 `huggingface-cli` 时：先 `pip install -U huggingface_hub`，或手动从 HuggingFace / ModelScope 下载上述仓库到对应目录即可。
 
 ### 3. 起服务
 
@@ -262,7 +275,7 @@ knowtune eval --save          # 存基线
 knowtune eval --calibrate     # 网格扫描 0.20–0.80 × margin 0–0.12，目标函数"误拒优先"
 ```
 
-评估集在 `evals/cases.jsonl`，22 条（20 可答 + 2 应拒），用**文档名 + 关键词**而不是 chunk_id 作为期望——重新分块后不失效。
+评估集需用户自备：每行一个 JSON 对象，含 `question`（问题）、`expected`（期望命中的文档名或关键词）、`expect_refusal`（是否应拒答）。格式示例见历史提交 `evals/cases.jsonl`。
 
 当前基线：**Recall@5 95.0% · MRR 0.7792 · Hit@1 65.0% · p50 17ms**。
 
@@ -270,11 +283,11 @@ knowtune eval --calibrate     # 网格扫描 0.20–0.80 × margin 0–0.12，�
 
 ## 已知限制
 
-- **精排模型未下载**，当前走降级、按融合分数排名。补：`./scripts/fetch_model.sh BAAI/bge-reranker-base`
+- **精排模型未下载**，当前走降级、按融合分数排名。补：`huggingface-cli download BAAI/bge-reranker-base --local-dir data/models/BAAI--bge-reranker-base`
 - **嵌入模型冷启 93 秒**（实测，16 核），期间检索只有 BM25 一路。之后编码约 21 chunk/s
 - **本地 7B 一次完整回答实测 222 秒**。SSE 流式已经有了，但检索完到首 token 之间仍是静默期，界面用流式光标 + 计时兜住"没反应"的观感。真正的解法是换更快的后端
 - **拒答阈值分不开语义**。现在 `min_score=0.35`，且标定样本只有 2 条应拒题（`reliable: false`），系统如实回退出厂值。实测"K8s 部署 GPU 推理"这类**主题相邻但没答案**的问题 top=0.599，比很多应答样本还高——分数分不开，需要 LLM 判据
-- **引用覆盖率是形式指标**。它只证明编号对得上，不证明那句话被资料支持。逐句忠实度判定（F5.3）没做
+- **引用覆盖率是形式指标**。它只证明编号对得上，不证明那句话被资料支持。已新增答案质量评测（逐句忠实度 + 相关性，LLM-as-judge），需自备评估集并接入 LLM 后端后通过 `knowtune eval --answer` 使用
 - **融合权重是在维医语料上实测出来的**（两套探针 × 两个种子 × n≈300）。换一批文档，BM25 与向量的强弱关系可能反转，用同一把尺子重跑再定 `retrieval.fusion.*`
 - **未做**（均为 P2）：查询改写 F2.5、对话内指代改写 F4.3、跨会话历史检索 F4.4、忠实度评估 F5.3、sitemap 整站抓取
 - **后台没有鉴权**。默认只监听 `127.0.0.1`，别直接暴露到公网
@@ -291,9 +304,6 @@ src/knowtune/      全部 Python 源码 + 两套前端静态文件
   frontsite/       前台问答站（同进程线程）
 config/            default / local / models / instances / prompts
 data/              library.db、上传原件、模型权重、密钥、标定结果
-evals/             题集与基线
-tests/             374 条单测（372 passed / 1 skip）
-scripts/           截图、冒烟、模型下载、WBS 生成
 docs/              架构文档、项目地图、WBS
 ```
 
@@ -307,7 +317,7 @@ docs/              架构文档、项目地图、WBS
 | [docs/WBS.html](docs/WBS.html) | 8 个交付物 / 49 个工作包 / 9 项范围缺口，逐个标了落地文件 |
 | [config/default.yaml](config/default.yaml) | 全部可调参数，每个默认值都写了为什么 |
 
-环境自检由 `python scripts/check_env.py` 现场生成，不入库。WBS 由 `scripts/gen_wbs.py` 生成，改完模块结构重跑一次即可刷新。
+环境要求见上方「装」一节；交付清单见 [docs/WBS.html](docs/WBS.html)。
 
 ## 许可
 
