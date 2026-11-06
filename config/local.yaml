@@ -1,6 +1,6 @@
 # 用户在参数面板里改过的值。只记录与 default.yaml 不同的项，
 # default.yaml 是唯一权威文档，不要把这个文件当成它的副本。
 # 想回出厂值：删掉本文件，或点参数面板的「恢复默认」再保存。
-#
-# 注意：generation.provider 不在这里 —— 端点清单和"当前用哪个"都归
-# config/models.yaml 管。两处都能改会让「我切了但没生效」变成常态。
+
+generation:
+  provider: siliconflow

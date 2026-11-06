@@ -569,14 +569,22 @@ function renderRich(text) {
   };
   const flushList = () => {
     if (list) {
-      out.push(`<${list.tag}>${list.items.map((i) => `<li>${inline(i)}</li>`).join("")}</${list.tag}>`);
+      // 首条不是 1 时用 start 保住模型原本的编号（"3. 4. 5." 不能被改写成 1.2.3.）
+      const attr = list.start > 1 ? ` start="${list.start}"` : "";
+      out.push(`<${list.tag}${attr}>${list.items.map((i) => `<li>${inline(i)}</li>`).join("")}</${list.tag}>`);
       list = null;
     }
   };
 
   for (const raw of lines) {
     const line = raw.replace(/\s+$/, "");
-    if (!line.trim()) { flushPara(); flushList(); continue; }
+    if (!line.trim()) {
+      flushPara();
+      // 空行**不关闭**列表。模型几乎都按"每条一段"排版，一遇空行就 flush，
+      // 一条三点答案会变成三个各自从 1 开始的 <ol>——满屏"1. 1. 1."。
+      // 真正的列表结束由后面遇到非列表行时的那次 flushList() 判定。
+      continue;
+    }
 
     const head = /^(#{1,4})\s+(.*)$/.exec(line);
     if (head) {
@@ -591,7 +599,10 @@ function renderRich(text) {
     if (ol || ul) {
       flushPara();
       const tag = ol ? "ol" : "ul";
-      if (!list || list.tag !== tag) { flushList(); list = { tag, items: [] }; }
+      if (!list || list.tag !== tag) {
+        flushList();
+        list = { tag, items: [], start: ol ? parseInt(ol[1], 10) || 1 : 1 };
+      }
       list.items.push(ol ? ol[2] : ul[1]);
       continue;
     }
