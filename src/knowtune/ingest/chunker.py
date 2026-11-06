@@ -37,20 +37,26 @@ def _hash(text: str, size: int, overlap: int) -> str:
 
 
 def _hard_split(text: str, size: int) -> list[str]:
-    """单段超过 size 时按句子边界切，实在没有边界才按字符切。"""
+    """单段超过 size 时按句子边界切，实在没有边界才按字符切。
+
+    用游标滑动，不要 `rest = rest[cut:]`：那样每切一块就把剩余全文复制一遍，
+    总代价是 n²/(2·size)。一份 1473 万字的书按 480 字切，光复制就 2×10¹¹ 字符，
+    实测 4M 字要 17 秒、1M 字只要 1.4 秒——平方增长，大文件直接卡死。
+    """
     parts: list[str] = []
-    rest = text
-    while len(rest) > size:
-        window = rest[:size]
+    n = len(text)
+    i = 0
+    while n - i > size:
+        window = text[i : i + size]
         cut = max(window.rfind(ch) for ch in SENT_END)
         if cut < size // 2:  # 边界太靠前等于没切，宁可硬切
             cut = size
         else:
             cut += 1
-        parts.append(rest[:cut])
-        rest = rest[cut:]
-    if rest:
-        parts.append(rest)
+        parts.append(text[i : i + cut])
+        i += cut
+    if i < n:
+        parts.append(text[i:])
     return parts
 
 
