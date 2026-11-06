@@ -6447,17 +6447,18 @@ function siteGroups(i, meta, plan, defProv) {
         ${opt("direct", "模型直接用维吾尔语作答（快，小模型容易跑偏）", i.answer_mode)}</select>`),
     ].join("")),
 
-    group("界面文案", "文字在「提示词配置 · 界面文案」里统一改", [
-      row("知识库显示名", text("kb_name", i.kb_name, "留空用库名")),
+    group("界面文案", "标题、副标题、欢迎语在「提示词配置 · 界面文案」；这里只改左侧那块的名字", [
+      row("侧栏库名", text("kb_name", i.kb_name, "留空用知识库名"), "前台左侧顶部的标题"),
       copyLinkRow(i.lang),
     ].join("")),
 
-    group("另一语言", "右上角切换按钮那一套，留空自动补齐", [
+    group("另一语言", "右上角那套切换用的文案，留空自动补齐", [
       row("语言", `<select data-f="alt_lang">
         ${opt("zh", "中文", a.lang)}
         ${opt("ug", "维吾尔语", a.lang)}
         ${opt("en", "English", a.lang)}</select>`),
-      row("知识库显示名", text("alt_kb_name", a.kb_name, "留空用库名")),
+      row("侧栏库名", text("alt_kb_name", a.kb_name, "留空用知识库名"),
+        "这一语言界面左侧顶部的标题"),
       copyLinkRow(a.lang || "zh"),
     ].join("")),
   ].join("");

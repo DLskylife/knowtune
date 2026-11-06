@@ -19,6 +19,7 @@ instances:
   public: false
   alt:
     lang: zh
+    kb_name: 维医知识问答
   classic_kb_id: 4
   classic_keywords:
   - 古籍
