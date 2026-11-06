@@ -3539,31 +3539,7 @@ def bulk_delete_sessions(req: SessionBulkDelete) -> dict:
     }
 
 
-# --------------------------------------------------------------------- 评估
-
-
-class EvalReq(BaseModel):
-    k: int = Field(default=5, ge=1, le=20)
-    rerank: bool | None = None
-
-
-@app.post("/api/eval/run")
-def run_eval_api(req: EvalReq) -> dict:
-    from ..evaluate import load_baseline, run_eval
-
-    try:
-        report = run_eval(state.cfg, state.conn, state.engine, k=req.k, rerank=req.rerank)
-    except FileNotFoundError as exc:
-        raise HTTPException(404, str(exc)) from exc
-    baseline = load_baseline(state.cfg.eval.baseline)
-    payload = report.as_dict()
-    payload["baseline"] = {
-        "exists": baseline is not None,
-        "metrics": (baseline or {}).get("metrics"),
-        "fingerprint": (baseline or {}).get("fingerprint"),
-        "created_at": (baseline or {}).get("created_at"),
-    }
-    return payload
+# --------------------------------------------------------------------- 反馈
 
 
 @app.post("/api/feedback")
@@ -4020,47 +3996,6 @@ def delete_instance(name: str) -> dict:
     instcfg.remove(name)
     logbus.note(f"站点实例 {name} 已删除", level="WARNING", source="sites")
     return {"ok": True, "deleted": name}
-
-
-# ------------------------------------------------------------ 模型评测台
-# 它跑在 evals/.venv 里（Gradio 6 与主项目的依赖打架），所以是一个真的子进程，
-# 不走 InstanceManager。启停逻辑与"端口到底是谁的"判断都在 evalboard 里。
-
-@app.get("/api/evalboard")
-def evalboard_status() -> dict:
-    from ..frontsite import evalboard
-
-    return evalboard.status()
-
-
-@app.post("/api/evalboard/start")
-def evalboard_start(request: Request) -> dict:
-    from ..frontsite import evalboard
-
-    try:
-        return evalboard.start(gateway=str(request.base_url).rstrip("/") + "/v1")
-    except RuntimeError as exc:
-        raise HTTPException(500, str(exc)) from exc
-
-
-@app.post("/api/evalboard/stop")
-def evalboard_stop() -> dict:
-    from ..frontsite import evalboard
-
-    try:
-        return evalboard.stop()
-    except RuntimeError as exc:
-        raise HTTPException(409, str(exc)) from exc
-
-
-@app.post("/api/evalboard/restart")
-def evalboard_restart(request: Request) -> dict:
-    from ..frontsite import evalboard
-
-    try:
-        return evalboard.restart(gateway=str(request.base_url).rstrip("/") + "/v1")
-    except RuntimeError as exc:
-        raise HTTPException(409, str(exc)) from exc
 
 
 @app.exception_handler(Exception)

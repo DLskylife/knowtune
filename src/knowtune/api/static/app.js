@@ -3403,7 +3403,6 @@ async function renderHome() {
 
   const a = d.assets;
   const h = d.health;
-  const ev = d.eval || {};
 
   box.innerHTML = `<div class="page">
     <div class="kpi-grid">
@@ -3452,10 +3451,6 @@ async function renderHome() {
         <div class="kv-list">
           ${kvRow("数据目录", `${a.data_mb} MB`)}
           ${kvRow("数据库文件", `${a.db_mb} MB`)}
-          ${kvRow("检索评估", ev.exists
-            ? `Recall@5 ${(Number(ev.metrics?.recall_at_k ?? 0) * 100).toFixed(1)}% · MRR ${Number(ev.metrics?.mrr ?? 0).toFixed(3)}`
-            : "还没跑过")}
-          ${kvRow("基线时间", ev.exists ? esc(String(ev.created_at || "").slice(0, 10)) : "—")}
           ${kvRow("数据路径", `<span class="ell" title="${esc(d.server.db_path)}">${esc(d.server.db_path)}</span>`)}
         </div>
       </section>
@@ -6416,135 +6411,6 @@ function previsitBlock(cfg, gw) {
   </section>`;
 }
 
-/* 模型评测卡：evals/scoreboard.py，跑在独立 venv 里的一个 Gradio 进程。
- *
- * 它和上面那些站点不是一类东西——不是 InstanceManager 里的一条线程，而是
- * 一个真的子进程（Gradio 6 和主项目的依赖版本打架），所以有自己的一套启停
- * 接口，也要单独一张卡。放在站点页最下面：和维医、预问诊排在一起，用户在
- * "站点"这一页就能看到所有对外入口。
- *
- * 样式上单独一套（.ev-*）：整页只有这张卡是近黑底。别的原因之外还有一个很
- * 实际的原因——它原先只有「档案」「产出」两行胶囊，卡片中间空出一大块，像
- * 没加载完。现在信息装进一格一格的框里：档案一张一个框、产出三个计数框、
- * 流程三步、运行环境三行，密度够了，"空"就不成立。
- */
-function evalBlock(st, gw) {
-  const s = st || {};
-  const port = s.port || 7860;
-  const host = location.hostname || "127.0.0.1";
-  const url = `http://${host}:${port}/`;
-  const local = host === "127.0.0.1" || host === "localhost";
-  const running = Boolean(s.running);
-  const ready = s.ready !== false;
-  const runs = s.runs || {};
-  const profs = Array.isArray(s.profiles) ? s.profiles : [];
-  const dpo = runs.dpo || 0;
-  const reports = runs.reports || 0;
-  const samples = runs.samples || 0;
-  const pid = running ? (s.pid || "—") : "—";
-
-  const profCard = (p) => {
-    const dims = Array.isArray(p.dims) ? p.dims : [];
-    return `<div class="ev-prof" title="${esc(dims.join(" / ") || "这个档案没定义评分维度")}">
-      <div class="ev-prof-top">
-        <b>${esc(p.label || p.key || "未命名")}</b>
-        <span class="ev-prof-key">${esc(p.key || "")}</span>
-      </div>
-      <div class="ev-prof-meta">
-        <em>${p.cases ? `${p.cases} 题` : "未带题库"}</em>
-        <em>${dims.length ? `${dims.length} 个维度` : "无维度"}</em>
-      </div>
-      <div class="ev-prof-dims">${esc(dims.slice(0, 3).join(" · ") || "—")}</div>
-    </div>`;
-  };
-
-  const stat = (label, n, note, hot) => `<div class="ev-stat${hot && n > 0 ? " hot" : ""}">
-    <b>${n}</b><span>${esc(label)}</span><i>${esc(note)}</i>
-  </div>`;
-
-  const step = (n, title, desc) => `<div class="ev-step">
-    <span class="ev-step-n">${n}</span>
-    <span class="ev-step-t">${esc(title)}</span>
-    <span class="ev-step-d">${esc(desc)}</span>
-  </div>`;
-
-  const envRow = (k, v, mono) => `<div class="ev-env-row">
-    <span class="ev-env-k">${esc(k)}</span>
-    <span class="ev-env-v${mono ? " mono" : ""}" title="${esc(v)}">${esc(v)}</span>
-  </div>`;
-
-  return `<section class="ev-card" data-name="__eval__">
-    <header class="ev-head">
-      <div class="ev-id">
-        <span class="ev-led${running ? " on" : ""}"></span>
-        <span class="ev-name">模型评测</span>
-        ${siteStatusBadge(running ? "running" : (s.error ? "error" : "stopped"))}
-        <span class="ev-dim">端口 ${port}</span>
-        <span class="ev-dim">pid ${esc(String(pid))}</span>
-        ${running && s.managed ? `<span class="ev-dim">后台托管</span>` : ""}
-        ${running && s.managed === false
-          ? `<span class="ev-dim" title="后台重启过，进程句柄丢了；点停止会先核对命令行再结束它"
-              >非后台托管</span>` : ""}
-      </div>
-      <div class="sbk-acts">
-        <button class="mini" data-eact="copy" data-url="${esc(url)}">复制链接</button>
-        <button class="mini" data-eact="${running ? "stop" : "start"}" ${ready ? "" : "disabled"}
-          >${running ? "停止" : "启动"}</button>
-        <button class="mini" data-eact="restart" ${ready ? "" : "disabled"}>重启</button>
-        <a class="mini loc" href="${esc(url)}" target="_blank" rel="noreferrer">打开</a>
-      </div>
-    </header>
-
-    ${gatewayRow(gw, "评测台经 /v1 取模型",
-      "主服务未启动时自动退回本地配置清单，独立跑打分台不受影响", true)}
-
-    <div class="ev-url">
-      <span class="ev-url-k">入口</span>
-      <a href="${esc(url)}" target="_blank" rel="noreferrer">${esc(url)}</a>
-      <span class="ev-url-note${local ? "" : " warn"}">${
-        local ? "只监听本机" : "只监听本机，远端打不开"}</span>
-      <span class="ev-flow">K 次采样 → 人工打分 → DPO 对子 + 质量报告</span>
-    </div>
-
-    <div class="ev-body">
-      <div class="ev-box">
-        <div class="ev-box-head">评测档案<span>评什么由档案决定，不预设场景</span></div>
-        <div class="ev-profs">
-          ${profs.length
-            ? profs.map(profCard).join("")
-            : `<div class="ev-empty">${esc(s.error || "读不到档案")}</div>`}
-        </div>
-      </div>
-
-      <div class="ev-col">
-        <div class="ev-box">
-          <div class="ev-box-head">已产出<span>导出落在 evals/runs/</span></div>
-          <div class="ev-stats">
-            ${stat("DPO 对子", dpo, "胜负已分", true)}
-            ${stat("评测报告", reports, "Markdown", true)}
-            ${stat("逐样本", samples, "CSV", true)}
-          </div>
-          <div class="ev-env">
-            ${envRow("解释器", s.python || "—", true)}
-            ${envRow("脚本", s.script || "—", true)}
-            ${envRow("日志", s.log || "—", true)}
-          </div>
-        </div>
-
-        <div class="ev-box">
-          <div class="ev-box-head">怎么用<span>三步，全在评测台里</span></div>
-          <div class="ev-steps">
-            ${step("1", "采样", "同一个模型同一个问题跑 K 次，温度拉开差异")}
-            ${step("2", "打分", "按维度滑档，标出该踩的红线；不预设场景")}
-            ${step("3", "导出", "成对结论写 DPO，分数分布出报告")}
-          </div>
-        </div>
-      </div>
-    </div>
-    ${s.error ? `<div class="ev-err">${esc(s.error)}</div>` : ""}
-  </section>`;
-}
-
 /* ------------------------------------------------------------ 预问诊参数面板 */
 async function openPrevisitConfig() {
   let cfg;
@@ -6697,23 +6563,19 @@ function collectPvValues() {
   return out;
 }
 
-function paintSites(d, roles, meta, pvCfg, evalSt, gw) {
+function paintSites(d, roles, meta, pvCfg, gw) {
   const data = d || state.sites;
   if (!data) return;
   state.sites = data;
   state.rolePlan = roles;
   state.pvCfg = pvCfg || null;
   state.modelMeta = meta || [];
-  state.evalSt = evalSt || null;
   state.gateway = gw || null;
   const items = data.items || [];
   const running = items.filter((i) => i.status === "running").length;
   $("pageTitle").textContent = "前台站点";
-  // 副标题按"对外入口"数：站点 + 预问诊 + 评测台。只报站点的话，
-  // 页面上明明有三张卡、标题却说"1 个站点"，看起来像漏算了。
   $("pageSub").textContent = items.length
     ? `${items.length} 个站点 · ${running} 个运行中`
-      + ` · 评测台${evalSt && evalSt.running ? "运行中" : "未启动"}`
     : "还没有站点";
   $("pageActions").innerHTML =
     `<button class="primary-btn" id="btnNewSite">＋ 新建站点</button>`;
@@ -6730,7 +6592,6 @@ function paintSites(d, roles, meta, pvCfg, evalSt, gw) {
         (roles && roles.default_provider) || "")).join("")
       : `<div class="card"><p class="hint" style="margin:6px 0 12px">还没有前台站点。</p></div>`}
     ${previsitBlock(state.pvCfg, state.gateway)}
-    ${evalBlock(state.evalSt, state.gateway)}
   </div>`;
 
   $("btnNewSite").onclick = () => openSiteEditor(null);
@@ -6759,19 +6620,15 @@ async function renderSites() {
   // 打不开，卡片会显示"参数读取失败"，问答入口本身照常可用。
   let pvCfg = null;
   try { pvCfg = await api("/previsit/api/previsit/config"); } catch { pvCfg = null; }
-  // 评测台是独立进程（evals/.venv），状态单独取；读不到就画一张"不可用"的卡，
-  // 不能让站点页因为一个 Gradio 子进程挂了而整页打不开。
-  let evalSt = null;
-  try { evalSt = await api("/api/evalboard"); } catch { evalSt = null; }
-  // 固定入口地址：三张卡里预问诊和评测台都从它取模型，维医卡不改。
+  // 固定入口地址：预问诊卡从它取模型。
   // 刚启动那一两秒 /api/gateway 可能还没就绪，重试一次——少这一下就会看到
-  // 页面开着、两张卡的「模型入口」却是空的，刷新一下又出现。
+  // 页面开着、卡片的「模型入口」却是空的，刷新一下又出现。
   let gw = null;
   for (let i = 0; i < 2 && !gw; i++) {
     try { gw = await api("/api/gateway"); } catch { gw = null; }
     if (!gw && i === 0) await new Promise((r) => setTimeout(r, 400));
   }
-  paintSites(d, r, meta, pvCfg, evalSt, gw);
+  paintSites(d, r, meta, pvCfg, gw);
   bindSiteActions();
 }
 
@@ -6789,35 +6646,6 @@ function bindSiteActions() {
     if (cfgBtn) {
       const blk = cfgBtn.closest(".site-block");
       if (blk) await openSiteConfig(blk.dataset.name);
-      return;
-    }
-    // 评测台的启停：独立进程（evals/.venv），走 /api/evalboard。
-    const ev = e.target.closest("[data-eact]");
-    if (ev) {
-      const act = ev.dataset.eact;
-      if (act === "copy") {
-        try {
-          await navigator.clipboard.writeText(ev.dataset.url);
-          toast("已复制链接");
-        } catch { toast(ev.dataset.url, "warn"); }
-        return;
-      }
-      const label = ev.textContent;
-      ev.disabled = true;
-      // 首次启动要等 Gradio 起来（十几秒），按钮上得写清在等什么，
-      // 不然就是一个点了没反应、用户会连点三次的按钮。
-      ev.textContent = act === "start" ? "启动中…"
-        : act === "restart" ? "重启中…" : "停止中…";
-      try {
-        await jsonSend("POST", `/api/evalboard/${act}`, {});
-        toast(act === "start" ? "评测台已启动"
-          : act === "restart" ? "评测台已重启" : "评测台已停止");
-        await renderSites();
-      } catch (err) {
-        toast(err.message, "err");
-        ev.disabled = false;
-        ev.textContent = label;
-      }
       return;
     }
     const btn = e.target.closest("[data-sact]");

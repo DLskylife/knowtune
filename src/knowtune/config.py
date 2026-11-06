@@ -331,13 +331,6 @@ class IngestCfg(BaseModel):
     url: UrlCfg = UrlCfg()
 
 
-class EvalCfg(BaseModel):
-    dataset: Path = Path("./evals/cases.jsonl")
-    baseline: Path = Path("./evals/baseline.json")
-    k: int = 5
-    skip_generation: bool = True
-
-
 class ObservabilityCfg(BaseModel):
     log_level: str = "INFO"
     log_json: bool = True
@@ -357,7 +350,6 @@ class Config(BaseModel):
     generation: GenerationCfg = GenerationCfg()
     chat: ChatCfg = ChatCfg()
     ingest: IngestCfg = IngestCfg()
-    eval: EvalCfg = EvalCfg()
     observability: ObservabilityCfg = ObservabilityCfg()
 
     def resolve_paths(self, base: Path = ROOT) -> "Config":
@@ -365,8 +357,6 @@ class Config(BaseModel):
         self.storage.data_dir = base / self.storage.data_dir
         self.storage.db_path = base / self.storage.db_path
         self.storage.vector_dir = base / self.storage.vector_dir
-        self.eval.dataset = base / self.eval.dataset
-        self.eval.baseline = base / self.eval.baseline
         if self.embedding.local_path:
             self.embedding.local_path = str(base / self.embedding.local_path)
         if self.retrieval.rerank.local_path:

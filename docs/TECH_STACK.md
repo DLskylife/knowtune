@@ -58,7 +58,6 @@
 - `think`(推理模型节流) / `cite`(引用覆盖率 `verify()`，形式指标非忠实度) / `evidence` / `prompt`
 
 ### 评估与可观测
-- `evaluate.py` + `evals/`：引用覆盖率、Recall@5/MRR、误拒漏拒、阈值标定
 - `dashboard.py`(运行仪表盘) / `chatctx.py`(会话上下文规则，不依赖 torch 可单测)
 - `structlog` + `logbus`：结构化日志
 

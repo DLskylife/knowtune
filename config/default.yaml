@@ -177,12 +177,6 @@ ingest:
     max_depth: 2
     max_pages: 200
 
-eval:
-  dataset: ./evals/cases.jsonl
-  baseline: ./evals/baseline.json
-  k: 5
-  skip_generation: true            # 检索评估不跑生成，才能守住"5 分钟出结果"
-
 observability:
   log_level: INFO
   log_json: true

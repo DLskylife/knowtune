@@ -2,7 +2,8 @@
 
 > 对应需求规格说明书 F1–F5。本文是 Phase 0（需求锚定）+ Phase 1（架构设计）的交付物。
 > 状态：v0.1 已交付（259 条单测全绿），设计与实测数据持续更新。
-> 注：`scripts/`（开发运维脚本）与 `tests/`（单测）已在精简版仓库中移除，下文提及它们处均为当时的开发记录，工具本身不再随仓库提供；`evals/` 保留。
+> 注：`scripts/`（开发运维脚本）与 `tests/`（单测）已在精简版仓库中移除，`evals/`（模型评测台）已拆分为独立项目
+> [model-eval](../model-eval)。下文提及它们处均为当时的开发记录，工具本身不再随本仓库提供。
 
 ---
 
@@ -2653,8 +2654,8 @@ huggingface-cli download BAAI/bge-reranker-base --local-dir data/models/BAAI--bg
 
 | 编号 | 状态 | 落地形式 / 证据 |
 |---|---|---|
-| F5.1 评估集管理 | ✅ | `evals/cases.jsonl` 22 条（20 可答 + 2 应拒），格式 `{id,question,expect:{doc,keys}}`，**用文档+关键词而非 chunk_id**，重新分块后不失效 |
-| F5.2 检索指标 | ✅ | `knowtune eval` 一次跑完：**Recall@5 95.0% / MRR 0.7792 / Hit@1 65.0%**，p50 17ms；`--save` 写基线，参数指纹不一致时明确报"不可比" |
+| F5.1 评估集管理 | ✅ | `evals/cases.jsonl` 22 条（20 可答 + 2 应拒），格式 `{id,question,expect:{doc,keys}}`，**用文档+关键词而非 chunk_id**，重新分块后不失效（2026-11-06 随评测台迁至 model-eval） |
+| F5.2 检索指标 | ✅ | `knowtune eval` 一次跑完：**Recall@5 95.0% / MRR 0.7792 / Hit@1 65.0%**，p50 17ms；`--save` 写基线，参数指纹不一致时明确报"不可比"（该命令已随评测迁出，数据为迁出前实测） |
 | F5.3 生成忠实度 | ⬜ | 只有引用覆盖率（`cite.verify`），没接 LLM 逐句判据 |
 | F5.4 拒答准确率 | ✅ | 评估输出误拒率/漏拒率；`knowtune eval --calibrate` 网格扫描 0.20–0.80 × margin 0–0.12，目标函数"误拒优先"。**样本不足会明确警告**（当前 2 条应拒题 → `reliable: false`） |
 | F5.5 请求日志 | ✅ | query_log 记录耗时/token/模型/chunk 列表/降级；`GET /api/logs` 可按 kb 与时间筛 |

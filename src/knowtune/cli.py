@@ -19,17 +19,6 @@ from pathlib import Path
 
 from .config import load_config
 from .db import Database
-from .evaluate import (
-    calibrate,
-    format_answer_report,
-    format_calibration,
-    format_report,
-    load_baseline,
-    run_eval,
-    run_eval_answer,
-    save_baseline,
-    save_calibration,
-)
 from .generate import cite as cite_mod
 from .generate.llm import LLMClient, LLMError
 from .generate.prompt import REFUSE_TEMPLATE, build_context
@@ -196,92 +185,6 @@ def cmd_debug(args) -> int:
     return 0
 
 
-def cmd_eval(args) -> int:
-    cfg, db, engine, _ = _bootstrap()
-    conn = db.conn()
-
-    if args.calibrate:
-        try:
-            result = calibrate(cfg, conn, engine)
-        except FileNotFoundError as exc:
-            print(str(exc), file=sys.stderr)
-            return 2
-        except ValueError as exc:
-            print(str(exc), file=sys.stderr)
-            return 2
-        save_calibration(cfg.refusal.calibration_file, result)
-        print("拒答阈值标定完成（网格扫描评估集）：")
-        print(format_calibration(result))
-        print(f"  写入 {cfg.refusal.calibration_file}")
-        if not result.get("reliable", True):
-            print(
-                "\n⚠ 样本不足（建议 ≥10 条可答题、≥5 条应拒题），这个阈值只能算粗估。"
-                "\n  多补几条 expect_refusal: true 的题再跑一次，否则阈值随样本抖得很厉害。"
-            )
-        print("\n重启服务后生效（配置在启动时加载）。换嵌入模型必须重新标定。")
-        return 0
-
-    if args.answer:
-        if not (cfg.generation.provider or "").strip():
-            print("未配置生成后端：去「模型」页新增一个 OpenAI 兼容地址，或扫本地 .gguf。",
-                  file=sys.stderr)
-            print("（答案质量评测需要先生成答案再让模型当裁判，必须有一个可用后端。）",
-                  file=sys.stderr)
-            return 2
-
-        client = LLMClient(cfg)
-
-        def _gen(question: str, candidates) -> str:
-            bundle = build_context(
-                candidates,
-                question=question,
-                token_budget=cfg.generation.context_token_budget,
-                min_context_chars=cfg.generation.min_context_chars,
-                prompt_version=cfg.prompt_version,
-                provider=cfg.generation.provider,
-            )
-            return "".join(client.stream(bundle.messages(question),
-                                        provider=cfg.generation.provider))
-
-        try:
-            report = run_eval_answer(
-                cfg, conn, engine, client,
-                k=args.k or cfg.eval.k,
-                gen=_gen,
-                rerank=None if args.rerank is None else args.rerank,
-            )
-        except FileNotFoundError as exc:
-            print(str(exc), file=sys.stderr)
-            return 2
-        print(format_answer_report(report))
-        if args.json:
-            print("\n--- json ---")
-            print(json.dumps(report.as_dict(), ensure_ascii=False, indent=2))
-        return 0
-
-    try:
-        report = run_eval(
-            cfg,
-            conn,
-            engine,
-            k=args.k or cfg.eval.k,
-            rerank=None if args.rerank is None else args.rerank,
-        )
-    except FileNotFoundError as exc:
-        print(str(exc), file=sys.stderr)
-        return 2
-
-    baseline = load_baseline(cfg.eval.baseline)
-    print(format_report(report, baseline))
-    if args.json:
-        print("\n--- json ---")
-        print(json.dumps(report.as_dict(), ensure_ascii=False, indent=2))
-    if args.save:
-        save_baseline(cfg.eval.baseline, report)
-        print(f"\n已写入基线：{cfg.eval.baseline}")
-    return 0
-
-
 def cmd_serve(args) -> int:
     import uvicorn
 
@@ -342,18 +245,6 @@ def main(argv: list[str] | None = None) -> int:
     p_dbg.add_argument("--kb", type=int, default=None)
     p_dbg.add_argument("--top-k", type=int, default=None)
     p_dbg.set_defaults(func=cmd_debug)
-
-    p_eval = sub.add_parser("eval", help="跑评估集（Recall@K / MRR / 拒答）")
-    p_eval.add_argument("--k", type=int, default=None,
-                        help="评估用 Top-K，缺省取 eval.k（参数面板可调）")
-    p_eval.add_argument("--rerank", dest="rerank", action="store_true", default=None)
-    p_eval.add_argument("--no-rerank", dest="rerank", action="store_false")
-    p_eval.add_argument("--save", action="store_true", help="把本次结果写成新基线")
-    p_eval.add_argument("--calibrate", action="store_true", help="标定拒答阈值并写标定文件")
-    p_eval.add_argument("--answer", action="store_true",
-                        help="答案质量评测：生成答案 + LLM 裁判打分（需配置生成后端）")
-    p_eval.add_argument("--json", action="store_true")
-    p_eval.set_defaults(func=cmd_eval)
 
     p_srv = sub.add_parser("serve", help="启动 Web UI")
     p_srv.add_argument("--port", type=int, default=8000)

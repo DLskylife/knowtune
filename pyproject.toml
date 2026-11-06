@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "knowtune"
 version = "0.1.0"
-description = "KnowTune：本地知识库问答系统 —— 多格式导入 + 混合检索 + 带引用生成 + 可量化评估"
+description = "KnowTune：本地知识库问答系统 —— 多格式导入 + 混合检索 + 带引用生成"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 

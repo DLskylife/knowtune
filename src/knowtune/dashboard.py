@@ -117,23 +117,6 @@ def _health(conn) -> dict[str, Any]:
     }
 
 
-def _eval_baseline(cfg: Config) -> dict[str, Any]:
-    path = Path(cfg.eval.baseline)
-    if not path.exists():
-        return {"exists": False}
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {"exists": False}
-    metrics = data.get("metrics") or {}
-    return {
-        "exists": True,
-        "created_at": data.get("created_at"),
-        "metrics": metrics,
-        "fingerprint": data.get("fingerprint"),
-    }
-
-
 def _recent_queries(conn, limit: int = 12) -> list[dict[str, Any]]:
     rows = conn.execute(
         """
@@ -223,7 +206,6 @@ def build(
         },
         "kbs": _kb_rows(conn),
         "health": _health(conn),
-        "eval": _eval_baseline(cfg),
         "embedder": {
             "model": cfg.embedding.model,
             "dim": cfg.embedding.dim,
