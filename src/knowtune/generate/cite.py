@@ -75,23 +75,55 @@ def verify(answer: str, n_context: int) -> CiteReport:
     sentences = [s.strip() for s in SENT_SPLIT.split(cleaned) if s.strip()]
     # 只统计"事实性长句"：短句、"可能的原因"这类结构性文字不计入分母，
     # 否则覆盖率会被格式文字稀释成一个永远不及格的数字。
+    #
+    # 前缀表里原来还列了 "1." "2." "3." "-"——那是按"排除纯编号行"的意图写的，
+    # 但 startswith 把**整条列表项**一起排掉了。真实模型几乎只用编号列表回答，
+    # 于是分母只剩下开头那句和结尾那句（实测一篇 5 段的答案只认出 2 句）。
+    # 纯编号行长度不到 25，早被下面的长度条件滤掉，这几条纯属误伤。
     factual = [
         s
         for s in sentences
-        if len(s) >= 25 and not s.startswith(("可能的原因", "如确认", "1.", "2.", "3.", "-"))
+        if len(s) >= 20 and not s.startswith(("可能的原因", "如确认"))
     ]
     uncited = [s for s in factual if not CITE_RE.search(s)]
-    coverage = (len(factual) - len(uncited)) / len(factual) if factual else (1.0 if ids else 0.0)
-
-    # 引用存疑的两种形态。对冲式直接把覆盖率归零：模型自己都说没依据了，
-    # 这些编号不构成任何证据支撑，留着 100% 只会跟"低置信"提醒打架。
-    blanket: str | None = None
-    if HEDGE_RE.search(answer) and ids:
-        blanket = "回答声称资料中未找到依据，引用编号是装饰，覆盖率按 0 计"
+    if factual:
+        coverage = (len(factual) - len(uncited)) / len(factual)
+    else:
+        # 一句够长的都没有：要么是"好的，我明白了"这种寒暄，要么是把编号挂在
+        # 碎片上（「未找到依据[1][2][3]」）。两种都不该白拿 100%。原来这里
+        # 兜底成 `1.0 if ids else 0.0`，于是"每句都短、每句都挂编号"这一路
+        # 完全绕过指标——比没有指标更糟，因为它看起来是满的。
         coverage = 0.0
-        uncited = factual or uncited
-    elif RUN_RE.search(answer):
-        blanket = "单句连挂 3 个以上引用编号（笼统引用），指向性存疑"
+
+    # 引用存疑的两种形态。
+    #
+    # 对冲式改成**句级**判定。原来是全文扫一遍 hedge 词、只要有任何编号就把
+    # 覆盖率强制归零——而最理想的回答恰恰长这样：
+    #   「资料中未找到沙疗治白癜风的依据。」          （无编号，本来就该无）
+    #   「白癜风资料里写的是药物和光疗[1][2]。」      （有编号，真指涉）
+    # 全文匹配把这种答案判成"装饰引用"，等于专门惩罚说实话的模型。
+    # 现在只认"编号挂在没依据的那句上"：句子自己一边说没有、一边挂 [n]。
+    hedged = [s for s in factual if HEDGE_RE.search(s)]
+    solid = [s for s in factual if CITE_RE.search(s) and not HEDGE_RE.search(s)]
+    blanket: str | None = None
+    if not factual and ids:
+        blanket = "答案里没有可统计的完整事实句（句子都太短），编号却不少，覆盖率按 0 计"
+    if hedged and not solid and ids:
+        blanket = "引用编号挂在「未找到依据」这类句子上，是装饰不是证据，覆盖率按 0 计"
+        coverage = 0.0
+        uncited = factual
+    elif hedged:
+        # 自证"没有依据"的句子不需要编号，也不该算缺口。
+        covered = len(solid) + len(hedged)
+        coverage = covered / len(factual)
+        uncited = [s for s in factual if not CITE_RE.search(s) and s not in hedged]
+    if blanket is None:
+        # 连续 ≥3 个编号本身不是罪证：逐条指明出处的长句也会这样。
+        # 真正可疑的是"编号堆成串、句子却没剩多少内容"，那才是"我全看了"。
+        for s in sentences:
+            if RUN_RE.search(s) and len(CITE_RE.sub("", s).strip()) < 25:
+                blanket = "单句连挂 3 个以上引用编号且几乎没内容（笼统引用），指向性存疑"
+                break
 
     return CiteReport(
         cleaned=cleaned,

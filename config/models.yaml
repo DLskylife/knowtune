@@ -1,9 +1,5 @@
 # 端点注册表。只记录与 default.yaml 不同的条目。
 #
-# 出厂是空注册表：不预置任何云端端点，也不写本机模型路径。
-# 端点在后台「模型服务」页添加（自定义 OpenAI 地址，或扫描本地 .gguf）。
-# 该文件会被程序回写；本机真实配置请自己保管，不要提交含绝对路径的版本。
-#
 # providers:
 #   <名字>:                     小写字母数字，2-24 字符
 #     kind: local | openai      local 表示模型带 .gguf、本机能起
@@ -22,4 +18,8 @@
 #   generate:  local::qwen2.5-3b -- 生成答案用
 
 deleted: []
-providers: {}
+providers:
+  siliconflow:
+    base_url: https://api.siliconflow.cn/v1
+    model: deepseek-ai/DeepSeek-V4.1-Flash
+    kind: openai

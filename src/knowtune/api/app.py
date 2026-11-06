@@ -498,7 +498,21 @@ class AppState:
         # 不给缓存失效的话界面还会显示上一次的阈值，看起来像"标定没生效"。
         path = calibration_path(self.cfg, kb_id)
         stamp = f"{path.stat().st_mtime_ns}" if path.exists() else "-"
-        signature = stamp + json.dumps(overrides, sort_keys=True, ensure_ascii=False)
+        # 签名里还要带上全局后端清单。clone 是从 self.cfg **深拷贝**来的，
+        # 而这份缓存只按 overrides + 标定文件判新旧：刚在「新增后端」里配好
+        # 一个端点，overrides 一个字没变，缓存就永远命中，状态栏仍旧报
+        # known=[]、一颗红点——用户以为没保存上，反复重填（2026-11-06 实测）。
+        gen = json.dumps(
+            {
+                "provider": self.cfg.generation.provider,
+                "backends": {
+                    n: [p.base_url, p.model, p.kind]
+                    for n, p in self.cfg.generation.providers.items()
+                },
+            },
+            sort_keys=True, ensure_ascii=False,
+        )
+        signature = stamp + gen + json.dumps(overrides, sort_keys=True, ensure_ascii=False)
         with self._kbcfg_lock:
             hit = self._kbcfg.get(int(kb_id))
             if hit and hit[0] == signature:
