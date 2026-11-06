@@ -22,7 +22,7 @@
 
 /* 构建号：和 index.html 里那份必须一致，不一致说明浏览器拿的是旧 JS，
    页面加载完会强制换一次（见 index.html 里的自检脚本）。 */
-window.SITE_BUILD = "1.7.12";
+window.SITE_BUILD = "1.7.13";
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
@@ -614,12 +614,32 @@ function bubble(role) {
   return el;
 }
 
-/* 行内向：先整体转义（任何模型输出都不可能注入标签），再认三种记号。
-   [1] 变成可点的小牌，并用 bdi 语义（display:inline-flex + isolate）隔离方向。 */
+/* 行向内：先整体转义（任何模型输出都不可能注入标签），再认三种记号。
+   [1] 变成可点的小牌，并用 bdi 语义（display:inline-flex + isolate）隔离方向。
+
+   1.7.13：连着的三条以上【连续】编号（[1][2][3][4][5]）合成一枚区间牌「1–5」。
+   一句话结尾挂五枚小方块，读者第一眼看到的是"五个按钮"而不是"这段有五条依据"；
+   合成一枚之后既安静又能点——点它高亮这五条对应的全部来源行（见 data-ns）。
+   编号不连续（[1][3][7]）时不合：那说明依据分散，硬写成一个区间是撒谎。 */
+const CITE_RUN = /(?:\[\d{1,3}\][ \t]*){3,}/g;
+
+function citeChip(ns) {
+  const label = `${ns[0]}–${ns[ns.length - 1]}`;
+  return `<button type="button" class="cite range" data-n="${ns[0]}" `
+    + `data-ns="${ns.join(",")}" title="${esc(t.sources)} ${label}">${label}</button>`;
+}
+
 function inline(s) {
   return esc(s)
     .replace(/`([^`]+)`/g, "<code>$1</code>")
     .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
+    .replace(CITE_RUN, (run) => {
+      const ns = [...run.matchAll(/\[(\d+)\]/g)].map((m) => parseInt(m[1], 10));
+      for (let i = 1; i < ns.length; i++) {
+        if (ns[i] !== ns[i - 1] + 1) return run;   // 不连续：交回下面逐枚渲染
+      }
+      return citeChip(ns);
+    })
     .replace(/\[(\d+)\]/g, (m, n) =>
       `<button type="button" class="cite" data-n="${n}" title="${esc(t.sources)} ${n}">${n}</button>`);
 }
@@ -686,6 +706,48 @@ function bindCites(root) {
   });
 }
 
+/* 「具体操作步骤如下：将当归、生姜……」——模型习惯把引导句和它带的内容挤在一段里，
+   于是整段读起来像一口气说不完的长句，读者找不到"这一段在讲哪一步"。
+   这里把引导句切成独立的一行并加粗（CSS：.md .lead），内容另起一段。
+
+   只在两种位置切：段首，或前一句已经收尾（。！？；）。句末和引导句之间常夹着
+   上一句的引用牌（「……的情况。[4] 具体操作步骤如下：」），所以两句之间允许跨过
+   若干 [n]。
+   下面这些情形一律不切——切了反而更乱：
+     - 引导句太长（>26 字）或中途带逗号顿号：那本来就是个句子，不是标题；
+     - 冒号后面没内容（模型还在出字 / 就是句末）；
+     - 「问：」「答：」这类一字引导：它们属于对话录，独立成行会像换了个说话人。 */
+const LEAD_SPLIT = /(^|[。！？；!?;]|\.(?!\d))(?:[ \t]*\[\d+\])*[ \t]*([^。！？；，、,;!?【】（）()]{3,48})[：:](?=[ \t]*[^\s])/g;
+
+/* 整行就是一句引导（「注意事项：」下面直接接列表）。这种行没有"后面的内容"，
+   靠不了 LEAD_SPLIT（它要求冒号后还有字），单独认一次。 */
+const LEAD_LINE = /^\s*([^。！？；，、,;!?【】（）()]{3,48})[：:]\s*$/;
+
+/* 汉字引导句 26 字封顶（再长就是一句话）；维吾尔语/英文按字符算，词长得多。 */
+function leadTooLong(s) {
+  const cjk = (s.match(/[\u3400-\u9fff]/g) || []).length;
+  return Boolean(cjk) && Array.from(s).length > 26;
+}
+
+function splitLeads(line) {
+  const parts = [];
+  let last = 0;
+  let m;
+  LEAD_SPLIT.lastIndex = 0;
+  while ((m = LEAD_SPLIT.exec(line))) {
+    // m[0] 以冒号结尾，往前推 引导句长度 + 冒号 就是引导句起点；
+    // 它前面的句末标点和引用牌都算上一段。
+    if (leadTooLong(m[2])) continue;
+    const start = m.index + m[0].length - m[2].length - 1;
+    if (start > last) parts.push({ lead: false, s: line.slice(last, start) });
+    parts.push({ lead: true, s: line.slice(start, m.index + m[0].length).trimEnd() });
+    last = m.index + m[0].length;
+  }
+  if (!parts.length) return null;
+  if (last < line.length) parts.push({ lead: false, s: line.slice(last) });
+  return parts;
+}
+
 /* 块级轻量 Markdown：只认编号列表、无序列表、#### 小标题、空行分段。
    为什么非做不可：答案是维语，行首的 "1." 在 RTL 段落里会被双向算法摆到
    句末，读起来像"序号写在句子后面"。解析成 <ol> 后序号由浏览器按书写方向
@@ -743,6 +805,27 @@ function renderRich(text) {
     }
 
     flushList();
+    const onlyLead = LEAD_LINE.exec(line);
+    if (onlyLead && !leadTooLong(onlyLead[1])) {
+      flushPara();
+      out.push(`<p class="lead">${inline(onlyLead[1])}：</p>`);
+      continue;
+    }
+    // 引导句独立成行：命中就把它自己发出去，剩下的内容仍然回到 para，
+    // 让紧随其后的行照常接在这段后面（不会被拆成一堆碎段）。
+    const leads = splitLeads(line);
+    if (leads) {
+      for (const p of leads) {
+        if (p.lead) {
+          flushPara();
+          out.push(`<p class="lead">${inline(p.s)}</p>`);
+        } else if (p.s.trim()) {
+          flushPara();
+          para.push(p.s);
+        }
+      }
+      continue;
+    }
     para.push(line);
   }
   flushPara(); flushList();
@@ -1443,19 +1526,23 @@ document.addEventListener("click", (e) => {
     const det = bot && bot.querySelector(".srcs");
     if (!det) return;
     det.open = true;
-    const want = String(btn.dataset.n);
-    let item = null;
+    // 区间牌（1–5）带 data-ns：它代表不止一条依据，五条来源行都得亮起来。
+    // 单牌只有 data-n，走同一条路（want 里就一个数）。
+    const want = String(btn.dataset.ns || btn.dataset.n || "").split(",")
+      .map((x) => x.trim()).filter(Boolean);
+    const hit = [];
     det.querySelectorAll(".src-item").forEach((it) => {
-      if (item) return;
       const ns = (it.dataset.ns || it.dataset.n || "").split(",").map((x) => x.trim());
-      if (ns.includes(want)) item = it;
+      if (ns.some((n) => want.includes(n))) hit.push(it);
     });
-    if (!item) return;
-    item.scrollIntoView({ block: "nearest", behavior: "smooth" });
-    item.classList.remove("flash");
-    void item.offsetWidth;          // 强制回流，同一元素连点也能重播动画
-    item.classList.add("flash");
-    setTimeout(() => item.classList.remove("flash"), 1600);
+    if (!hit.length) return;
+    hit[0].scrollIntoView({ block: "nearest", behavior: "smooth" });
+    hit.forEach((item) => {
+      item.classList.remove("flash");
+      void item.offsetWidth;        // 强制回流，同一元素连点也能重播动画
+      item.classList.add("flash");
+    });
+    setTimeout(() => hit.forEach((item) => item.classList.remove("flash")), 1600);
     return;
   }
 

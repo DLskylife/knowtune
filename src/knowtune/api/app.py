@@ -3532,7 +3532,7 @@ def ask(req: AskRequest) -> Response:
         gen_ms = int((time.perf_counter() - gen_started) * 1000)
         timings["gen_ms"] = gen_ms
 
-        answer = "".join(acc)
+        answer = cite_mod.normalize_cites("".join(acc))
         if error and not answer:
             yield _sse("error", {"message": error, "trace_id": trace_id})
             _log(conn, trace_id, req, result, timings, "error", 0, 0, 0.0, len(history), provider=gen_provider)

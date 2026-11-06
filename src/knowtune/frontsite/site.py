@@ -932,6 +932,8 @@ def build_site(spec, state: Any) -> FastAPI:
             timings["gen_ms"] = int((time.perf_counter() - gen_started) * 1000)
 
             answer = tidy_answer("".join(acc))
+            # [n1] → [1]：写坏的引用记号先还原，页面上的小牌才点得亮。
+            answer = cite_mod.normalize_cites(answer)
             if error and not answer:
                 yield _sse("error", {"message": error, "trace_id": trace_id})
                 return

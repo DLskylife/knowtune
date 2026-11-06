@@ -12,6 +12,18 @@ import re
 from dataclasses import dataclass, field
 
 CITE_RE = re.compile(r"\[(\d{1,2})\]")
+# 模型偶尔把手写模板里的占位符一起抄出来：[n1] / [1n] / [N2]。这不是"编造编号"，
+# 是照抄了提示词里的 n 字面量。不还原的后果比难看更严重：前端认不出它、覆盖率
+# 算成 0、来源面板一条都不亮——整篇答案看起来像凭空写的（2026-11-06 实测一次
+# 腹中虚冷问答，574 字里 6 处全是 [n1]，coverage 0.0）。
+_CITE_TYPO_RE = re.compile(r"\[[nN](\d{1,2})\]|\[(\d{1,2})[nN]\]")
+
+
+def normalize_cites(text: str) -> str:
+    """把 [n1] / [1n] 这类写坏的引用还原成 [1]。只改方括号里的记号，不动正文。"""
+    return _CITE_TYPO_RE.sub(lambda m: f"[{m.group(1) or m.group(2)}]", text or "")
+
+
 SENT_SPLIT = re.compile(r"(?<=[。！？!?\n])")
 
 # 写在句号**之后**的引用标记。中文写作里「……适应症。[1]」才是最自然的写法，
@@ -117,6 +129,9 @@ def verbatim_ratio(answer: str, sources: list[str]) -> float:
 
 
 def verify(answer: str, n_context: int) -> CiteReport:
+    # 先还原写坏的记号（[n1] → [1]），否则下面所有统计都把它当成"没有引用"，
+    # 越界编号也永远查不出来。
+    answer = normalize_cites(answer)
     ids = [int(m.group(1)) for m in CITE_RE.finditer(answer)]
     invalid = sorted({i for i in ids if i < 1 or i > n_context})
 

@@ -445,10 +445,22 @@ body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
 /* 切到中文草稿时的"另一套排版"：换中文字体 */
 .answer.alt { font-family: var(--zh); line-height: 1.78; }
 
-.md p { margin: 0 0 .92em; }
+/* 1.7.13 排版：答案从"一大片等重的字"变成有层次的段落。
+   段落之间留一口气，引导句（「……如下：」）单独一行加粗当小标题用，
+   列表、小标题各有自己的起点——读者扫一眼就能分出"结论 / 步骤 / 提醒"。 */
+.md p { margin: 0 0 1.02em; }
 .md > :last-child { margin-bottom: 0; }
-.md ol, .md ul { margin: .1em 0 .8em; padding-inline-start: 1.55em; }
-.md li { margin: .2em 0; padding-inline-start: .18em; }
+/* 引导句：贴着它带的内容，和上一段之间留大一点——它是个路标，不是正文。 */
+.md p.lead {
+  margin: 1.15em 0 .42em;
+  font-weight: 700; color: var(--ink);
+  line-height: 1.65;
+}
+.md > p.lead:first-child { margin-top: 0; }
+.md ol, .md ul { margin: .1em 0 .95em; padding-inline-start: 1.55em; }
+.md li { margin: .26em 0; padding-inline-start: .18em; }
+/* 列表项里常带 [n]，行距给足，牌不会顶到上一行 */
+.md li { line-height: 1.8; }
 .md li::marker { color: var(--brand); font-weight: 700; }
 .md strong { font-weight: 700; color: var(--ink); }
 .md code {
@@ -456,7 +468,15 @@ body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
   background: var(--surface-2); border: 1px solid var(--line-soft);
   border-radius: 5px; padding: 1px 5px;
 }
-.md h4 { margin: .2em 0 .5em; font-size: 16.5px; }
+/* 小标题：左侧一道短竖条，和正文里加粗的引导句区分开（那个没有条）。 */
+.md h4 {
+  display: flex; align-items: center; gap: 8px;
+  margin: 1.25em 0 .5em; font-size: 16.5px; line-height: 1.6;
+}
+.md h4::before {
+  content: ""; flex: none; width: 3px; height: .92em;
+  border-radius: 2px; background: var(--brand);
+}
 
 /* 引用编号：必须隔离，否则 RTL 段落里 [1] 会被双向算法挪到数字另一侧。
    做成可点的小牌——"这结论从哪来"是这种问答界面唯一值得点的地方。 */
@@ -471,10 +491,14 @@ body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
   background: var(--brand-soft); color: var(--brand);
   font-family: var(--zh); font-size: 11.5px; font-weight: 700; line-height: 1;
   direction: ltr; unicode-bidi: isolate; vertical-align: -.08em;
-  cursor: pointer; transition: background .14s, color .14s;
+  cursor: pointer; transition: background .14s, color .14s, transform .14s;
 }
-.cite:hover { background: var(--brand); color: #fff; }
+.cite:hover { background: var(--brand); color: #fff; transform: translateY(-1px); }
 .cite:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+/* 区间牌「1–5」：连续三条以上的引用合成一枚。宽度交给内容，数字之间不加
+   letter-spacing（那会让它看着像被拆成两个数）；hover 抬起来一点点，
+   让人知道它和单牌一样能点。 */
+.cite.range { min-width: auto; padding: 0 7px; letter-spacing: 0; }
 /* 引用牌 + 它注释的那个字绑成不可断的一小段（见 app.js 里的 bindCites）。
    少了这条，牌会在行尾被单独挤到下一行行首，看起来像个新序号。 */
 .nb { white-space: nowrap; }
