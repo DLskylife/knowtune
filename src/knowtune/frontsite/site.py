@@ -239,13 +239,17 @@ def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def provider_for(role: str, *, spec: Any, kb_cfg: Any, cfg: Any) -> str:
+def provider_for(role: str, *, spec: Any, kb_cfg: Any, cfg: Any,
+                 section_roles: dict[str, str] | None = None) -> str:
     """这个站点在这个知识库上，某个角色实际会用哪个后端。
 
     问答请求和启动自检**必须走同一条链**。自检以前直接拿 `spec.provider`
     （多数站点是空串）去发请求，于是掉到全局默认；全局默认可以是空的，
     结果就是：站点答得好好的，卡片上却写着"自检没跑通：未知 provider"。
     那不是模型不会维吾尔语，是我们拿一个不存在的后端去问了它。
+
+    `section_roles` 是板块级覆盖（med/classic 各自可钉后端），比站点 roles
+    更具体，解析时排最前。
     """
     return role_resolve(
         role,
@@ -254,6 +258,7 @@ def provider_for(role: str, *, spec: Any, kb_cfg: Any, cfg: Any) -> str:
         instance_provider=getattr(spec, "provider", "") or "",
         default_provider=getattr(kb_cfg.generation, "provider", "") or "",
         known=getattr(cfg.generation, "providers", {}) or {},
+        section_roles=section_roles or {},
     )
 
 
@@ -354,14 +359,16 @@ def build_site(spec, state: Any) -> FastAPI:
         resp.headers["Cache-Control"] = "no-store"
         return resp
 
-    def _provider(role: str, kb_cfg: Any, s=None) -> str:
-        """按角色挑后端：站点 roles → 系统 roles → 站点 provider → 当前默认。
+    def _provider(role: str, kb_cfg: Any, s=None, section_roles=None) -> str:
+        """按角色挑后端：板块 roles → 站点 roles → 系统 roles → 站点 provider → 当前默认。
 
         每一级都可能指向一个已经改名或删掉的后端，roles.resolve 会逐层退让，
         最坏情况是退化成"不分工"，绝不会让站点 500。
         `s` 是本次请求读到的配置：换了翻译模型不该等重启才生效。
+        `section_roles` 是当前板块的覆盖（med/classic 各自可钉后端）。
         """
-        return provider_for(role, spec=s or _cur(), kb_cfg=kb_cfg, cfg=state.cfg)
+        return provider_for(role, spec=s or _cur(), kb_cfg=kb_cfg, cfg=state.cfg,
+                            section_roles=section_roles or {})
 
     def _classic_kb_id(conn, s) -> int:
         """古籍板块真正绑的是哪个库。0 = 没独立库，退回按标题分。
@@ -581,6 +588,19 @@ def build_site(spec, state: Any) -> FastAPI:
                 default_provider=state.effective_cfg(s.kb_id).generation.provider,
                 known=getattr(state.cfg.generation, "providers", {}) or {},
             ),
+            # 每个检索型板块（med/classic）各自解析出的实际后端。板块钉了覆盖
+            # 就反映在这里，前端切板块时能显示"这个板块实际用谁"。
+            "section_roles": {
+                key: role_plan(
+                    instance_roles=getattr(s, "roles", {}) or {},
+                    global_roles=getattr(state.cfg.generation, "roles", {}) or {},
+                    instance_provider=s.provider or "",
+                    default_provider=state.effective_cfg(s.kb_id).generation.provider,
+                    known=getattr(state.cfg.generation, "providers", {}) or {},
+                    section_roles=s.section(key)["roles"],
+                )
+                for key in ("med", "classic")
+            },
             **main_copy,
         }
 
@@ -600,10 +620,13 @@ def build_site(spec, state: Any) -> FastAPI:
         scope_kb_id = _scope_kb(conn0, s, scope)
         lang, kb_lang = _langs(s)
         kb_cfg = state.effective_cfg(scope_kb_id)
+        # 板块级角色覆盖：med/classic 各自可钉一个与站点不同的后端。scope 为
+        # 空（整库检索）时不套板块覆盖，回到站点级。
+        section_roles = s.section(scope)["roles"] if scope in ("med", "classic") else {}
         # 同一个后端干所有活儿是默认值，不是原则：翻译和输出可以用不同的模型。
         # 这里各取一次，/api/info 里能看到实际用了谁。
-        gen_provider = _provider("generate", kb_cfg, s)
-        tr_provider = _provider("translate", kb_cfg, s)
+        gen_provider = _provider("generate", kb_cfg, s, section_roles)
+        tr_provider = _provider("translate", kb_cfg, s, section_roles)
         q_lang = lang_mod.detect(req.question)
         # 答案语言跟**界面**语言，不跟提问语言。
         # 以前是"中文问就中文答"，理由是省一次翻译；代价是界面明明高亮着
@@ -731,6 +754,8 @@ def build_site(spec, state: Any) -> FastAPI:
                 # 提示词按"这个角色实际会用到的后端"取：站点的 generate 角色可能
                 # 绑在云端、系统默认却是本地 7B，两套提示词不能混用。
                 provider=gen_provider,
+                # 板块维度：古籍板块和维医板块即使共用后端，也可各自一套提示词。
+                scope=scope,
             )
             guide = evidence.guidance(grade, lang=(kb_lang if two_stage else answer_lang))
 

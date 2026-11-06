@@ -2334,6 +2334,12 @@ input[type=number].num::-webkit-outer-spin-button { -webkit-appearance: none; ma
 .fld-row .mini { flex: none; }
 .fld-note { font-style: normal; font-size: 11px; color: var(--text-3); flex: none; }
 
+/* 板块级模型/提示词子行：挂在板块行下方，翻译+推理两个下拉 + 提示词按钮。 */
+.sec-model { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.sec-model .hint { flex: none; font-size: 11px; color: var(--text-3); }
+.sec-model .fld-row { flex: 1 1 auto; }
+.sec-model .mini { flex: none; }
+
 /* 翻译测试输出：占满整行（.sbk-fields 是两列网格），译文 dir=auto 自适应 RTL */
 .tr-out { grid-column: 1 / -1; padding: 8px 10px; border: 1px dashed var(--line);
   border-radius: 8px; background: var(--surface-2); font-size: 12.5px; }

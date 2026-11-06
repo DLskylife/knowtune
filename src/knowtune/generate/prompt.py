@@ -55,7 +55,7 @@ class ContextBundle:
 
 
 def load_system_prompt(version: str, answer_lang: str | None = None,
-                       provider: str = "") -> str:
+                       provider: str = "", scope: str = "") -> str:
     """取系统提示。回答语言不是中文时，优先用对应的语言版本（qa_ug.md）。
 
     语言指令不写进提示文件里、而是在后面追加，是因为提示文件是版本化的资产，
@@ -63,9 +63,10 @@ def load_system_prompt(version: str, answer_lang: str | None = None,
     语言就得动提示版本，回滚时也会一起被卷进去。
 
     `provider` 决定要不要取该后端专属的覆盖（后台「模型 → 提示词」里配的）。
+    `scope` 决定要不要取板块专属的覆盖（med/classic 各自一套提示词）。
     传空串就是"角色级/内置"这一路，老调用点的行为不变。
     """
-    return promptcfg.system_prompt(version, answer_lang, provider)
+    return promptcfg.system_prompt(version, answer_lang, provider, scope)
 
 
 DIRECT_SYSTEM = (
@@ -116,10 +117,11 @@ def build_context(
     evidence: str | None = None,
     provider: str = "",
     min_context_chars: int = 200,
+    scope: str = "",
 ) -> ContextBundle:
-    # provider 只影响"取哪一份 system 提示"，后面两段追加（语言指令、证据例外）
-    # 仍由运行期决定——它们是行为约束，不该被一段可编辑的文本覆盖掉。
-    system_prompt = load_system_prompt(prompt_version, answer_lang, provider)
+    # provider / scope 只影响"取哪一份 system 提示"，后面两段追加（语言指令、
+    # 证据例外）仍由运行期决定——它们是行为约束，不该被一段可编辑的文本覆盖掉。
+    system_prompt = load_system_prompt(prompt_version, answer_lang, provider, scope)
     if answer_lang:
         system_prompt += answer_instruction(answer_lang)
     # 证据不足时在**系统提示**里补一句"别硬往资料上靠"。老版本是点名作废

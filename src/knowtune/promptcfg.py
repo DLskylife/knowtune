@@ -207,7 +207,7 @@ def _write(data: dict[str, Any]) -> None:
         "# 只记录与内置默认不同的字段：删掉某一行 = 该项回到内置默认。\n"
         "# 内置默认在 config/prompts/*.md（generate）和 knowtune/promptcfg.py（translate），\n"
         "# 本文件永远不覆盖它们，因此「恢复默认」是安全的。\n"
-        "# 解析顺序：by_provider.<后端> → default → 内置 → 兜底。\n\n"
+        "# 解析顺序：by_scope.<板块> → by_provider.<后端> → default → 内置 → 兜底。\n\n"
     )
     OVERLAY_PATH.parent.mkdir(parents=True, exist_ok=True)
     tmp = OVERLAY_PATH.with_suffix(".yaml.tmp")
@@ -307,27 +307,37 @@ def builtin_fields(role: str, *, version: str = "qa_v1",
 
 
 def effective_fields(role: str, provider: str = "", *, version: str = "qa_v1",
-                     answer_lang: str | None = None) -> dict[str, dict[str, Any]]:
-    """每个字段最终用哪份、从哪来。UI 要能一眼看出「这行是改过的还是内置的」。"""
+                     answer_lang: str | None = None,
+                     scope: str = "") -> dict[str, dict[str, Any]]:
+    """每个字段最终用哪份、从哪来。UI 要能一眼看出「这行是改过的还是内置的」。
+
+    `scope` 是板块维度（med/classic）：古籍板块和维医板块即使共用同一个后端，
+    也可以各自配一套不同的 generate 提示词（古籍要守原文、维医要接临床）。"""
     builtin = builtin_fields(role, version=version, answer_lang=answer_lang)
     data = read()
     node = (data.get("prompts") or {}).get(role) if isinstance(data.get("prompts"), dict) else None
     node = node if isinstance(node, dict) else {}
     by = node.get("by_provider") if isinstance(node.get("by_provider"), dict) else {}
+    by_scope = node.get("by_scope") if isinstance(node.get("by_scope"), dict) else {}
     if role not in PER_PROVIDER_ROLES:
         # 文案与模型无关：即使历史上有人从某张模型卡片保存过，也不该让
         # "换个后端文案就变"发生。这一层直接不读。
         by = {}
+        by_scope = {}
     prov_map = by.get(provider) if isinstance(by.get(provider), dict) else {}
+    scope_map = by_scope.get(scope) if isinstance(by_scope.get(scope), dict) else {}
     flat = node.get("default") if isinstance(node.get("default"), dict) else {}
 
     out: dict[str, dict[str, Any]] = {}
     for field in ROLE_FIELDS.get(role, ()):
         b = builtin.get(field, "")
         pv = prov_map.get(field)
+        sv = scope_map.get(field)
         dl = flat.get(field)
         if isinstance(pv, str) and pv.strip():
             text, source = pv, "provider"
+        elif isinstance(sv, str) and sv.strip():
+            text, source = sv, "scope"
         elif isinstance(dl, str) and dl.strip():
             text, source = dl, "role"
         else:
@@ -338,22 +348,23 @@ def effective_fields(role: str, provider: str = "", *, version: str = "qa_v1",
             "overridden": source != "builtin",
             "builtin": b,
             "provider_value": pv if isinstance(pv, str) else "",
+            "scope_value": sv if isinstance(sv, str) else "",
             "role_value": dl if isinstance(dl, str) else "",
         }
     return out
 
 
 def system_prompt(version: str = "qa_v1", answer_lang: str | None = None,
-                  provider: str = "") -> str:
+                  provider: str = "", scope: str = "") -> str:
     """generate 的 system 提示（不含语言后缀与证据覆盖，那两段由 prompt.py 追加）。"""
     got = effective_fields("generate", provider, version=version,
-                           answer_lang=answer_lang).get("system")
+                           answer_lang=answer_lang, scope=scope).get("system")
     return (got or {}).get("text") or SYSTEM_PROMPT_FALLBACK
 
 
-def translate_messages(provider: str = "") -> tuple[str, str]:
+def translate_messages(provider: str = "", scope: str = "") -> tuple[str, str]:
     """translate 的 (system, user 模板)。user 模板里的占位符由 lang.py 填。"""
-    got = effective_fields("translate", provider)
+    got = effective_fields("translate", provider, scope=scope)
     return (got["system"]["text"], got["user"]["text"])
 
 
@@ -485,8 +496,12 @@ def _known_providers() -> set[str]:
 
 
 def save(role: str, provider: str, fields: Mapping[str, str], *,
-         version: str = "qa_v1", answer_lang: str | None = None) -> dict[str, Any]:
+         version: str = "qa_v1", answer_lang: str | None = None,
+         scope: str = "") -> dict[str, Any]:
     """保存覆盖。字段为空字符串 = 删掉该字段的覆盖，回到上一层。
+
+    `scope` 是板块维度（med/classic/''），与 provider 正交：scope 优先于 provider，
+    因为板块是更上层的业务意图（古籍守原文、维医接临床），provider 只是模型调参。
 
     故意不提供「只改一个字段」的接口：UI 一次提交整组字段，服务端整体替换这一层，
     不会出现"改了 system 但 user 还是三天前的"这种半新半旧状态。
@@ -494,12 +509,16 @@ def save(role: str, provider: str, fields: Mapping[str, str], *,
     if role not in ROLE_FIELDS:
         raise ValueError(f"未知角色：{role}")
     provider = (provider or "").strip()
+    scope = (scope or "").strip().lower()
     if role not in PER_PROVIDER_ROLES:
         # 文案只有"角色默认"这一层。不在这里清掉的话，从模型卡片进来保存
         # 会写成 by_provider.<name>，而站点永远按默认层读——保存成功、页面不变。
         provider = ""
+        scope = ""
     if provider and not re.match(r"^[a-z0-9][a-z0-9_-]{0,23}$", provider):
         raise ValueError("后端名不合法")
+    if scope and not re.match(r"^[a-z][a-z0-9_-]{0,23}$", scope):
+        raise ValueError("板块名不合法")
 
     clean: dict[str, str] = {}
     for key, val in (fields or {}).items():
@@ -529,7 +548,18 @@ def save(role: str, provider: str, fields: Mapping[str, str], *,
     if not isinstance(node, dict):
         node = prompts[role] = {}
 
-    if provider:
+    if scope:
+        # 板块覆盖：prompts.<role>.by_scope.<scope> = clean
+        by_scope = node.get("by_scope")
+        if not isinstance(by_scope, dict):
+            by_scope = node["by_scope"] = {}
+        if clean:
+            by_scope[scope] = clean
+        else:
+            by_scope.pop(scope, None)
+        if not by_scope:
+            node.pop("by_scope", None)
+    elif provider:
         by = node.get("by_provider")
         if not isinstance(by, dict):
             by = node["by_provider"] = {}
@@ -550,7 +580,8 @@ def save(role: str, provider: str, fields: Mapping[str, str], *,
     if not prompts:
         data["prompts"] = {}
 
-    snap = _snapshot(f"{role}-{provider or 'default'}")
+    tag = scope or provider or "default"
+    snap = _snapshot(f"{role}-{tag}")
     _write(data)
     return {
         "ok": True,
@@ -560,14 +591,15 @@ def save(role: str, provider: str, fields: Mapping[str, str], *,
         "warnings": [i for i in issues if i["level"] == "warn"],
         "snapshot": snap,
         "path": str(OVERLAY_PATH),
-        "fields": effective_fields(role, provider, version=version, answer_lang=answer_lang),
+        "fields": effective_fields(role, provider, version=version,
+                                   answer_lang=answer_lang, scope=scope),
     }
 
 
 def reset(role: str, provider: str = "", *, version: str = "qa_v1",
-          answer_lang: str | None = None) -> dict[str, Any]:
+          answer_lang: str | None = None, scope: str = "") -> dict[str, Any]:
     """恢复默认 = 删覆盖项。内置文件一个字都不动，所以这一步永远安全。"""
-    return save(role, provider, {}, version=version, answer_lang=answer_lang)
+    return save(role, provider, {}, version=version, answer_lang=answer_lang, scope=scope)
 
 
 def history() -> list[dict[str, Any]]:
@@ -612,6 +644,7 @@ def overview(*, version: str = "qa_v1", answer_lang: str | None = None,
         node = (data.get("prompts") or {}).get(role)
         node = node if isinstance(node, dict) else {}
         by = node.get("by_provider") if isinstance(node.get("by_provider"), dict) else {}
+        by_scope = node.get("by_scope") if isinstance(node.get("by_scope"), dict) else {}
         roles.append({
             "role": role,
             "label": ROLE_LABELS.get(role, role),
@@ -629,6 +662,7 @@ def overview(*, version: str = "qa_v1", answer_lang: str | None = None,
             ],
             "has_default_override": bool(node.get("default")),
             "overridden_providers": sorted(by.keys()),
+            "overridden_scopes": sorted(by_scope.keys()),
             "per_provider": role in PER_PROVIDER_ROLES,
         })
 

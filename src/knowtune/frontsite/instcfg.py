@@ -77,6 +77,12 @@ def coerce_sections(raw: Any) -> dict[str, dict[str, Any]]:
             out[key]["enabled"] = bool(item["enabled"])
         # 名字是界面文字，长度按"一行放得下"卡住；两侧空白一律吃掉。
         out[key]["name"] = str(item.get("name") or "").strip()[:24]
+        # 板块级角色覆盖（2026-11-06）：med/classic 这两个检索型板块可以各自
+        # 钉一个与站点不同的 translate/generate 后端。留空 = 跟随站点级 roles。
+        # 形态和站点 roles 完全一致，直接复用 coerce_roles（它只认已知角色、
+        # 校验后端名）。
+        if item.get("roles") is not None:
+            out[key]["roles"] = coerce_roles(item.get("roles"))
     return out
 
 
@@ -135,6 +141,7 @@ class InstanceSpec:
         return {
             "enabled": bool(got.get("enabled", True)),
             "name": str(got.get("name") or "").strip(),
+            "roles": dict(got.get("roles") or {}),
         }
 
     def host(self) -> str:

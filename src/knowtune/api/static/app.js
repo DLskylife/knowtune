@@ -1,6 +1,6 @@
 /* 构建号：与 index.html 里那份一致，不一致说明浏览器拿到的是旧 JS，
    页面加载完会强制换一次（见 index.html 的自检脚本）。 */
-window.ADMIN_BUILD = "0.9.30";
+window.ADMIN_BUILD = "0.9.54";
 
 const $ = (id) => document.getElementById(id);
 
@@ -4669,6 +4669,8 @@ async function deleteKb(kb) {
 const prState = {
   provider: "",   // 空串 = 角色默认：所有没单独配过的后端共用这一份
   model: "",      // 从哪张卡片进来的
+  scope: "",      // 板块维度（med/classic），空串 = 不按板块
+  scopeLabel: "", // 板块显示名，仅用于抽屉标题
   roles: [],
   drafts: {},     // role -> { field: 草稿文本 }
   meta: {},       // role -> /api/prompts/<role> 的返回
@@ -4679,7 +4681,7 @@ const prState = {
 
 let prBound = false;
 
-async function openPromptDrawer(name) {
+async function openPromptDrawer(name, scope) {
   let ov = null;
   try {
     ov = await api("/api/prompts");
@@ -4689,10 +4691,15 @@ async function openPromptDrawer(name) {
   }
   prState.model = name || "";
   prState.provider = name || "";
+  prState.scope = scope || "";
+  prState.scopeLabel = scope ? (scope === "med" ? "维医问答" : scope === "classic" ? "古籍问答" : scope) : "";
   prState.roles = ov.roles || [];
   prState.panel = "";
   prState.panelData = null;
-  $("prTitle").textContent = name ? "提示词 · " + name : "提示词";
+  const t = prState.scopeLabel
+    ? "提示词 · " + prState.scopeLabel + (name ? "（" + name + "）" : "")
+    : (name ? "提示词 · " + name : "提示词");
+  $("prTitle").textContent = t;
   $("promptDrawer").hidden = false;
   $("scrim").hidden = false;
   prBindOnce();
@@ -4747,7 +4754,8 @@ function prBindOnce() {
 
 async function prLoad() {
   $("prBody").innerHTML = `<p class="hint">加载中…</p>`;
-  const q = "?provider=" + encodeURIComponent(prState.provider);
+  const q = "?provider=" + encodeURIComponent(prState.provider)
+    + "&scope=" + encodeURIComponent(prState.scope);
   const meta = {};
   const drafts = {};
   for (const r of prState.roles) {
@@ -4762,14 +4770,17 @@ async function prLoad() {
   prState.meta = meta;
   prState.drafts = drafts;
   prState.dirty = false;
-  $("prNote").textContent = prState.provider
-    ? "作用范围：" + prState.provider
-    : "作用范围：角色默认";
+  let scope = "";
+  if (prState.scope) scope = "作用范围：板块「" + prState.scopeLabel + "」";
+  else if (prState.provider) scope = "作用范围：" + prState.provider;
+  else scope = "作用范围：角色默认";
+  $("prNote").textContent = scope;
   $("prNote").className = "dirty-note";
   prRender();
 }
 
 function prSourceBadge(src) {
+  if (src === "scope") return `<span class="pr-src on">本板块已自定义</span>`;
   if (src === "provider") return `<span class="pr-src on">本后端已自定义</span>`;
   if (src === "role") return `<span class="pr-src on">角色默认已自定义</span>`;
   return `<span class="pr-src">内置默认</span>`;
@@ -4793,7 +4804,15 @@ function prUpdateCount(area) {
 
 function prRender() {
   const p = prState.provider;
-  const scope = p
+  const sc = prState.scope;
+  const scope = sc
+    ? `<div class="pr-scope">
+         <button class="mini on" data-scope="__scope__">板块「${esc(prState.scopeLabel)}」</button>
+         <button class="mini" data-scope="__default__">全站（不按板块）</button>
+       </div>
+       <p class="hint">只对「${esc(prState.scopeLabel)}」这个板块生效。
+         ${p ? `当前后端为 ${esc(p)}，这份板块提示词优先于它的后端级提示词。` : "不按后端区分。"}</p>`
+    : p
     ? `<div class="pr-scope">
          <button class="mini on" data-scope="__model__">仅 ${esc(p)}</button>
          <button class="mini" data-scope="__default__">所有未单独配置的后端</button>
@@ -4888,10 +4907,13 @@ function prRender() {
 }
 
 async function prSwitchScope(v) {
+  if (v === "__scope__") { prRender(); return; }  // 板块层：已在板块，仅重绘
   const next = v === "__default__" ? "" : prState.model;
-  if (next === prState.provider) { prRender(); return; }
+  if (next === prState.provider && !prState.scope) { prRender(); return; }
   if (prState.dirty && !confirm("当前这层有没保存的修改，切换作用范围会丢掉它们。继续？")) return;
   prState.provider = next;
+  prState.scope = "";
+  prState.scopeLabel = "";
   prState.panel = "";
   prState.panelData = null;
   await prLoad();
@@ -4926,6 +4948,7 @@ async function prSave() {
     for (const r of prState.roles) {
       const res = await jsonSend("PUT", "/api/prompts/" + r.role, {
         provider: prState.provider,
+        scope: prState.scope,
         fields: prState.drafts[r.role] || {},
       });
       if (!res || res.ok === false) {
@@ -4948,15 +4971,17 @@ async function prSave() {
 }
 
 async function prReset() {
-  const where = prState.provider ? "「" + prState.provider + "」这一层" : "角色默认这一层";
+  const where = prState.scope
+    ? "板块「" + prState.scopeLabel + "」这一层"
+    : prState.provider ? "「" + prState.provider + "」这一层" : "角色默认这一层";
   if (!confirm("删掉" + where + "的覆盖，回到内置默认？内置文件不会被改动。")) return;
   try {
     for (const r of prState.roles) {
-      // 文案角色没有"后端"这一层。在某个后端的标签页上点恢复默认，
+      // 文案角色没有"后端/板块"这一层。在某个后端或板块的标签页上点恢复默认，
       // 不该顺手把全站文案一起清掉。
-      if (prState.provider && r.per_provider === false) continue;
+      if ((prState.provider || prState.scope) && r.per_provider === false) continue;
       await jsonSend("POST", "/api/prompts/" + r.role + "/reset",
-        { provider: prState.provider });
+        { provider: prState.provider, scope: prState.scope });
     }
     toast("已恢复默认");
     await prLoad();
@@ -6382,7 +6407,8 @@ function siteGroups(i, meta, plan, defProv) {
    * 入口只会让人点错。名字也一样，维语站点想叫别的声音，得能改。
    */
   const sec = (key) => (i.sections && i.sections[key]) || {};
-  const secRow = (key, label, defName, extra, hint) => `<div class="form-row full">
+  const secRoles = (key) => (sec(key).roles || {});
+  const secRow = (key, label, defName, extra, hint, modelRow) => `<div class="form-row full">
       <label>${esc(label)}</label>
       <span class="fld-row">
         <label class="toggle" title="关掉之后这个入口在站点上真的消失（连地址一起）">
@@ -6396,18 +6422,40 @@ function siteGroups(i, meta, plan, defProv) {
         ${extra || ""}
       </span>
       <span class="hint">${esc(hint)}</span>
+      ${modelRow || ""}
     </div>`;
 
+  /* 检索型板块（med/classic）的模型 + 提示词子行。板块可以钉一个与站点不同的
+   * 后端，也可以单独配一套提示词——古籍守原文、维医接临床，同一后端两套话术。 */
+  const sectionModelRow = (key) => {
+    const r = secRoles(key);
+    return `<div class="sec-model">
+      <span class="hint">模型（留空跟随站点）</span>
+      <span class="fld-row">
+        <select data-f="sec_${key}_role_translate"
+          title="这个板块的翻译模型"
+          >${provSelect("translate", r.translate || "", d.providers, meta, defProv)}</select>
+        <select data-f="sec_${key}_role_generate"
+          title="这个板块的推理模型"
+          >${provSelect("generate", r.generate || "", d.providers, meta, defProv)}</select>
+      </span>
+      <button class="mini" type="button" data-open-prompt="${key}"
+        >提示词</button>
+    </div>`;
+  };
+
   return [
-    group("板块", "左侧三个入口：每个都能改名、能单独关掉；关掉的入口在站点上真的消失", [
+    group("板块", "三个入口各自独立：改名、开关、检索库、模型、提示词都能单独配", [
       secRow("med", "维医问答", "维医问答",
         `<select data-f="kb_id" title="维医问答检索哪个库">${kbOpts}</select>`,
-        "检索主知识库"),
+        "检索主知识库", sectionModelRow("med")),
       secRow("classic", "古籍问答", "古籍问答",
         `<select data-f="classic_kb_id" title="古籍问答检索哪个库">${classicOpts}</select>`,
-        "只在这个库里检索；选「不单独分库」则按主库文档标题含「古籍」来分"),
-      secRow("pv", "预问诊", "预问诊", "",
-        "不检索知识库，走预问诊那套引擎；模型、轮次、提示词在站点卡上的「预问诊参数」里改"),
+        "只在这个库里检索；选「不单独分库」则按主库文档标题含「古籍」来分",
+        sectionModelRow("classic")),
+      secRow("pv", "预问诊", "预问诊",
+        `<button class="mini" type="button" data-open-pvcfg>模型与提示词</button>`,
+        "不检索知识库，走预问诊那套引擎；模型、轮次、提示词点右上「模型与提示词」配置"),
     ].join("")),
 
     group("绑定", "占一个端口、一套语言", [
@@ -6506,6 +6554,24 @@ function bindTrTest() {
       if (sec) sec.scrollIntoView({ block: "start" });
       return;
     }
+    // 板块提示词入口：打开提示词抽屉并预置 scope 维度。provider 传该板块
+    // 当前选中的推理后端（去 ::model），让"板块 + 后端"两层同时生效。
+    const op = e.target.closest("[data-open-prompt]");
+    if (op) {
+      const key = op.dataset.openPrompt || "";
+      const gen = body.querySelector(`[data-f="sec_${key}_role_generate"]`);
+      const base = String(gen && gen.value ? gen.value.split("::")[0] : "");
+      $("modalCancel").click();
+      await openPromptDrawer(base, key);
+      return;
+    }
+    // 预问诊模型/提示词入口：收编进站点弹窗后，点它打开原来的预问诊参数面板。
+    const pv = e.target.closest("[data-open-pvcfg]");
+    if (pv) {
+      $("modalCancel").click();
+      await openPrevisitConfig();
+      return;
+    }
     const tr = e.target.closest("[data-trtest]");
     if (!tr) return;
     const sel = body.querySelector('[data-f="role_translate"]');
@@ -6554,9 +6620,21 @@ function readSiteBlock(block) {
     // 全开——用户刚关掉的入口就自己回来了，这比不保存更莫名其妙。
     if (f.startsWith("sec_")) {
       const m = /^sec_(med|classic|pv)_(enabled|name)$/.exec(f);
-      if (!m) return;
-      out.sections = out.sections || { med: {}, classic: {}, pv: {} };
-      out.sections[m[1]][m[2]] = el.type === "checkbox" ? el.checked : el.value.trim();
+      if (m) {
+        out.sections = out.sections || { med: {}, classic: {}, pv: {} };
+        out.sections[m[1]][m[2]] = el.type === "checkbox" ? el.checked : el.value.trim();
+        return;
+      }
+      // 板块级角色：sec_<key>_role_<role>。空值 = 跟随站点，不写进 roles。
+      const rm = /^sec_(med|classic)_role_(translate|generate)$/.exec(f);
+      if (rm) {
+        if (el.value) {
+          out.sections = out.sections || { med: {}, classic: {}, pv: {} };
+          out.sections[rm[1]].roles = out.sections[rm[1]].roles || {};
+          out.sections[rm[1]].roles[rm[2]] = el.value;
+        }
+        return;
+      }
       return;
     }
     if (el.type === "checkbox") { out[f] = el.checked; return; }

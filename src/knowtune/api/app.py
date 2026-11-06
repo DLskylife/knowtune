@@ -4009,8 +4009,21 @@ def get_model_roles() -> dict:
             default_provider=kb_default,
             known=providers,
         )
+        # 每个检索型板块各自解析出的实际后端（板块可钉一个与站点不同的后端）。
+        section_resolved = {
+            key: roles_mod.plan(
+                instance_roles=spec.roles or {},
+                global_roles=state.cfg.generation.roles or {},
+                instance_provider=spec.provider or "",
+                default_provider=kb_default,
+                known=providers,
+                section_roles=spec.section(key)["roles"],
+            )
+            for key in ("med", "classic")
+        }
         items.append({"name": spec.name, "roles": spec.roles or {},
-                      "kb_default": kb_default, "resolved": resolved})
+                      "kb_default": kb_default, "resolved": resolved,
+                      "section_resolved": section_resolved})
     return {
         "roles": list(roles_mod.ROLES),
         "labels": roles_mod.ROLE_LABELS,
@@ -4112,6 +4125,9 @@ def translate_test(req: TranslateTestIn) -> dict:
 class PromptSaveIn(BaseModel):
     # 空串 = 角色级（所有没单独配的后端都用它）；非空 = 只管这一个后端
     provider: str = ""
+    # 板块维度（med/classic）：古籍和维医即使共用后端也能各配一套提示词。
+    # 空串 = 不按板块；与 provider 正交，scope 优先于 provider。
+    scope: str = ""
     fields: dict[str, str] = Field(default_factory=dict)
 
 
@@ -4137,18 +4153,19 @@ def list_prompts(provider: str = "") -> dict:
 
 
 @app.get("/api/prompts/{role}")
-def get_prompt(role: str, provider: str = "") -> dict:
+def get_prompt(role: str, provider: str = "", scope: str = "") -> dict:
     """取某个角色在某个后端上的实际情况：每字段给出「生效文本 + 来源 + 内置原文」。
 
     内置原文必须一起给：用户改坏了要能一眼看出跟出厂差在哪，而不是靠记忆比对。
     """
     _prompt_role(role)
     fields = promptcfg.effective_fields(
-        role, provider, version=state.cfg.prompt_version,
+        role, provider, version=state.cfg.prompt_version, scope=scope,
     )
     return {
         "role": role,
         "provider": provider,
+        "scope": scope,
         "fields": fields,
         "path": str(promptcfg.OVERLAY_PATH),
         "history_count": len(promptcfg.history()),
@@ -4161,13 +4178,19 @@ def put_prompt(role: str, req: PromptSaveIn) -> dict:
     _prompt_role(role)
     try:
         result = promptcfg.save(role, req.provider, req.fields,
-                                version=state.cfg.prompt_version)
+                                version=state.cfg.prompt_version,
+                                scope=req.scope)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     if not result.get("ok"):
         # 体检报错不写盘：写到一半的提示词比不写更危险，它会立刻被问答链路读到
         return result
-    where = f"（后端 {req.provider}）" if req.provider else "（角色默认）"
+    if req.scope:
+        where = f"（板块 {req.scope}）"
+    elif req.provider:
+        where = f"（后端 {req.provider}）"
+    else:
+        where = "（角色默认）"
     logbus.note(
         f"提示词已{'更新' if result.get('saved') else '恢复默认'}"
         f"：{role}{where}",
@@ -4180,12 +4203,19 @@ def put_prompt(role: str, req: PromptSaveIn) -> dict:
 def reset_prompt(role: str, req: PromptSaveIn | None = None) -> dict:
     _prompt_role(role)
     provider = (req.provider if req else "") or ""
+    scope = (req.scope if req else "") or ""
     try:
-        result = promptcfg.reset(role, provider, version=state.cfg.prompt_version)
+        result = promptcfg.reset(role, provider, version=state.cfg.prompt_version,
+                                 scope=scope)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-    logbus.note(f"提示词恢复默认：{role}" + (f"（后端 {provider}）" if provider else "（角色默认）"),
-                source="models")
+    if scope:
+        where = f"（板块 {scope}）"
+    elif provider:
+        where = f"（后端 {provider}）"
+    else:
+        where = "（角色默认）"
+    logbus.note(f"提示词恢复默认：{role}{where}", source="models")
     return result
 
 

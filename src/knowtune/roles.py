@@ -86,9 +86,15 @@ def resolve(
     instance_provider: str = "",
     default_provider: str = "",
     known: Mapping[str, Any] | None = None,
+    section_roles: Mapping[str, str] | None = None,
 ) -> str:
-    """按"谁更具体谁优先"的顺序找一个可用的角色值（可能带 `::模型`）。"""
+    """按"谁更具体谁优先"的顺序找一个可用的角色值（可能带 `::模型`）。
+
+    `section_roles` 是板块级覆盖（med/classic 各自可钉一个与站点不同的后端），
+    比站点级 roles 更具体，排在最前。留空则该层跳过，行为与改造前一致。
+    """
     chain = (
+        (section_roles or {}).get(role),
         (instance_roles or {}).get(role),
         (global_roles or {}).get(role),
         instance_provider,
@@ -112,6 +118,7 @@ def plan(
     instance_provider: str = "",
     default_provider: str = "",
     known: Mapping[str, Any] | None = None,
+    section_roles: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
     """把每个角色解析出来，给 /api/info 和日志用（界面上要能看到实际用了谁）。"""
     return {
@@ -122,6 +129,7 @@ def plan(
             instance_provider=instance_provider,
             default_provider=default_provider,
             known=known,
+            section_roles=section_roles,
         )
         for role in ROLES
     }
