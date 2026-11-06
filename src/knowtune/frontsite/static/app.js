@@ -22,7 +22,7 @@
 
 /* 构建号：和 index.html 里那份必须一致，不一致说明浏览器拿的是旧 JS，
    页面加载完会强制换一次（见 index.html 里的自检脚本）。 */
-window.SITE_BUILD = "1.7.14";
+window.SITE_BUILD = "1.7.17";
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
@@ -85,6 +85,9 @@ const T = {
     navMed: "ئۇيغۇر تېبابىتى",
     navClassic: "قەدىمكى كىتابلار",
     navPv: "ئالدىن سوراش",
+    // 顶栏大标题也跟着板块走；只换副标题会出现「维医知识问答 · 只检索古籍」。
+    classicTitle: "قەدىمكى كىتاب سوراق-جاۋابى",
+    pvTitle: "ئالدىن سوراش",
     histTitle: "سۆھبەتلەر",
     navEmpty: "يوق",
     classicSub: "پەقەت قەدىمكى كىتابلاردىن ئىزدەيدۇ، ھازىرقى داۋالاش ئۆلچىمىنى ئارىلاشتۇرمايدۇ",
@@ -159,6 +162,8 @@ const T = {
     navMed: "维医问答",
     navClassic: "古籍问答",
     navPv: "预问诊",
+    classicTitle: "古籍知识问答",
+    pvTitle: "预问诊",
     histTitle: "对话",
     navEmpty: "未导入",
     classicSub: "只检索古籍，不混入现代诊疗规范",
@@ -205,6 +210,7 @@ const T = {
     today: "Today", earlier: "Earlier",
     del: "Delete this chat", delConfirm: "Delete",
     navMed: "Uyghur medicine", navClassic: "Classics", navPv: "Pre-visit",
+    classicTitle: "Classics Q&A", pvTitle: "Pre-visit",
     histTitle: "Chats", navEmpty: "none",
     classicSub: "Classical texts only — no modern guidelines",
     classicSamples: [
@@ -266,12 +272,18 @@ const LANG_NAME = { ug: "ئۇيغۇرچە", zh: "中文", en: "English" };
    每条答案正文截到 12000 字：一份几十条记录的存档不该把 localStorage
    配额吃满，而 12000 字已经远超一屏能读的量。 */
 const CHAT_KEY = "knowtune.site.chats";
+/* 老键：全站一个"当前会话"。在只有一个板块的年代够用，两个板块并排之后就
+   不够了——它不知道自己在哪一栏，切过去还是那一段对话。留着只为把老存档
+   认回来（那时候的对话都是维医的）。 */
 const SESSION_KEY = "knowtune.site.session";
+/* 新键：每个板块各记各的当前会话，形如 {"med":"s-xxx","classic":"s-yyy"}。 */
+const SESSION_BY_VIEW = "knowtune.site.sessions";
 const MAX_CHATS = 30;
 const MAX_ANSWER = 12000;
 
 let chats = loadChats();
-let sessionId = localStorage.getItem(SESSION_KEY) || null;
+// 由 bindSession(view) 在启动和切板块时赋值：没有"全站当前会话"这回事了。
+let sessionId = null;
 
 function loadChats() {
   try {
@@ -303,9 +315,17 @@ function currentChat() {
 }
 
 function ensureChat(title) {
+  const sec = view === "pv" ? "med" : view;
   let c = currentChat();
+  // 当前会话属于别的板块就不要往里续写：那会把一句古籍提问记进维医那段
+  // 对话里，两边都变脏。正常路径上 bindSession 已经保证了，这里是兜底。
+  if (c && sectionOf(c) !== sec) {
+    sessionId = freshId();
+    saveSessId(sec, sessionId);
+    c = null;
+  }
   if (!c) {
-    c = { id: sessionId, title: "", at: Date.now(), c: view === "pv" ? "med" : view, msgs: [] };
+    c = { id: sessionId, title: "", at: Date.now(), c: sec, msgs: [] };
     chats.unshift(c);
   }
   if (!c.title && title) c.title = title.replace(/\s+/g, " ").slice(0, 40);
@@ -320,10 +340,68 @@ function freshId() {
   return "s-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
 }
 
+/* ------------------------------------------------------------ 每栏各自的当前会话
+
+   以前只有一个 SESSION_KEY。两个板块并排之后这个设计就漏了：在维医里问完
+   一段，点古籍问答，正文区原样还是那一段维医对话，而侧栏列的是古籍对话——
+   图上看着像"切了但没变"。根因不是渲染没刷新，是"当前会话"根本没有栏目概念。
+
+   现在按栏目存：{"med": "s-...", "classic": "s-..."}。切过去就绑到这一栏
+   自己的那段对话；没有就开一段空的（首屏显示欢迎语、示例问题），绝不把
+   另一栏的对话搬过来。 */
+
+function sessMap() {
+  try {
+    const m = JSON.parse(localStorage.getItem(SESSION_BY_VIEW) || "{}");
+    return m && typeof m === "object" ? m : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveSessId(sec, id) {
+  const m = sessMap();
+  if (id) m[sec] = id; else delete m[sec];
+  try {
+    localStorage.setItem(SESSION_BY_VIEW, JSON.stringify(m));
+    // 老键只维护维医那一段：老版本没有栏目概念，读到古籍的 id 会把正文区
+    // 领到一条不存在的对话上。留着它是给"回滚一版"用的，不是给现在用的。
+    if (id && sec === "med") localStorage.setItem(SESSION_KEY, id);
+  } catch {
+    /* 隐私模式禁写：这一段仍能用，只是刷新后回到上一段已有对话 */
+  }
+}
+
+function sectionOf(chat) {
+  return (chat && chat.c) || "med";
+}
+
+/* 把当前会话切到 sec 这一栏。预问诊不占问答会话（它有自己的 pv.sid），
+   所以进去时原样不动——看完病回来还接原来那段问诊记录。 */
+function bindSession(sec) {
+  if (sec === "pv") return;
+  const map = sessMap();
+  let id = map[sec];
+  const inSection = (cid) => chats.some((c) => c.id === cid && sectionOf(c) === sec);
+  if (!id || !inSection(id)) {
+    // 这一栏最近用过的那段对话；都没有就开一段空的
+    const mine = chats.filter((c) => sectionOf(c) === sec).sort((a, b) => b.at - a.at);
+    id = mine.length ? mine[0].id : null;
+  }
+  if (!id && sec === "med") {
+    // 老存档只有一个全局 id，那会儿还没有古籍栏——它确实属于维医
+    const old = localStorage.getItem(SESSION_KEY);
+    if (old && inSection(old)) id = old;
+  }
+  sessionId = id || freshId();
+  saveSessId(sec, sessionId);
+  history = [];
+}
+
 function newSession() {
   if (busy) stop();
   sessionId = freshId();
-  localStorage.setItem(SESSION_KEY, sessionId);
+  saveSessId(view, sessionId);
   history = [];
   renderChat();
   renderSessions();
@@ -335,7 +413,8 @@ function openChat(id) {
   if (id === sessionId) { closeSide(); return; }
   if (busy) stop();
   sessionId = id;
-  localStorage.setItem(SESSION_KEY, id);
+  // 侧栏只列当前栏的对话，但保险起见按对话自己的归属写回，别写到别的栏里
+  saveSessId(sectionOf(chats.find((c) => c.id === id)), id);
   history = [];
   renderChat();
   renderSessions();
@@ -411,12 +490,14 @@ function deleteChat(id) {
   if (i < 0) return;
   if (delTimer) { clearTimeout(delTimer); delTimer = null; }
   const wasCurrent = id === sessionId;
+  // 删之前先记住归属：删完这条就不在数组里了，没处再问它属于哪一栏
+  const sec = sectionOf(chats[i]);
   chats.splice(i, 1);
   saveChats();
   if (wasCurrent) {
     if (busy) stop();
     sessionId = freshId();
-    localStorage.setItem(SESSION_KEY, sessionId);
+    saveSessId(sec, sessionId);
     history = [];
     renderChat();
   }
@@ -523,6 +604,8 @@ function renderChat() {
   // 上次停在的板块可能已经被站点关掉（或名字改了）：落到第一个开着的板块，
   // 否则首屏是一片空白，而用户并不知道是自己上次点过的那个入口没了。
   if (!navOn(view)) view = firstNavKey();
+  // 首屏也要按栏目绑会话：否则刷新后落在古籍栏，正文还是维医那段。
+  bindSession(view);
   // 首屏按上次所在的板块进入。直接调 switchView 会走一遍"切板块"的收尾动作
   // （关抽屉、重新聚焦），刷新页面时那些动作都不需要，所以这里分开走。
   renderNav();
@@ -1247,6 +1330,15 @@ function applyViewCopy() {
   const c = copy();
   const pvOn = view === "pv";
   renderSideHead();
+  // 顶栏大标题也按板块换：副标题换了、标题还挂「维医知识问答」，等于在古籍
+  // 问答页上写着这是维医——用户扫一眼标题就以为没切过去。维医栏仍用站点
+  // 自己在提示词配置里写的那句。
+  const title = pvOn ? (t.pvTitle || t.navPv)
+    : view === "classic" ? (t.classicTitle || t.navClassic)
+    : (c.title || info.kb_name || "");
+  $("siteTitle").textContent = title;
+  // 浏览器标签页同理：开两个窗口对照时，标题是唯一能区分它们的线索。
+  document.title = title;
   if (pvOn) {
     $("siteSub").textContent = t.pvSub || "";
     $("q").placeholder = t.pvPh || "";
@@ -1272,6 +1364,9 @@ function switchView(key) {
   if (busy) stop();
   view = key;
   localStorage.setItem(VIEW_KEY, key);
+  // 换栏就换会话：每个板块记住自己上次那段对话，切过来接上，而不是继续
+  // 显示另一栏的正文（这是"切了但内容没变"的真正原因）。
+  bindSession(key);
   renderNav();
   applyViewCopy();
   renderSamples();
