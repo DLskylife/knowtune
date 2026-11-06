@@ -1,12 +1,14 @@
-"""预问诊站点入口（主项目桥接版）。
+"""预问诊的主项目装配层。
 
-真身：顶层独立包 `previsit`（src/previsit/app.py），那里能脱离主项目独立
-部署。这里只做主项目一侧的装配：
+引擎在顶层包 `previsit`（src/previsit/），不 import 主项目；这里负责把主项目
+这一侧的东西接上去：
 
 - 用主 Config 的数据目录放会话库（data/previsit.db）；
 - 挂回主项目的密钥文件（主界面填过的 key 重启后仍能读回）；
 - 用 KnowtuneLLMAdapter 把主项目 LLMClient（含 provider/model 选择、mock
-  降级）适配成独立引擎的 complete() 接口。
+  降级）适配成引擎的 complete() 接口；
+- 给后台的参数面板提供 `config_describe / config_save / config_reset`——
+  预问诊没有独立站点，后台不该为了读几个参数就把整个 app 挂起来。
 
 路由一行不写——都从 previsit.app.create_app(engine) 来。
 """
@@ -104,12 +106,54 @@ def build_engine() -> PrevisitEngine:
     return eng
 
 
-def create_app():
-    from previsit.app import create_app as _create
-    from previsit.app import set_model_catalog, set_llm_factory
+def _bind_main() -> None:
+    """把主项目的模型目录与模型工厂交给预问诊那一层（只做一次也无妨）。"""
+    from previsit.app import set_llm_factory, set_model_catalog
 
     set_model_catalog(model_catalog)
     set_llm_factory(_main_llm_factory)
+
+
+def ensure_engine():
+    """后台读/写参数时用的引擎。
+
+    必须复用 previsit 侧那个进程级单例：参数面板报的"现在实际在用什么"要是
+    真在跑的那一份。另建一个引擎，面板会显示一套、站点跑另一套——最典型的是
+    保存完提示成功、问诊里却还是老参数。没有就按主项目这一侧装配一个。
+    """
+    from previsit import app as pv_app
+
+    if getattr(pv_app, "_engine", None) is None:
+        _bind_main()
+        pv_app.create_app(build_engine())
+    return pv_app._engine
+
+
+def config_describe() -> dict:
+    from previsit import app as pv_app
+
+    ensure_engine()
+    return pv_app.describe_config()
+
+
+def config_save(values: dict) -> dict:
+    from previsit import app as pv_app
+
+    ensure_engine()
+    return pv_app.save_config(values)
+
+
+def config_reset() -> dict:
+    from previsit import app as pv_app
+
+    ensure_engine()
+    return pv_app.reset_config()
+
+
+def create_app():
+    from previsit.app import create_app as _create
+
+    _bind_main()
     return _create(build_engine())
 
 

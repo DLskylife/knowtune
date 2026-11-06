@@ -22,3 +22,13 @@ instances:
   classic_kb_id: 4
   classic_keywords:
   - 古籍
+  sections:
+    med:
+      enabled: true
+      name: ''
+    classic:
+      enabled: true
+      name: ''
+    pv:
+      enabled: true
+      name: ''

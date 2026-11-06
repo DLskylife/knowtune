@@ -6,8 +6,7 @@
     knowtune ingest <path> [--kb 1]   导入文件或目录
     knowtune ask "问题" [--kb 1]      单次问答（走当前 provider）
     knowtune debug "问题"             打印两路召回与融合排序（调检索必用）
-    knowtune serve [--port 8000]      启动 Web UI
-    knowtune previsit [--port 8900]   启动预问诊站点（独立端口）
+    knowtune serve [--port 8000]      启动 Web UI（预问诊是站点里的一个板块）
 """
 
 from __future__ import annotations
@@ -246,16 +245,6 @@ def cmd_serve(args) -> int:
     return 0
 
 
-def cmd_previsit(args) -> int:
-    """预问诊站点：独立进程、独立端口，复用主服务的模型后端与已存密钥。"""
-    import uvicorn
-
-    print(f"预问诊: http://127.0.0.1:{args.port}")
-    uvicorn.run("knowtune.previsit.app:create_app", host=args.host, port=args.port,
-                log_level="info", factory=True)
-    return 0
-
-
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="knowtune", description="KnowTune — 本地知识库问答系统（带引用的 RAG）")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -289,11 +278,6 @@ def main(argv: list[str] | None = None) -> int:
     p_srv.add_argument("--port", type=int, default=8000)
     p_srv.add_argument("--host", default="127.0.0.1")
     p_srv.set_defaults(func=cmd_serve)
-
-    p_pv = sub.add_parser("previsit", help="启动预问诊站点（独立端口）")
-    p_pv.add_argument("--port", type=int, default=8900)
-    p_pv.add_argument("--host", default="127.0.0.1")
-    p_pv.set_defaults(func=cmd_previsit)
 
     args = parser.parse_args(argv)
     return int(args.func(args))

@@ -1,17 +1,18 @@
-"""预问诊站点的 HTTP 入口（独立部署版）。
+"""预问诊的 HTTP 入口（只有 API，没有页面）。
 
-一个进程、一份配置、一个 SQLite，不 import 主项目的任何东西：
+预问诊的界面画在维医站点里（左侧第三个板块）：同一套引擎、同一个会话库，
+不另开一个页面、不另起一个端口。这个包只提供接口：
 
-1. 独立进程：`python main.py`（部署目录）或 `uvicorn previsit.app:app`；
-2. 挂进主项目：knowtune 侧通过 knowtune/previsit 桥接把本 app mount 到
-   `/previsit`，终端用户不用换端口。
+    /api/previsit/meta      界面要的文案、槽位、域
+    /api/previsit/start     开一场问诊
+    /api/previsit/reply     答一句
+    /api/previsit/config*   参数面板（后台 /api/previsit/* 也调同一套函数）
 
-数据与依赖边界（"只调用后端知识库"的落地）：
+数据与依赖边界：
 
-- 知识面：config/previsit.yaml + config/previsit_kb.yaml + data/previsit/kg.db，
-  三者都在 PREVISIT_HOME（默认包路径向上两级）下；
-- 会话数据：`$PREVISIT_DATA_DIR/previsit.db`（默认 PREVISIT_HOME/data）；
-- 模型：PREVISIT_LLM_BASE_URL 没设就没有 LLM，纯规则 + 知识库跑完全程。
+- 知识面：config/previsit.yaml + config/previsit_kb.yaml + data/previsit/kg.db；
+- 会话数据：`$PREVISIT_DATA_DIR/previsit.db`；
+- 模型：由主项目注入（跟随后台当前后端）；没接上就纯规则 + 知识库跑完全程。
 """
 
 from __future__ import annotations
@@ -21,8 +22,6 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import settings as settings_mod
@@ -30,9 +29,6 @@ from .config import ROOT, load_previsit
 from .engine import PrevisitEngine
 from .llm import GatewayLLM, OpenAICompatLLM, build_llm
 from .store import Store
-
-BASE = Path(__file__).resolve().parent
-STATIC = BASE / "static"
 
 
 def data_dir() -> Path:
@@ -197,9 +193,40 @@ def _runtime(eng: PrevisitEngine) -> dict:
     }
 
 
+# ---------------------------------------------------------------- 参数面板（函数层）
+# 这三个函数是"参数面板"的唯一实现，HTTP 路由和后台 /api/previsit/* 都调它们。
+# 以前只有路由，后台要读参数就得先 mount 一个 /previsit 才能反向调自己的接口——
+# 为了一个弹窗把整个站点挂上去，才逼出"预问诊像个独立站点"那套结构。
+def describe_config() -> dict:
+    data = settings_mod.describe(model_catalog())
+    data["runtime"] = _runtime(get_engine())
+    return data
+
+
+def save_config(values: dict[str, Any]) -> dict:
+    """保存面板上的改动，并让新参数立刻生效（不重启、不打断正在进行的问诊）。"""
+    res = settings_mod.apply(values)      # 越界 / 类型不对 → ValueError
+    reload_engine()
+    data = settings_mod.describe(model_catalog())
+    data["saved"] = res["saved"]
+    data["runtime"] = _runtime(get_engine())
+    return data
+
+
+def reset_config() -> dict:
+    settings_mod.reset()
+    reload_engine()
+    data = settings_mod.describe(model_catalog())
+    data["runtime"] = _runtime(get_engine())
+    return data
+
+
 def create_app(engine: PrevisitEngine | None = None) -> FastAPI:
-    """engine 可注入：独立部署不传（自己按环境建），主项目挂载时传入
-    （用主项目的 LLM 后端和密钥体系），两边共用同一套路由。"""
+    """engine 可注入：挂进主项目时传入（用主项目的 LLM 后端和密钥体系）。
+
+    这里只有 API —— 预问诊的界面画在维医站点里（第三个板块），没有自己的
+    页面。以前那个独立页面/独立部署已经删掉了：同一件事两套壳，两边都得改。
+    """
     if engine is not None:
         global _engine, _store
         _engine = engine
@@ -209,11 +236,6 @@ def create_app(engine: PrevisitEngine | None = None) -> FastAPI:
     pv = eng.pv
 
     app = FastAPI(title="预问诊", version="0.3.0")
-    app.mount("/static", StaticFiles(directory=str(STATIC)), name="previsit-static")
-
-    @app.get("/")
-    def index() -> FileResponse:
-        return FileResponse(str(STATIC / "index.html"))
 
     @app.get("/api/previsit/meta")
     def meta() -> dict:
@@ -248,32 +270,22 @@ def create_app(engine: PrevisitEngine | None = None) -> FastAPI:
 
     # ------------------------------------------------------------ 参数面板
     # 改的是 config/previsit.overrides.yaml（只记和 previsit.yaml 不一样的键），
-    # 保存后调 reload_engine() 让新参数立即生效——不重启进程、不打断会话。
+    # 保存后让新参数立即生效——不重启进程、不打断会话。逻辑在模块级
+    # describe_config / save_config / reset_config，后台也调那几个。
     @app.get("/api/previsit/config")
     def get_config() -> dict:
-        data = settings_mod.describe(model_catalog())
-        data["runtime"] = _runtime(get_engine())
-        return data
+        return describe_config()
 
     @app.put("/api/previsit/config")
     def put_config(req: ConfigReq) -> dict:
         try:
-            res = settings_mod.apply(req.values)
+            return save_config(req.values)
         except ValueError as exc:      # 越界/类型不对：直接告诉用户哪一项不对
             raise HTTPException(400, str(exc)) from None
-        reload_engine()
-        data = settings_mod.describe(model_catalog())
-        data["saved"] = res["saved"]
-        data["runtime"] = _runtime(get_engine())
-        return data
 
     @app.post("/api/previsit/config/reset")
-    def reset_config() -> dict:
-        settings_mod.reset()
-        reload_engine()
-        data = settings_mod.describe(model_catalog())
-        data["runtime"] = _runtime(get_engine())
-        return data
+    def reset_config_route() -> dict:
+        return reset_config()
 
     @app.post("/api/previsit/start")
     def start(req: StartReq) -> dict:
@@ -351,5 +363,6 @@ def _count_sessions(store: Store) -> int:
     except Exception:
         return 0
 
-
-app = create_app()
+# 不再有模块级 `app = create_app()`：预问诊没有自己的进程，app 只由调用方
+# 按需创建（站点 build_site 里 mount、后台侧只取参数面板那几个函数）。留着
+# 它会让"import 这个模块"顺手建一个引擎——那是一份和站点互不相同的配置快照。

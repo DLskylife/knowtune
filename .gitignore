@@ -9,7 +9,6 @@ _pytest_tmp/
 # 数据与模型：体积大、可重建，且含个人内容（数据库 / 上传文档 / 向量 /
 # 本地 gguf / 密钥 / 本地实例日志）。整目录不上传，clone 后由程序自建。
 data/
-previsit_site/data/
 *.db
 *.db-shm
 *.db-wal

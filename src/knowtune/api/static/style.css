@@ -2328,6 +2328,9 @@ input[type=number].num::-webkit-outer-spin-button { -webkit-appearance: none; ma
 .fld-k { font-size: 12px; color: var(--text-2); }
 .fld-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .fld-row select { flex: 1 1 auto; min-width: 0; }
+/* 板块行中间的"显示名"：开关和库下拉已经占两头，名字给它一段能拉开的宽度，
+   否则长名字会被压成"维医…"这种看不清的截断。 */
+.fld-row .sec-name { flex: 1 1 150px; min-width: 0; }
 .fld-row .mini { flex: none; }
 .fld-note { font-style: normal; font-size: 11px; color: var(--text-3); flex: none; }
 

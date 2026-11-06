@@ -164,8 +164,8 @@ class InProcessRetriever:
     每个请求有 1.8 秒的固定开销（连 `GET /api/kb` 都是），而检索本身只花
     12 毫秒。主服务把"怎么查库"这个函数交进来，召回就变成一次函数调用。
 
-    独立部署（previsit_site）没有主服务，走 SemanticRetriever 的 HTTP 路径；
-    两条路径接口一致，引擎不用区分。
+    没有注入函数时（引擎被单独拿出来跑），退回 SemanticRetriever 的 HTTP
+    路径；两条路径接口一致，引擎不用区分。
     """
 
     def __init__(self, search_fn: Any, top_k: int = 8, max_per_doc: int = 2) -> None:
@@ -255,9 +255,8 @@ class SemanticRetriever:
     def from_config(cls, cfg: dict[str, Any] | None) -> "SemanticRetriever | None":
         """配置关掉/没配 url → 返回 None，引擎走关键词老路。
 
-        `PREVISIT_KB_URL` 环境变量优先于配置：独立部署（previsit_site）没有
-        后端知识库服务，部署时把它设成空串就能彻底关掉这一路，省得每场问诊
-        去撞一次连不上的地址。
+        `PREVISIT_KB_URL` 环境变量优先于配置：设成空串就能彻底关掉这一路，
+        省得每场问诊去撞一次连不上的地址。
         """
         cfg = cfg or {}
         if not cfg.get("enabled"):

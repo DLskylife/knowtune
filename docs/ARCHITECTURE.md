@@ -2975,3 +2975,42 @@ frontsite / api / cli / 3 个测试都依赖它），不是重复实现，保留
 **验证**：全量 **362 passed / 1 skipped**；本机 Edge 无头浏览器实跑
 表单 → 跳过 → 补档案 → 14 轮对话 → 结果页 → 编辑保存 → 继续补充 →
 重新出病历，JS 零报错。
+
+---
+
+### 12.50 三个板块变成可配置项，预问诊不再是"独立站点"（2026-11-06 追加）
+
+**问题**：站点左侧那三个入口（维医问答 / 古籍问答 / 预问诊）里，前两个的
+知识库能配，名字和开关却不能配；预问诊更是连配置入口都长在一张独立的卡上，
+后台还给它挂了 `/previsit/` 一份页面，`knowtune previsit` 还能单独起一个进程。
+同一个模块三套门面，每改一处都要想着"另外两处是不是也得改"。
+
+**配置**：`InstanceSpec.sections` 新增三组开关，形如
+`{"med": {"enabled": true, "name": ""}, "classic": {...}, "pv": {...}}`。
+`coerce_sections()` 补全缺键——老配置文件没有这一节，读出来必须是"三个全开、
+名字用内置"，升级一次不能把用户站点上的入口弄没。`validate()` 拒绝三个全关：
+那是张空白页。写盘后 `/api/info` 的 `corpora.med/classic/pv` 各带
+`enabled` 与 `name`，前端 `renderNav` 只画开了的，标签优先用配置名。
+
+**关就关干净**：`/previsit` 的 mount 外面包了一层 `_SectionGate`，每次请求
+现读配置，关掉之后连 `/previsit/api/*` 都回 404 —— 只在导航里藏一个按钮，
+等于"关了但地址还能进"。`/api/ask` 收到已关闭板块的 `corpus` 值时按整库检索，
+不继续在被关掉的库范围里找。
+
+**删除独立站点**：`previsit_site/`（入口 + 独立配置 + 独立 requirements）、
+`src/previsit/static/`（那套独立页面）、`knowtune previsit` 子命令、
+后台 `app.mount("/previsit", ...)` 与那张独立卡片，一并删掉。参数面板的
+三个动作抽成模块级函数（`previsit.app.describe_config / save_config /
+reset_config`），后台用 `/api/previsit/config`（GET/PUT/POST reset）直接调，
+不必为了一个弹窗把整个站点挂到后台来。`ensure_engine()` 复用 `previsit.app`
+的进程级引擎单例——面板报的"现在实际在用什么"必须是真在跑的那一份。
+`src/previsit/app.py` 不再有模块级 `app = create_app()`：import 就建引擎，
+等于凭空多一份配置快照。
+
+**后台界面**：站点弹窗新增「板块」组，三行各带开关 + 显示名（维医 / 古籍
+各带自己的库下拉，预问诊带说明），保存时六个控件整份下发。站点卡上多一颗
+「预问诊参数」（板块开着才出现），打开的还是原面板。
+
+**验证**：关预问诊 → `/api/info` 标记 `enabled:false`、`/previsit/api/*` 404、
+导航只剩两项；三个全关 → 400 拦下；改名 → 导航与侧栏库名同时跟着变；
+重开 → 恢复。后台弹窗六组、27 个参数控件渲染正常，口子都在，JS 零报错。

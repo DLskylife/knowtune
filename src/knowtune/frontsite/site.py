@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from .. import chatctx
@@ -269,16 +269,6 @@ def build_site(spec, state: Any) -> FastAPI:
     """
     app = FastAPI(title=spec.title or spec.name, docs_url=None, redoc_url=None)
 
-    # 预问诊挂在同一个站点下（/previsit/），终端用户不用换端口、不用记第二个
-    # 地址。挂载失败只影响这一个入口，绝不能把整个问答站点带崩——所以吞异常
-    # 但要留痕：静默吞掉的话，现象就是"入口点进去 404"，而日志里什么都没有。
-    try:
-        from ..previsit.app import create_app as _previsit_app
-        app.mount("/previsit", _previsit_app())
-    except Exception as exc:
-        logbus.note(f"预问诊挂载失败，站点其余功能不受影响："
-                    f"{type(exc).__name__}: {exc}", level="ERROR", source="sites")
-
     name = spec.name
     _warned = False
 
@@ -301,6 +291,44 @@ def build_site(spec, state: Any) -> FastAPI:
                             f"{type(exc).__name__}: {exc}", level="ERROR", source="sites")
             return spec
         return latest or spec
+
+    def _section_on(key: str) -> bool:
+        """这个站点当前开没开某个板块。读配置失败按"开"处理——
+        一次读盘抖动不该让患者的问诊入口消失。"""
+        try:
+            return bool(_cur().section(key)["enabled"])
+        except Exception:
+            return True
+
+    class _SectionGate:
+        """按站点配置决定 /previsit 存不存在。
+
+        只在导航里藏掉入口是不够的：地址还能直接打开，那就是"关了但没关干净"。
+        这里每次请求现读配置，所以后台一保存（不用重启）入口就真的没了。
+        """
+
+        def __init__(self, inner) -> None:
+            self.inner = inner
+
+        async def __call__(self, scope, receive, send):
+            if scope.get("type") == "http" and not _section_on("pv"):
+                resp = JSONResponse(
+                    {"detail": "这个站点没有开放预问诊"}, status_code=404,
+                )
+                await resp(scope, receive, send)
+                return
+            await self.inner(scope, receive, send)
+
+    # 预问诊挂在同一个站点下（/previsit/api/...），前端把它画成第三个板块，
+    # 不是另开一页：终端用户不用换端口、不用记第二个地址。
+    # 挂载失败只影响这一个入口，绝不能把整个问答站点带崩——所以吞异常
+    # 但要留痕：静默吞掉的话，现象就是"入口点进去 404"，而日志里什么都没有。
+    try:
+        from ..previsit.app import create_app as _previsit_app
+        app.mount("/previsit", _SectionGate(_previsit_app()))
+    except Exception as exc:
+        logbus.note(f"预问诊挂载失败，站点其余功能不受影响："
+                    f"{type(exc).__name__}: {exc}", level="ERROR", source="sites")
 
     def _langs(s) -> tuple[str, str]:
         lg = s.lang if s.lang in {"ug", "zh", "en"} else "ug"
@@ -516,20 +544,32 @@ def build_site(spec, state: Any) -> FastAPI:
             "answer_mode": getattr(s, "answer_mode", "direct"),
             "cross_lingual": main_lang != kb_lang_,
             # 左侧那三个板块里，前两个是检索范围不同的同一套问答；预问诊是
-            # 另一个引擎（/previsit/ 已挂在同一个站点下）。docs 给界面显示
-            # "这个板块有多少资料"，也是"古籍版块为不为空"的唯一依据——
+            # 另一个引擎（/previsit/api/... 已挂在同一个站点下）。docs 给界面
+            # 显示"这个板块有多少资料"，也是"古籍版块为不为空"的唯一依据——
             # 空板块的入口应该说明原因，而不是让用户点进去问一个永远没有
             # 引用的答案。
+            #
+            # enabled / name 来自实例配置的 sections：入口开不开、叫什么，都是
+            # 这个站点自己的事，不该写死在 i18n 里。预问诊也放进 corpora，
+            # 前端一个循环就能把三个板块画完，不必为它单开一条特殊路径。
             "corpora": {
                 "med": {**corpus_stat(corp["med"]),
                         "kb_id": int(s.kb_id),
-                        "kb_name": main_name},
+                        "kb_name": main_name,
+                        **s.section("med")},
                 "classic": {**corpus_stat(corp["classic"]),
                             "kb_id": cid or int(s.kb_id),
                             # 切到古籍板块时侧栏该显示哪个库的名字
-                            "kb_name": classic_name or kb["name"]},
+                            "kb_name": classic_name or kb["name"],
+                            **s.section("classic")},
+                "pv": {"docs": 0, "chunks": 0,
+                       "available": bool(s.section("pv")["enabled"]),
+                       "kb_id": 0, "kb_name": main_name,
+                       **s.section("pv")},
             },
-            "previsit": {"available": True, "mount": "previsit"},
+            "previsit": {"available": bool(s.section("pv")["enabled"]),
+                         "name": s.section("pv")["name"],
+                         "mount": "previsit"},
             "roles": role_plan(
                 instance_roles=getattr(s, "roles", {}) or {},
                 global_roles=getattr(state.cfg.generation, "roles", {}) or {},
@@ -553,7 +593,9 @@ def build_site(spec, state: Any) -> FastAPI:
         # classic_kb_id。配置和生成参数也必须跟着这个库走，不能拿主库的
         # 覆盖值去答古籍题（分库之后两边的参数可以各自调）。
         scope = str(getattr(req, "corpus", "") or "").strip().lower()
-        if scope not in ("med", "classic"):
+        if scope not in ("med", "classic") or not s.section(scope)["enabled"]:
+            # 板块被关掉后，带着旧 corpus 值发过来的请求（浏览器缓存的老页面、
+            # 二次封装的客户端）按整库检索处理，而不是继续在被关掉的板块库里找。
             scope = ""
         scope_kb_id = _scope_kb(conn0, s, scope)
         lang, kb_lang = _langs(s)

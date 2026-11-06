@@ -590,18 +590,47 @@ def _kb_search_for_previsit(question: str, top_k: int = 6) -> list[dict]:
     ]
 
 
-# 预问诊也挂在后台这个口（/previsit/），从侧栏「预问诊」直接进。
-# 和前台站点挂的是同一个应用工厂、同一个 Engine 单例：两边共用一份 SQLite
-# 档案，前台问了一半、后台接着看是同一份数据。
-# 挂载失败只影响这个入口，后台其余功能照常——所以吞异常，但必须留日志。
+# 预问诊不再挂在后台这个口。它只是维医站点里的第三个板块（页面在站点里画，
+# 接口在站点下的 /previsit/api/...），后台需要的只有"参数面板"那几个函数，
+# 走 /api/previsit/*，不必为了一个弹窗把整个站点挂到后台来——正是那一挂，
+# 让它在后台看起来像个"独立站点"。
+# 进程内检索这一路照旧注册：预问诊和后台同进程，走 HTTP 要多付一秒多。
 try:
-    from ..previsit.app import create_app as _previsit_app
     from ..previsit.app import set_kb_search as _set_kb_search
     _set_kb_search(_kb_search_for_previsit)
-    app.mount("/previsit", _previsit_app())
-except Exception as _pv_exc:      # noqa: BLE001 - 入口失败不能拖垮整个后台
-    logbus.note(f"预问诊挂载失败，后台其余功能不受影响："
+except Exception as _pv_exc:      # noqa: BLE001 - 预问诊挂了不能拖垮整个后台
+    logbus.note(f"预问诊桥接失败，后台其余功能不受影响："
                 f"{type(_pv_exc).__name__}: {_pv_exc}", level="ERROR", source="api")
+
+
+class PrevisitConfIn(BaseModel):
+    # {字段路径: 值}，路径形如 "max_turns" / "retrieval.top_k"。
+    # 只认 previsit.settings.FIELDS 里声明过的键，其余静默丢弃——面板是白名单。
+    values: dict[str, Any] = Field(default_factory=dict)
+
+
+@app.get("/api/previsit/config")
+def previsit_config() -> dict:
+    from ..previsit.app import config_describe
+
+    return config_describe()
+
+
+@app.put("/api/previsit/config")
+def previsit_config_save(req: PrevisitConfIn) -> dict:
+    from ..previsit.app import config_save
+
+    try:
+        return config_save(req.values)
+    except ValueError as exc:      # 越界 / 类型不对：告诉用户是哪一项
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/previsit/config/reset")
+def previsit_config_reset() -> dict:
+    from ..previsit.app import config_reset
+
+    return config_reset()
 
 
 # 静态资源绝不允许"启发式缓存"。FileResponse / StaticFiles 默认只带 ETag 和
@@ -3921,6 +3950,8 @@ class InstanceIn(BaseModel):
     kb_name: str | None = None
     autostart: bool | None = None
     public: bool | None = None
+    # 左侧三个板块的开关与显示名：{"med": {"enabled": true, "name": ""}, ...}
+    sections: dict[str, Any] | None = None
 
 
 @app.get("/api/instances")
@@ -4287,6 +4318,10 @@ def put_instance(name: str, req: InstanceIn) -> dict:
         samples=req.samples if req.samples is not None else keep("samples", []),
         disclaimer=req.disclaimer if req.disclaimer is not None else keep("disclaimer", ""),
         kb_name=req.kb_name if req.kb_name is not None else keep("kb_name", ""),
+        # 板块配置整份下发（前端六个控件一次发全）。没传 = 这份配置还不认识
+        # 板块（老页面 / 老脚本），沿用旧值，别把用户的开关重置成"全开"。
+        sections=(instcfg.coerce_sections(req.sections) if req.sections is not None
+                  else keep("sections", instcfg.default_sections())),
         autostart=bool(req.autostart) if req.autostart is not None else keep("autostart", False),
         public=bool(req.public) if req.public is not None else keep("public", False),
     )

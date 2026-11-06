@@ -40,6 +40,45 @@ PORT_MAX = 8899
 # 少了这个字段，两个后台撞同一个端口时只能说"已被占用"，说不出占的是谁。
 SITE_APP_TAG = "knowtune-frontsite"
 
+# 左侧三个入口（下称"板块"）。key 和前端导航的 data-view 一一对应：
+#   med     维医问答 —— 检索主库
+#   classic 古籍问答 —— 检索古籍库（没分库时按标题在主库里分）
+#   pv      预问诊   —— 不检索知识库，走 /previsit 那套引擎
+#
+# 为什么要有这份配置：这三个入口以前是写死的——名字来自 i18n，开关没有，预问诊
+# 更是只要进程起来就一定在。可"这个站点要不要开预问诊"是每个站点自己的事：
+# 一个给医生看古籍的站点，多一个预问诊入口只会让人点错。名字同理，维语站点
+# 想叫「قەدىمكى كىتاب」而不是内置那个词，也没地方改。
+SECTION_KEYS = ("med", "classic", "pv")
+
+
+def default_sections() -> dict[str, dict[str, Any]]:
+    """三个板块全开、名字留空（留空 = 用界面语言的内置名字）。"""
+    return {k: {"enabled": True, "name": ""} for k in SECTION_KEYS}
+
+
+def coerce_sections(raw: Any) -> dict[str, dict[str, Any]]:
+    """只认能认的写法，缺的键按默认补全。
+
+    老配置文件里没有 sections 这一节，读出来必须是"三个都开、名字用默认"——
+    否则升级一次就把用户站点上的两个入口弄没了。
+    """
+    out = default_sections()
+    if not isinstance(raw, dict):
+        return out
+    for key in SECTION_KEYS:
+        item = raw.get(key)
+        if isinstance(item, bool):          # 手写配置图省事只写 true/false
+            out[key]["enabled"] = item
+            continue
+        if not isinstance(item, dict):
+            continue
+        if item.get("enabled") is not None:
+            out[key]["enabled"] = bool(item["enabled"])
+        # 名字是界面文字，长度按"一行放得下"卡住；两侧空白一律吃掉。
+        out[key]["name"] = str(item.get("name") or "").strip()[:24]
+    return out
+
 
 @dataclass
 class InstanceSpec:
@@ -86,6 +125,17 @@ class InstanceSpec:
     # doc_ids 限死。
     # 留空 = 没有古籍板块（界面上只剩维医问答）。
     classic_keywords: list[str] = field(default_factory=lambda: ["古籍"])
+    # 三个入口各自开不开、叫什么。见 SECTION_KEYS / coerce_sections。
+    # 默认全开，所以老配置文件不用动；写盘时三个键都会落下去，配置一眼能看完。
+    sections: dict[str, dict[str, Any]] = field(default_factory=default_sections)
+
+    def section(self, key: str) -> dict[str, Any]:
+        """取某个板块的配置，缺什么补什么——调用方不用自己判空。"""
+        got = (self.sections or {}).get(key) or {}
+        return {
+            "enabled": bool(got.get("enabled", True)),
+            "name": str(got.get("name") or "").strip(),
+        }
 
     def host(self) -> str:
         return "0.0.0.0" if self.public else "127.0.0.1"
@@ -188,6 +238,7 @@ def _coerce(raw: dict[str, Any]) -> InstanceSpec:
         public=bool(raw.get("public")),
         alt=coerce_alt(raw.get("alt")),
         classic_keywords=_coerce_keywords(raw.get("classic_keywords")),
+        sections=coerce_sections(raw.get("sections")),
     )
 
 
@@ -296,3 +347,7 @@ def validate(spec: InstanceSpec, *, kb_exists) -> None:
         raise ValueError(f"古籍知识库 #{spec.classic_kb_id} 不存在")
     if spec.classic_kb_id == spec.kb_id:
         raise ValueError("古籍知识库不能和主知识库是同一个（那就不用分库了）")
+    # 三个都关掉的站点是个空白页：导航一条不剩，首页也没地方落。宁可拦住，
+    # 也不要用户存完发现"站点还在、什么都没有"。
+    if not any(spec.section(k)["enabled"] for k in SECTION_KEYS):
+        raise ValueError("三个板块至少要开一个，否则站点是个空白页")

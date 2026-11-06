@@ -22,7 +22,7 @@
 
 /* 构建号：和 index.html 里那份必须一致，不一致说明浏览器拿的是旧 JS，
    页面加载完会强制换一次（见 index.html 里的自检脚本）。 */
-window.SITE_BUILD = "1.7.11";
+window.SITE_BUILD = "1.7.12";
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
@@ -520,6 +520,9 @@ function renderChat() {
   $("btnSide").onclick = () => openSide(true);
   $("scrim").onclick = () => closeSide();
 
+  // 上次停在的板块可能已经被站点关掉（或名字改了）：落到第一个开着的板块，
+  // 否则首屏是一片空白，而用户并不知道是自己上次点过的那个入口没了。
+  if (!navOn(view)) view = firstNavKey();
   // 首屏按上次所在的板块进入。直接调 switchView 会走一遍"切板块"的收尾动作
   // （关抽屉、重新聚焦），刷新页面时那些动作都不需要，所以这里分开走。
   renderNav();
@@ -1066,7 +1069,25 @@ const NAV_ICONS = {
 
 const NAV_ORDER = ["med", "classic", "pv"];
 
+/* 板块开不开、叫什么，都由站点配置（/api/info 的 corpora.*.enabled/name）说。
+   老后端没有这两个字段 → 当"开"、当"没起名"，界面和以前一模一样。 */
+function navSection(key) {
+  return ((info && info.corpora && info.corpora[key]) || {});
+}
+
+function navOn(key) {
+  return navSection(key).enabled !== false;
+}
+
+function firstNavKey() {
+  return NAV_ORDER.find(navOn) || "med";
+}
+
 function navLabel(key) {
+  const name = String(navSection(key).name || "").trim();
+  // 站点自己起的名字优先（维语站点叫 قەدىمكى كىتاب 就显示它），没起名才用
+  // 界面语言的内置名字。
+  if (name) return name;
   return key === "classic" ? t.navClassic : key === "pv" ? t.navPv : t.navMed;
 }
 
@@ -1074,7 +1095,9 @@ function renderNav() {
   const box = $("nav");
   if (!box || !info) return;
   const corp = info.corpora || {};
-  box.innerHTML = NAV_ORDER.map((key) => {
+  // 关掉的板块不画出来。留一个灰着的入口比没有更糟：用户点进去发现是空的，
+  // 只会以为系统坏了。
+  box.innerHTML = NAV_ORDER.filter(navOn).map((key) => {
     const on = key === view ? " on" : "";
     // 预问诊没有"多少篇资料"，它读的是另一套知识库；这里不编一个数字给
     // 它，右侧留空比给一个假数诚实。
@@ -1117,9 +1140,10 @@ function renderSideHead() {
   const kbName = view === "med"
     ? (c.kb_name || cur.kb_name || info.kb_name || "")
     : (cur.kb_name || c.kb_name || info.kb_name || "");
-  name.textContent = (view === "classic" && uiLang !== "zh"
+  const secName = String(navSection(view).name || "").trim();
+  name.textContent = secName || ((view === "classic" && uiLang !== "zh"
     && /[\u3400-\u9fff]/.test(kbName))
-    ? (t.classicName || kbName) : kbName;
+    ? (t.classicName || kbName) : kbName);
   // 这一栏没有资料时别报「0 篇文档」：名字可能还挂着主库（古籍没独立建库
   // 的兜底模式下就是主库名），配 0 篇会读成"主库空了"。跟导航一致说"未导入"。
   if (cur.available === false) {
@@ -1155,7 +1179,8 @@ function applyViewCopy() {
 }
 
 function switchView(key) {
-  if (!NAV_ORDER.includes(key)) key = "med";
+  // 目标是关掉的板块（老链接、老缓存里的 data-view）就落到第一个开着的板块。
+  if (!NAV_ORDER.includes(key) || !navOn(key)) key = firstNavKey();
   const changed = key !== view;
   if (busy) stop();
   view = key;

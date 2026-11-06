@@ -6262,6 +6262,14 @@ function siteBlock(i, meta, plan, defProv) {
   const kb = (d.kbs || []).find((k) => k.id === i.kb_id);
   const resolved = (plan && plan.resolved) || {};
   const mode = i.answer_mode === "direct" ? "直接作答" : "先中后译";
+  // 板块开关：卡上要能一眼看出"这个站点现在有几个入口"。预问诊关掉之后，
+  // 卡上那颗「预问诊参数」也不该留着——配一个看不见的入口只会让人点错。
+  const sec = (k) => (i.sections || {})[k] || {};
+  const secOn = (k) => sec(k).enabled !== false;
+  const secNames = [["med", "维医"], ["classic", "古籍"], ["pv", "预问诊"]]
+    .filter(([k]) => secOn(k))
+    .map(([k, def]) => String(sec(k).name || "").trim() || def)
+    .join(" · ");
   const shown = i.content_lang && i.content_lang !== i.lang
     ? `<span class="sbk-dim warn" title="页面语言按文案内容判定，下拉只在判不出时兜底"
         >实际显示：${esc(LANG_NAME[i.content_lang] || i.content_lang)}</span>`
@@ -6286,7 +6294,9 @@ function siteBlock(i, meta, plan, defProv) {
       </div>
       <div class="sbk-acts">
         <button class="mini" data-scfg
-          title="知识库、端口、模型角色、语言与全部界面文案">模型与参数</button>
+          title="板块、知识库、端口、模型角色、语言与全部界面文案">模型与参数</button>
+        ${secOn("pv") ? `<button class="mini" data-pvcfg
+          title="预问诊的模型、轮次、知识图谱追问、语义召回与提示词">预问诊参数</button>` : ""}
         <button class="mini" data-sact="copy" data-url="${esc(i.url)}">复制链接</button>
         ${external ? "" : `<button class="mini" data-sact="${running ? "stop" : "start"}"
           ${busy ? "disabled" : ""}>${running ? "停止" : "启动"}</button>`}
@@ -6303,6 +6313,7 @@ function siteBlock(i, meta, plan, defProv) {
       <div class="sbk-label">当前生效<span class="sbk-note">保存后立即生效；改端口或监听会重启</span></div>
       <div class="pv-chips">
         ${siteChip("知识库", i.kb_name || (kb && kb.name) || `#${i.kb_id}`)}
+        ${siteChip("板块", secNames || "全部关闭", !secNames)}
         ${siteChip("模型", `译 ${roleText(resolved.translate)} · 答 ${roleText(resolved.generate)}`)}
         ${siteChip("产出", mode)}
         ${siteChip("语言", LANG_NAME[i.lang] || i.lang)}
@@ -6364,11 +6375,42 @@ function siteGroups(i, meta, plan, defProv) {
   const resolved = (plan && plan.resolved) || {};
   const used = `实际：译 ${roleText(resolved.translate)} · 答 ${roleText(resolved.generate)}`;
 
+  /* 板块行：开关 + 显示名 + （可选的）知识库下拉，一行说清"这个入口是什么"。
+   *
+   * 以前这三个入口是写死的：名字来自 i18n、开关没有、预问诊永远在。可"这个
+   * 站点要不要开预问诊"是每个站点自己的事——给医生看古籍的站点，多一个预问诊
+   * 入口只会让人点错。名字也一样，维语站点想叫别的声音，得能改。
+   */
+  const sec = (key) => (i.sections && i.sections[key]) || {};
+  const secRow = (key, label, defName, extra, hint) => `<div class="form-row full">
+      <label>${esc(label)}</label>
+      <span class="fld-row">
+        <label class="toggle" title="关掉之后这个入口在站点上真的消失（连地址一起）">
+          <input type="checkbox" data-f="sec_${key}_enabled"
+            ${sec(key).enabled !== false ? "checked" : ""}>
+          <span class="sw" aria-hidden="true"></span>
+          <span class="toggle-label">显示</span></label>
+        <input class="sec-name" data-f="sec_${key}_name" dir="auto"
+          value="${esc(sec(key).name || "")}"
+          placeholder="显示名：留空用「${esc(defName)}」" maxlength="24">
+        ${extra || ""}
+      </span>
+      <span class="hint">${esc(hint)}</span>
+    </div>`;
+
   return [
-    group("绑定", "主库 + 可选一个古籍库、占一个端口", [
-      row("知识库", `<select data-f="kb_id">${kbOpts}</select>`),
-      row("古籍知识库", `<select data-f="classic_kb_id">${classicOpts}</select>`,
-        "古籍问答只在这个库里检索；选 0 则仍按主库文档标题分"),
+    group("板块", "左侧三个入口：每个都能改名、能单独关掉；关掉的入口在站点上真的消失", [
+      secRow("med", "维医问答", "维医问答",
+        `<select data-f="kb_id" title="维医问答检索哪个库">${kbOpts}</select>`,
+        "检索主知识库"),
+      secRow("classic", "古籍问答", "古籍问答",
+        `<select data-f="classic_kb_id" title="古籍问答检索哪个库">${classicOpts}</select>`,
+        "只在这个库里检索；选「不单独分库」则按主库文档标题含「古籍」来分"),
+      secRow("pv", "预问诊", "预问诊", "",
+        "不检索知识库，走预问诊那套引擎；模型、轮次、提示词在站点卡上的「预问诊参数」里改"),
+    ].join("")),
+
+    group("绑定", "占一个端口、一套语言", [
       row("端口", `<input data-f="port" type="number" min="${lo}" max="${hi}" value="${i.port}">`,
         "改这里会重启站点"),
       row("界面与回答语言", `<select data-f="lang">
@@ -6507,6 +6549,15 @@ function readSiteBlock(block) {
   const split = (v) => v.split("\n").map((s) => s.trim()).filter(Boolean);
   block.querySelectorAll("[data-f]").forEach((el) => {
     const f = el.dataset.f;
+    // 板块六个控件合成一份 sections，整份发。缺键会被后端当成"没配"而回落到
+    // 全开——用户刚关掉的入口就自己回来了，这比不保存更莫名其妙。
+    if (f.startsWith("sec_")) {
+      const m = /^sec_(med|classic|pv)_(enabled|name)$/.exec(f);
+      if (!m) return;
+      out.sections = out.sections || { med: {}, classic: {}, pv: {} };
+      out.sections[m[1]][m[2]] = el.type === "checkbox" ? el.checked : el.value.trim();
+      return;
+    }
     if (el.type === "checkbox") { out[f] = el.checked; return; }
     if (f === "port" || f === "kb_id" || f === "classic_kb_id") {
       out[f] = Number(el.value) || 0; return;
@@ -6532,84 +6583,15 @@ function readSiteBlock(block) {
   return out;
 }
 
-/* 预问诊卡：它不是一个可起停的实例，而是挂在主服务里的一个入口（/previsit/），
- * 所以没有启动/停止/端口字段——随主服务同生共死，永远"运行中"。
- * 放进站点页而不是顶栏，是和维医这类站点卡保持同一种放置方式。
- *
- * 模型和参数走「/previsit/api/previsit/config」：那一层 API 属于预问诊自己
- * （独立部署也能用），这里只负责把它渲染成一张卡和一个弹窗。 */
-/* 「模型入口」行：预问诊卡和评测台卡共用。维医前台卡不调用它——它走主站
-   内部 roles，本轮按要求保持原样。地址来自 /api/gateway，只有一个不变量。 */
-function gatewayRow(gw, label, note, ok) {
-  if (!gw || !gw.base_url) return "";
-  return `<div class="gw-inline">
-    <div class="gw-inline-head">模型入口<span>固定地址 · 模型页一处切换</span></div>
-    <div class="gw-inline-line">
-      <code class="mono-url">${esc(gw.base_url)}</code>
-      <span class="gw-src${ok ? " on" : ""}">${esc(label || "已接入")}</span>
-      <button class="mini" data-sact="copy" data-url="${esc(gw.base_url)}">复制</button>
-    </div>
-    ${note ? `<p class="hint">${esc(note)}</p>` : ""}
-  </div>`;
-}
-
-function previsitBlock(cfg, gw) {
-  const url = `${location.origin}/previsit/`;
-  const v = (cfg && cfg.values) || {};
-  const rt = (cfg && cfg.runtime) || {};
-  const over = (cfg && cfg.overridden) || [];
-  const model = [v.provider || "跟随后台默认", v.model || ""].filter(Boolean).join(" · ");
-  // runtime 报的是「真的走哪条路」，不是配置写了什么。网关通了却实际在跑
-  // 直连，是最难自己发现的一类问题，必须写出来。
-  const src = String(rt.llm_source || "");
-  const gwLabel = src === "gateway" ? "经网关调用"
-    : src === "fallback" ? "网关不通 · 已降级直连"
-      : src === "direct" ? "直连（未启用网关）" : "状态未知";
-  const gwNote = rt.llm_gateway_error
-    ? `网关错误：${rt.llm_gateway_error}`
-    : "网关不通时自动退回直连，问诊不会中断";
-  const chip = (k, val, warn) =>
-    `<span class="pv-chip${warn ? " warn" : ""}"><i>${esc(k)}</i>${esc(val)}</span>`;
-
-  return `<section class="site-block" data-name="__previsit__" data-pv>
-    <header class="sbk-head">
-      <div class="sbk-id">
-        <span class="sbk-name">预问诊</span>
-        ${siteStatusBadge("running")}
-        <span class="sbk-dim">随主服务运行</span>
-        ${cfg
-          ? `<span class="sbk-dim">${over.length ? `${over.length} 项参数已改` : "全部出厂参数"}</span>`
-          : `<span class="sbk-dim warn">参数读取失败</span>`}
-      </div>
-      <div class="sbk-acts">
-        <button class="mini" data-pvcfg ${cfg ? "" : "disabled"}
-          title="配置模型、轮次、知识图谱追问、语义召回、文案与提示词">模型与参数</button>
-        <button class="mini" data-sact="copy" data-url="${esc(url)}">复制链接</button>
-        <a class="mini loc" href="/previsit/" target="_blank" rel="noreferrer">打开</a>
-      </div>
-    </header>
-    <div class="sbk-url"><a href="/previsit/" target="_blank"
-      rel="noreferrer">${esc(url)}</a></div>
-    ${gatewayRow(gw, gwLabel, gwNote, src === "gateway")}
-    <div class="sbk-sec">
-      <div class="sbk-label">当前生效<span class="sbk-note">保存后立即生效，不用重启</span></div>
-      <div class="pv-chips">
-        ${chip("模型", model)}
-        ${chip("温度", v.temperature != null ? v.temperature : "-")}
-        ${chip("生成上限", `${v.max_tokens != null ? v.max_tokens : "-"} token`)}
-        ${chip("最多轮次", v.max_turns != null ? v.max_turns : "-")}
-        ${chip("召回", `${v["retrieval.top_k"] != null ? v["retrieval.top_k"] : "-"} 条`)}
-        ${cfg && rt && !rt.llm ? chip("模型未接上", "正在用规则兜底", true) : ""}
-      </div>
-    </div>
-  </section>`;
-}
+/* 预问诊不再有"单独站点"卡：它已经是维医站点里的第三个板块（站点弹窗 → 板块）。
+ * 参数入口放在站点卡上那颗「预问诊参数」，打开的还是同一个面板——只是归属
+ * 从"一张独立卡"变成"这个站点的一个入口"，和用户在站点上看到的三个板块一致。 */
 
 /* ------------------------------------------------------------ 预问诊参数面板 */
 async function openPrevisitConfig() {
   let cfg;
   try {
-    cfg = await api("/previsit/api/previsit/config");
+    cfg = await api("/api/previsit/config");
   } catch (err) {
     toast(`读不到预问诊参数：${err.message}`, "err");
     return;
@@ -6648,12 +6630,11 @@ async function openPrevisitConfig() {
     <div class="pv-groups">${groups.map(groupHTML).join("")}</div>
     <div class="form-actions">
       <button class="mini" type="button" id="pvReset">全部恢复出厂值</button>
-      <span class="hint">密钥不在这里配：主项目在「模型」页，独立部署走
-        <code>PREVISIT_LLM_API_KEY</code>。</span>
+      <span class="hint">密钥不在这里配：在「模型」页填一次，预问诊跟着用。</span>
     </div>`,
     async () => {
       const values = collectPvValues();
-      const out = await jsonSend("PUT", "/previsit/api/previsit/config", { values });
+      const out = await jsonSend("PUT", "/api/previsit/config", { values });
       state.pvCfg = out;
       await renderSites();
       toast(`已保存 ${out.saved.length} 项 · 立即生效`);
@@ -6662,8 +6643,8 @@ async function openPrevisitConfig() {
 
   $("pvReset").onclick = async () => {
     try {
-      await jsonSend("POST", "/previsit/api/previsit/config/reset", {});
-      state.pvCfg = await api("/previsit/api/previsit/config");
+      await jsonSend("POST", "/api/previsit/config/reset", {});
+      state.pvCfg = await api("/api/previsit/config");
       $("modal").hidden = true;
       await renderSites();
       toast("已恢复出厂参数");
@@ -6757,14 +6738,12 @@ function collectPvValues() {
   return out;
 }
 
-function paintSites(d, roles, meta, pvCfg, gw) {
+function paintSites(d, roles, meta) {
   const data = d || state.sites;
   if (!data) return;
   state.sites = data;
   state.rolePlan = roles;
-  state.pvCfg = pvCfg || null;
   state.modelMeta = meta || [];
-  state.gateway = gw || null;
   const items = data.items || [];
   const running = items.filter((i) => i.status === "running").length;
   // 外部托管的站点是**能访问**的，只是不归这个后台管。把它算成"没在跑"，
@@ -6789,7 +6768,6 @@ function paintSites(d, roles, meta, pvCfg, gw) {
       ? items.map((i) => siteBlock(i, meta, plans.find((p) => p.name === i.name),
         (roles && roles.default_provider) || "")).join("")
       : `<div class="card"><p class="hint" style="margin:6px 0 12px">还没有前台站点。</p></div>`}
-    ${previsitBlock(state.pvCfg, state.gateway)}
   </div>`;
 
   $("btnNewSite").onclick = () => openSiteEditor(null);
@@ -6814,19 +6792,7 @@ async function renderSites() {
   let meta = [];
   try { r = await api("/api/model-roles"); } catch { r = null; }
   try { meta = (await api("/api/models")).providers || []; } catch { meta = []; }
-  // 预问诊的参数存在它自己那一层（/previsit/api/...）：读失败不该让整页
-  // 打不开，卡片会显示"参数读取失败"，问答入口本身照常可用。
-  let pvCfg = null;
-  try { pvCfg = await api("/previsit/api/previsit/config"); } catch { pvCfg = null; }
-  // 固定入口地址：预问诊卡从它取模型。
-  // 刚启动那一两秒 /api/gateway 可能还没就绪，重试一次——少这一下就会看到
-  // 页面开着、卡片的「模型入口」却是空的，刷新一下又出现。
-  let gw = null;
-  for (let i = 0; i < 2 && !gw; i++) {
-    try { gw = await api("/api/gateway"); } catch { gw = null; }
-    if (!gw && i === 0) await new Promise((r) => setTimeout(r, 400));
-  }
-  paintSites(d, r, meta, pvCfg, gw);
+  paintSites(d, r, meta);
   bindSiteActions();
 }
 
@@ -6963,6 +6929,9 @@ async function openSiteEditor(cur) {
       <div class="form-row"><label>界面文案</label>
         <span class="hint">标题、副标题、欢迎语、示例问题、免责声明在「提示词配置 · 界面文案」
           里统一改${copy && copy.title ? `；当前：${esc(String(copy.title).slice(0, 24))}` : ""}。</span></div>
+      <div class="form-row"><label>板块</label>
+        <span class="hint">新建的站点三个板块（维医问答 / 古籍问答 / 预问诊）默认全开；
+          建好后到「模型与参数」→ 板块里改名或关掉。</span></div>
       <div class="form-row"><label class="toggle">
         <input type="checkbox" id="sAuto" ${cur && cur.autostart ? "checked" : ""}>
         <span class="sw" aria-hidden="true"></span><span class="toggle-label">后台启动时自动拉起</span>
