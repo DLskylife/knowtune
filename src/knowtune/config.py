@@ -153,6 +153,15 @@ class RefusalCfg(BaseModel):
     # 标定时的正/负样本是否够用。样本太少依然会套用（总比随手写的 0.35 强），
     # 但 UI 要如实标出来，不能让人以为这个数字有多可靠
     calibrated_samples_ok: bool = False
+    # ---- leave-one-doc-out 标定的产物 ----
+    # AUC = 随机取一条"库里有答案"和一条"库里没有"，前者分数更高的概率。
+    # 它比阈值本身重要：阈值可以调，信号有没有区分力不能调。
+    auc: float | None = None
+    # usable(AUC>=0.8) / weak(0.7~0.8) / invalid(<0.7)。invalid 时**不采用**
+    # 扫出来的阈值——宁可退回"明显不沾边才拒"，也不要拿一个和抛硬币差不多的
+    # 信号去拦用户。
+    verdict: str | None = None
+    n_samples: int = 0
     # 标定结果单独存一个 JSON，而不是回写 YAML：回写会丢掉 YAML 里的注释，
     # 而注释是这个项目最贵的东西之一
     calibration_file: str = "./data/refusal_calibration.json"
@@ -178,6 +187,18 @@ class SupportCfg(BaseModel):
     min_answer_chars: int = 40
     # 低于这个整体的 grounded 视为「没落地」，前端给醒目提示。
     weak_ratio: float = 0.3
+    # ---- 标定产物，语义同 RefusalCfg 的同名字段 ----
+    # 这里有两个 AUC，别混：
+    #   auc        句 vs「别的文档的块」  —— 测的是"有没有依据"
+    #   auc_fact   句 vs「同一块但改掉事实」—— 测的是"事实对不对"
+    # 后者天然接近 0.5：余弦对「300ml → 700ml」这种改动几乎无感。所以
+    # auc_fact 低**不是**停用信号的理由，它的意思是"这一层得靠锚点补"。
+    auc: float | None = None
+    auc_fact: float | None = None
+    verdict: str | None = None
+    n_samples: int = 0
+    # 锚点对篡改事实的捕获率。低就说明锚点表还缺单位/型号。
+    anchor_catch: float | None = None
 
 
 class ModelEntry(BaseModel):
@@ -438,19 +459,110 @@ def calibration_of(cfg: "Config") -> dict[str, Any] | None:
 def refusal_mode(cfg: "Config") -> str:
     """拒答现在到底处于哪种状态。
 
-    三种，界面上必须区分开——把 advisory 显示成"阈值 0.35"是过去最误导人的
+    四种，界面上必须区分开——把 advisory 显示成"阈值 0.35"是过去最误导人的
     一处：数字看着像个决定，实际上 0.35 低于本语料全部实测可答分（最低 0.541），
     除了检索完全空，它一次都不会触发。
 
     - off        用户主动关了
-    - calibrated 阈值由评估集扫出来的，样本量达标，可以当判据
+    - calibrated 阈值由 leave-one-doc-out 扫出来且 AUC 达标，可以当判据
     - advisory   没标定 / 样本不足，只在"明显不沾边"时拦，其余交给人看引用
+    - invalid    标定过了，但 AUC < 0.7：这个信号分不开"有答案"和"没答案"，
+                 阈值再调也是抛硬币。此时**不套用**扫出来的数字，退回粗筛，
+                 并在界面上直说"这个判据不成立"，而不是换个数继续装。
     """
     if not cfg.refusal.enabled:
         return "off"
+    if cfg.refusal.verdict == "invalid":
+        return "invalid"
     if cfg.refusal.calibrated_at and cfg.refusal.calibrated_samples_ok:
         return "calibrated"
     return "advisory"
+
+
+# ------------------------------------------------------------------ 按库标定
+
+def calibration_path(cfg: "Config", kb_id: int) -> Path:
+    """某个知识库的标定文件。
+
+    按库分开而不是全库一份：阈值是「这个嵌入模型 + 这批语料」的属性。维医库
+    31 篇同质文档，药理库 2.6 万块单文档，两者的分数分布根本不可比，共用一个
+    阈值必然一边松一边紧。
+    """
+    base = Path(cfg.refusal.calibration_file).parent
+    return base / "calibration" / f"kb_{int(kb_id)}.json"
+
+
+def calibration_of_kb(cfg: "Config", kb_id: int | None) -> dict[str, Any] | None:
+    """读该库的标定结果；没有、坏了、或模型指纹不匹配都返回 None。"""
+    import json
+
+    if not kb_id:
+        return None
+    path = calibration_path(cfg, kb_id)
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if data.get("model") != f"{cfg.embedding.model}@{cfg.embedding.dim}":
+        return None
+    return data
+
+
+def _verdict_of(auc: float | None) -> str | None:
+    """AUC → 三档。界线不是拍的：0.7 以下两类分布重叠过半，任何阈值都会
+    在"该拒的照答"和"该答的被拒"之间二选一；0.8 以上才谈得上"判据"。"""
+    if auc is None:
+        return None
+    if auc >= 0.8:
+        return "usable"
+    if auc >= 0.7:
+        return "weak"
+    return "invalid"
+
+
+def apply_kb_calibration(cfg: "Config", data: dict[str, Any] | None,
+                         skip: "set[str] | frozenset[str]" = frozenset()) -> None:
+    """把某个库的标定结果套进这份配置副本。
+
+    skip 语义同全局标定：参数面板手调过的字段不被覆盖。
+    """
+    if not data:
+        return
+    ref = data.get("refusal") or {}
+    if ref:
+        auc = ref.get("auc")
+        verdict = ref.get("verdict") or _verdict_of(auc)
+        cfg.refusal.auc = auc
+        cfg.refusal.verdict = verdict
+        cfg.refusal.n_samples = int(ref.get("n_samples") or 0)
+        cfg.refusal.calibrated_on_model = data.get("model")
+        if verdict == "invalid":
+            # 信号无效：不写阈值。写进去等于用一个和抛硬币同水平的数拦人。
+            cfg.refusal.calibrated_at = None
+            cfg.refusal.calibrated_samples_ok = False
+        else:
+            if "refusal.min_score" not in skip and ref.get("min_score") is not None:
+                cfg.refusal.min_score = float(ref["min_score"])
+            if "refusal.min_margin" not in skip and ref.get("min_margin") is not None:
+                cfg.refusal.min_margin = float(ref["min_margin"])
+            cfg.refusal.calibrated_at = data.get("calibrated_at")
+            cfg.refusal.calibrated_samples_ok = True
+
+    sup = data.get("support") or {}
+    if sup:
+        cfg.support.auc = sup.get("auc")
+        cfg.support.auc_fact = sup.get("auc_fact")
+        cfg.support.anchor_catch = sup.get("anchor_catch")
+        cfg.support.n_samples = int(sup.get("n_samples") or 0)
+        cfg.support.verdict = sup.get("verdict") or _verdict_of(cfg.support.auc)
+        # support 的 verdict 说的是"语义层能不能判"；语义层废了才不写阈值，
+        # 事实层（auc_fact）低是意料之中的，由锚点补，不影响阈值。
+        if cfg.support.verdict != "invalid":
+            if "support.threshold" not in skip and sup.get("threshold") is not None:
+                cfg.support.threshold = float(sup["threshold"])
+
 
 
 def _apply_calibration(cfg: "Config", skip: "set[str] | frozenset[str]" = frozenset()) -> None:

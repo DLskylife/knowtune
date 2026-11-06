@@ -17,7 +17,7 @@ import json
 import sys
 from pathlib import Path
 
-from .config import load_config
+from .config import calibration_of_kb, load_config
 from .db import Database
 from .generate import cite as cite_mod
 from .generate import support as support_mod
@@ -75,6 +75,8 @@ def cmd_status(args) -> int:
         print(f"  错误: {engine.embedder.error}")
     print(f"精排: enabled={cfg.retrieval.rerank.enabled} model={cfg.retrieval.rerank.model}")
     print(f"LLM: provider={cfg.generation.provider}")
+    # 标定状态逐库打印。只写「阈值 0.35」是不够的：那个数可能是出厂值，
+    # 也可能扫出来的——两者的可信度差一个量级，命令行上看不出区别最误事。
     print("知识库:")
     for r in rows:
         n = conn.execute(
@@ -82,6 +84,18 @@ def cmd_status(args) -> int:
             " WHERE d.kb_id=? AND ch.generation=d.active_gen", (r["id"],)
         ).fetchone()["c"]
         print(f"  [{r['id']}] {r['name']}  文档 {r['docs']}  活跃 chunk {n}")
+        data = calibration_of_kb(cfg, r["id"])
+        if data is None:
+            print("      标定：未标定（阈值是出厂值，不代表本语料）")
+            continue
+        ref = data.get("refusal") or {}
+        sup = data.get("support") or {}
+        if ref:
+            print(f"      拒答：AUC {ref.get('auc')} → 阈值 {ref.get('min_score')}"
+                  f"（{ref.get('verdict')}，{ref.get('n_samples')} 样本）")
+        if sup:
+            print(f"      支撑度：AUC {sup.get('auc')} → 阈值 {sup.get('threshold')}"
+                  f"（事实层 AUC {sup.get('auc_fact')}，靠锚点补）")
     return 0
 
 

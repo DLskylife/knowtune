@@ -50,20 +50,60 @@ STRUCT_PREFIX = ("可能的原因", "如确认", "1.", "2.", "3.", "-")
 # 事实锚点：这些 token 出现在答案里、却不在证据里，就是「模型自己补的」。
 _EN_TOKEN = re.compile(r"[A-Za-z][A-Za-z0-9_.\-]{1,}")
 _VERSION = re.compile(r"\d+\.\d+(?:\.\d+)*")
-_NUM_UNIT = re.compile(r"\d+(?:\.\d+)?\s*(?:%|GB|MB|TB|KB|ms|核|张|块|节点|路|条)")
+# 数字 + 单位。医学/古籍文本的剂量、频次、时长全在这里：维医方剂写
+# 「300ml 汤剂」「4 个小时」，技术文档写「80GB」「8 核」。单位表缺一个，
+# 那个数就成了裸数字——而裸数字是被刻意不收的，于是「300 改成 700」
+# 这种最典型的编造会整个漏掉。
+# 「个」是可选的量词缀：「4 个小时」里数字和单位之间隔着它。
+_NUM_UNIT = re.compile(
+    r"\d+(?:\.\d+)?\s*个?\s*"
+    r"(?:%|‰|℃|"
+    r"GB|MB|TB|KB|ms|mmol|mol|mg|ml|mL|ML|kg|"
+    r"nm|μm|um|mm|cm|km|Hz|kHz|MHz|Gy|mSv|"
+    r"小时|分钟|秒钟|天|日|周|月|年|"
+    r"克|毫克|微克|千克|公斤|毫升|升|"
+    r"次|剂|片|粒|丸|袋|支|瓶|滴|钱|两|寸|针|枚|贴|核|张|块|节点|路|条)"
+)
 _CLI_FLAG = re.compile(r"--[A-Za-z][\w-]*")
 # 文件名不是事实锚点：答案里写《xxx.pdf》而证据正文不含文件名，是正常的，
 # 不该算"编造"。第一版实测就被 luckclub.pdf 这类误报拉低了锚点命中率。
 _FILE_NAME = re.compile(r"\.(pdf|docx?|xlsx?|pptx?|md|txt|csv|json|html?|zip)$", re.I)
 # 送进编码器的块长度上限。块常被切成多窗口再平均，一次问答要多付几百毫秒
 # （实测 5 块 + 7 句要 1.2 秒）。判定"这句话有没有被这块支撑"用不到整块——
-# 答案句对应的通常就是其中一段，首 600 字（约一个 512 token 窗口）足够。
+# 答案句对应的通常就是其中一段。
 BLOCK_CHARS = 600
+# 块内滑窗：把块切成 ~150 字的窗口，句子和每个窗口算余弦再取最大。
+# 不这么做就有一个系统性偏差——**同一件事、长短悬殊，余弦就掉**。实测
+# 「同一块的句子 vs 整块 600 字」最低只有 0.372，阈值被这几条压到 0.43，
+# 于是 49% 的"无依据"糊了过去；改成窗口取最大后同一批数据 AUC 0.93→0.99、
+# 漏断率 49%→3%。窗口是纯文本切片，可缓存，热态成本接近零。
+WIN_SIZE = 150
+WIN_STEP = 75
 
 # 块向量缓存。同一批文档会被反复问到，缓存命中后这块成本归零。
 # 按文本哈希而不是 chunk_id：文档重切后 id 会变，文本没变就不该重算。
+# 缓存的是**窗口**而不是块：窗口是固定切片，块会被不同证据编号复用。
 _CACHE: "OrderedDict[str, object]" = OrderedDict()
-_CACHE_MAX = 256
+_CACHE_MAX = 2048
+
+
+def split_windows(text: str, size: int = WIN_SIZE, step: int = WIN_STEP) -> list[str]:
+    """块 → 窗口。末尾补一个贴尾窗口，避免倒数第二窗之后的内容没有覆盖。
+
+    尺寸可传参是为了标定：标定脚本必须用和生产完全相同的切法，否则扫出来的
+    阈值对应的是另一套口径，落地就错位。
+    """
+    t = re.sub(r"\s+", " ", text or "").strip()
+    if len(t) <= size:
+        return [t] if t else []
+    out = [t[i:i + size] for i in range(0, len(t) - size + 1, step)]
+    tail = t[-size:]
+    if out[-1] != tail:
+        out.append(tail)
+    return out
+
+
+_windows = split_windows  # 内部调用简称
 
 
 def _cached(keys: Sequence[str], encode: Callable[[Sequence[str]], Sequence[Sequence[float]]]):
@@ -222,28 +262,42 @@ def evaluate(
 
     report.n_facts = len(facts)
 
-    # 一次编码：句子每次都不一样，块走缓存。块只取前 BLOCK_CHARS——
-    # 超窗的块会被切成多窗口逐个编码再平均，一次问答要多付几百毫秒，
-    # 而"这句有没有被这块支撑"用不到整块。
+    # 一次编码：句子每次都不一样，块窗口走缓存。
     import numpy as np
 
     pool_ids = sorted(evidence)
-    pool_texts = [(evidence[i] or "")[:BLOCK_CHARS] for i in pool_ids]
+    win_texts: list[str] = []
+    win_owner: list[int] = []          # 窗口 → 块下标
+    for bi, pid in enumerate(pool_ids):
+        for w in _windows((evidence[pid] or "")[:BLOCK_CHARS]):
+            win_texts.append(w)
+            win_owner.append(bi)
+    if not win_texts:
+        report.skipped = "证据块没有可编码的内容"
+        return report
+
     try:
         sent_arr = np.asarray(encode(list(facts)), dtype=np.float32)
-        pool_arr = _cached(pool_texts, encode)
+        win_arr = _cached(win_texts, encode)
     except Exception as exc:  # 模型没装/加载失败：降级到只有锚点信号
         report.skipped = f"无法计算语义支撑（{type(exc).__name__}）"
         return report
 
-    if sent_arr.ndim != 2 or len(sent_arr) != len(facts) or pool_arr.ndim != 2:
+    if sent_arr.ndim != 2 or len(sent_arr) != len(facts) or win_arr.ndim != 2:
         report.skipped = "编码结果与输入数量不符"
         return report
     # 归一化，让点积等于余弦。这里自己归一而不是信任后端：
     # 有的编码器 normalize=False，混用会让分数跨过 1。
     sent_vecs = sent_arr / np.maximum(np.linalg.norm(sent_arr, axis=1, keepdims=True), 1e-9)
-    pool_vecs = pool_arr / np.maximum(np.linalg.norm(pool_arr, axis=1, keepdims=True), 1e-9)
-    sims = sent_vecs @ pool_vecs.T
+    win_vecs = win_arr / np.maximum(np.linalg.norm(win_arr, axis=1, keepdims=True), 1e-9)
+    sims = sent_vecs @ win_vecs.T
+
+    # 句子 × 块：取该块所有窗口里的最大分。**不能取平均**——平均会把
+    # "这块讲了三件事，其中一件对上了"稀释成"什么都没对上"。
+    owner = np.asarray(win_owner)
+    by_block = np.stack(
+        [sims[:, owner == bi].max(axis=1) for bi in range(len(pool_ids))], axis=1
+    ) if len(win_texts) else sims
 
     supported = 0
     grounded_hits = 0
@@ -258,12 +312,26 @@ def evaluate(
             # 引用的编号全越界：cite.verify 已经把编号剥掉了，这里按「无支撑」处理
             best, best_id = 0.0, None
         else:
-            row = sims[idx][cols]
+            row = by_block[idx][cols]
             j = int(np.argmax(row))
             best = float(row[j])
             best_id = pool_ids[cols[j]]
 
-        hit = best >= threshold
+        # 锚点参与**句级**判定，而不只是并列指标。
+        # 原因很直接：术语堆砌能把余弦顶得很高——「疗程 45 天，治愈率 92.5%」
+        # 里塞满证据里的病名和方剂名，句向量自然贴近；但 45 天和 92.5% 在证据里
+        # 一个字都没有。实测这种整段编造能拿到 grounded=0.75，看起来"大部分有据"。
+        # 所以一句话算"被支撑"必须同时满足：语义对得上 **且** 它自己带的
+        # 具体事实在证据里找得到。
+        # 保守起见：至少 2 个锚点、且**一半以上落空**才判死。单锚点句子不据
+        # 此否决——中文数字和阿拉伯数字的写法差异（「一日三次」vs「每日 3 次」）
+        # 会让一个格式差异毁掉整句判定。
+        sent_anchors = anchors_of(sent)
+        sent_missed = [a for a in sent_anchors if _norm(a) not in ev_norm]
+        anchor_kill = (len(sent_anchors) >= 2
+                       and len(sent_missed) / len(sent_anchors) >= 0.5)
+
+        hit = best >= threshold and not anchor_kill
         grounded_hits += int(hit)
         if ids:
             report.n_cited += 1
@@ -274,6 +342,7 @@ def evaluate(
                 "score": round(best, 3),
                 "ref": best_id,
                 "cited": bool(ids),
+                "missed": sent_missed[:4],
             })
 
     report.n_supported = supported

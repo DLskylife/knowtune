@@ -725,13 +725,19 @@ async function refreshSession() {
 }
 
 
+/* 状态按库取：标定是逐库做的，不带 kb_id 拿到的是全局配置，
+   换库后界面会继续显示上一个库的阈值和 AUC。 */
+function statusUrl() {
+  return state.kbId ? `/api/status?kb_id=${state.kbId}` : "/api/status";
+}
+
 function startWarmPoll() {
   if (warmTimer) return;
   // 2 秒一次，直到就绪。轮询而不是等长超时：冷启动 30 秒和 70 秒都可能，
   // 固定 sleep 要么白等要么不够。
   warmTimer = setInterval(async () => {
     try {
-      const s = await api("/api/status");
+      const s = await api(statusUrl());
       state.status = s;
       renderStatus();
       if (s.embedder?.available) {
@@ -781,24 +787,40 @@ function renderStatus() {
   rr.title = s.rerank.enabled ? s.rerank.default_model : "精排已关闭";
   const pill = $("refusalPill");
   const pillText = $("refusalText");
-  // 三种状态必须分开说，别再显示一个"看起来像个决定"的数字：
+  // 四种状态必须分开说，别再显示一个"看起来像个决定"的数字：
   // advisory 时那个 0.35 低于本语料全部可答分（最低 0.541），除了检索完全空
   // 一次都不会触发。把它渲染成"阈值 0.35"，等于告诉用户有个判定在保护他。
+  // calibrated 时也别只给数字：AUC 才是这个判据有多可信的依据，
+  // 阈值只是 AUC 达标之后才敢用的那个切点。
   const rmode = s.refusal?.mode || (s.refusal_calibrated ? "calibrated" : "advisory");
   const note = s.refusal?.note;
+  const auc = s.refusal?.auc;
+  const n = s.refusal?.n_samples;
   if (rmode === "off") {
     pill.hidden = true;
     pill.title = "";
+  } else if (rmode === "invalid") {
+    pill.hidden = false;
+    pillText.textContent = "拒答判据不成立";
+    pill.title = `留一法标定 AUC ${auc != null ? auc.toFixed(2) : "-"}，`
+      + "低于 0.7 意味着这个分数分不开「库里有答案」和「库里没有」，"
+      + "调阈值只能在误拒和漏拒之间二选一。已停用该判据，只保留「明显不沾边」粗筛。";
   } else if (rmode === "advisory") {
     pill.hidden = false;
     pillText.textContent = "无有效拒答判定";
-    pill.title = (note ? `${note}。` : "拒答阈值还没用评估集标定。")
+    pill.title = (note ? `${note}。` : "拒答阈值还没标定过。")
       + "top1 余弦量的是「话题像不像」，主题相邻的问题分数照样高，分不开该拒的和该答的。"
       + "所以现在只在「明显不沾边」时拦，真正的依据看每份答案的支撑度。";
-  } else if (!s.refusal?.samples_ok) {
+  } else if (rmode === "calibrated") {
     pill.hidden = false;
-    pillText.textContent = `阈值 ${s.refusal.min_score}`;
-    pill.title = "标定样本量不足，参考价值有限。";
+    const weak = s.refusal?.verdict === "weak";
+    pillText.textContent = weak
+      ? `阈值 ${s.refusal.min_score}（弱）`
+      : `阈值 ${s.refusal.min_score}`;
+    pill.title = `留一法标定：AUC ${auc != null ? auc.toFixed(2) : "-"}，${n || 0} 条样本。`
+      + (weak
+        ? "0.70~0.80 属于区分力有限，只当粗筛用。"
+        : "误拒率压到 5% 以内取的最小漏拒点，只当粗筛用——真正的依据看支撑度。");
   } else {
     pill.hidden = true;
     pill.title = "";
@@ -1480,7 +1502,7 @@ async function ask(question) {
               const pct = Math.round(sup.grounded * 100);
               const cls = sup.verdict === "grounded" ? "ok"
                 : (sup.verdict === "unsupported" ? "err" : "warn");
-              bits.push(`<span class="${cls}" title="${esc(supTooltip(sup))}">句句有据 ${pct}%</span>`);
+              bits.push(`<span class="${cls}" title="${esc(supTooltip(sup))}">${pct}% 句有据</span>`);
             }
             // 引用存疑：模型嘴上说没依据、编号挂一串（或单句全引）。
             // 覆盖率数字解释不了的事，这句话解释。
@@ -1560,17 +1582,30 @@ function bindFootActions(foot, obj) {
 function supTooltip(sup) {
   const parts = [];
   if (sup.n_facts) {
-    parts.push(`${sup.n_facts} 句里 ${Math.round(sup.grounded * 100)}% 能在证据中找对应内容`);
+    parts.push(`${sup.n_facts} 句里 ${Math.round(sup.grounded * 100)}% 语义对得上证据`);
   }
   if (sup.n_cited) {
     const s = sup.score == null ? "—" : `${Math.round(sup.score * 100)}%`;
     parts.push(`带引用的 ${sup.n_cited} 句中被接住 ${s}`);
   }
+  if (sup.anchor_rate != null) {
+    // 锚点单独说：它查的是"句子里的型号/剂量/版本号有没有在原文出现过"，
+    // 和余弦是两件事。余弦高但锚点全落空，正是"术语堆砌、事实现编"的形态。
+    parts.push(`事实锚点命中 ${Math.round(sup.anchor_rate * 100)}%`);
+  }
   if (sup.missed && sup.missed.length) {
     parts.push(`证据里没有的事实：${sup.missed.slice(0, 6).join("、")}`);
   }
-  parts.push(`判据：句子与证据块余弦 ≥ ${sup.threshold}`);
-  if (!sup.calibrated) parts.push("阈值是经验值，未用评估集标定");
+  parts.push(`判据：句子与证据块（150 字窗口取最大）余弦 ≥ ${sup.threshold}，`
+    + "且句中事实锚点不得半数落空");
+  if (!sup.calibrated) {
+    parts.push("阈值是经验值，未用留一法标定");
+  } else if (sup.auc != null) {
+    parts.push(`阈值来自留一法标定，AUC ${Number(sup.auc).toFixed(2)}`);
+  }
+  if (sup.auc_fact != null && sup.auc_fact < 0.7) {
+    parts.push("注：余弦对「同一段话里改掉数字」几乎无感，那一层只靠锚点兜");
+  }
   return parts.join("；");
 }
 
@@ -1700,10 +1735,12 @@ function switchTab(name) {
 /* ------------------------------------------------------------------ 数据 */
 
 async function loadKb() {
-  state.status = await api("/api/status");
-  renderStatus();
+  // 先定库再拉状态：/api/status 不带 kb_id 返回的是全局配置，而标定是逐库
+  // 做的。顺序反过来，首屏会先渲染一次"未标定"，就算随后被纠正也会闪一下。
   state.kbs = await api("/api/kb");
   if (!state.kbId && state.kbs.length) state.kbId = state.kbs[0].id;
+  state.status = await api(statusUrl());
+  renderStatus();
   renderKbList();
   if (state.kbId) await loadDocs();
   await loadSessions();
@@ -1723,6 +1760,9 @@ async function selectKb(id) {
   state.kbCfgDraftFor = null;
   state.kbDetail = null;
   renderKbList();
+  // 标定是按库做的：状态里的阈值和 AUC 属于上一个库，不重拉就会一直显示别人的数字
+  state.status = await api(statusUrl());
+  renderStatus();
   await loadDocs();
   // 每个库有自己的固定会话：换库就是换对话，消息要跟着换
   await ensureSession(true);

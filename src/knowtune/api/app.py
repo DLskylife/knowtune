@@ -29,7 +29,17 @@ from fastapi.responses import FileResponse, JSONResponse, Response, StreamingRes
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from ..config import Config, ProviderCfg, calibration_of, load_config, refusal_mode
+from ..config import (
+    Config,
+    ProviderCfg,
+    apply_kb_calibration,
+    calibration_of,
+    calibration_of_kb,
+    calibration_path,
+    defaults_config,
+    load_config,
+    refusal_mode,
+)
 from ..db import Database
 from ..generate import cite as cite_mod
 from ..generate import llm as llm_mod
@@ -464,18 +474,31 @@ class AppState:
         return {k: v for k, v in values.items() if baseline.get(k) != v}
 
     def effective_cfg(self, kb_id: int | None) -> Config:
-        """该知识库实际生效的配置。没有覆盖值时直接返回全局对象本身。"""
+        """该知识库实际生效的配置。没有覆盖值也没有标定时直接返回全局对象本身。"""
         if not kb_id:
             return self.cfg
         overrides = self.overrides(kb_id)
-        if not overrides:
+        calib = calibration_of_kb(self.cfg, kb_id)
+        if not overrides and not calib:
             return self.cfg
-        signature = json.dumps(overrides, sort_keys=True, ensure_ascii=False)
+        # 签名里带上标定文件的修改时间：标定脚本重跑后文件变了、参数没变，
+        # 不给缓存失效的话界面还会显示上一次的阈值，看起来像"标定没生效"。
+        path = calibration_path(self.cfg, kb_id)
+        stamp = f"{path.stat().st_mtime_ns}" if path.exists() else "-"
+        signature = stamp + json.dumps(overrides, sort_keys=True, ensure_ascii=False)
         with self._kbcfg_lock:
             hit = self._kbcfg.get(int(kb_id))
             if hit and hit[0] == signature:
                 return hit[1]
         clone = kbconfig.effective(self.cfg, overrides)
+        # 谁能盖过标定结果：只有**用户显式改过**的参数。
+        # 库里的 config_json 通常是全量快照（老库迁移时会写成一整套），
+        # 把整份 overrides 当"手动值"就等于标定永远不生效——之前 min_score
+        # 明明标成了 0.69，界面也显示 calibrated，实际跑的还是快照里那个 0.35。
+        # 所以判据是"与出厂值不同"，而不是"键存在"。
+        base = kbconfig.baseline(defaults_config())
+        manual = {k for k, v in overrides.items() if k in base and base[k] != v}
+        apply_kb_calibration(clone, calib, skip=frozenset(manual))
         with self._kbcfg_lock:
             self._kbcfg[int(kb_id)] = (signature, clone)
         return clone
@@ -584,10 +607,30 @@ def index() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html")
 
 
+def _refusal_note(cfg: Config, kb_id: int | None) -> str | None:
+    """为什么当前是这个阈值。界面需要一句能读懂的话，而不是一个数字。"""
+    if cfg.refusal.calibrated_at:
+        return None
+    if cfg.refusal.verdict == "invalid":
+        return (f"标定完成，但 AUC {cfg.refusal.auc:.2f} 说明这个信号分不开"
+                f"「有答案」和「没答案」，已停用该判据")
+    # 带了 kb_id 就只谈这个库。旧的全局标定文件（22 条样本、reliable:false）
+    # 跟按库标定是两套东西，混进来会让"本库没标定"被误报成"标定样本不足"。
+    if kb_id:
+        if calibration_path(cfg, kb_id).exists():
+            return "标定文件是另一个嵌入模型做的，阈值不通用，需重跑标定"
+        return "本库尚未标定，阈值是出厂值"
+    if calibration_of(cfg) is not None:
+        return "全局标定样本不足，已回退出厂阈值"
+    return "尚未标定，使用出厂阈值"
+
+
 @app.get("/api/status")
-def status() -> dict:
+def status(kb_id: int | None = None) -> dict:
     conn = state.conn
-    cfg = state.cfg
+    # 给了 kb_id 就报该库的生效值：标定是按库做的，拿全局配置回答
+    # "标定过没有"会答错一整类问题（A 库标过、B 库没标）。
+    cfg = state.effective_cfg(kb_id) if kb_id else state.cfg
     counts = conn.execute(
         "SELECT (SELECT count(*) FROM kb) AS kbs,"
         " (SELECT count(*) FROM document) AS docs,"
@@ -606,6 +649,9 @@ def status() -> dict:
         "chunks": counts["chunks"],
         "embedder": {
             "model": cfg.embedding.model,
+            # 标定文件按「模型@维度」认亲，换模型后旧阈值一律作废。把指纹直接
+            # 给出去，标定脚本就不用自己拼（拼错了会写出一个永远匹配不上的文件）
+            "fingerprint": f"{cfg.embedding.model}@{cfg.embedding.dim}",
             "available": bool(dim_ok),
             "error": state.embedder.error,
             "warmup": {
@@ -635,23 +681,31 @@ def status() -> dict:
             "min_margin": cfg.refusal.min_margin,
             "calibrated_at": cfg.refusal.calibrated_at,
             "samples_ok": cfg.refusal.calibrated_samples_ok,
-            # off / calibrated / advisory。前端据此决定那颗 pill 显示阈值还是
-            # 直接说「无有效判定」——显示一个永不触发的数字比不显示更误导。
+            # off / calibrated / advisory / invalid。前端据此决定那颗 pill 显示
+            # 阈值、还是直接说「无有效判定」——显示一个永不触发的数字比不显示更误导。
             "mode": refusal_mode(cfg),
+            # AUC 是比阈值更根本的东西：阈值可以调，信号有没有区分力不能调。
+            # 界面写「AUC 0.85 · 65 样本」比写「阈值 0.62」诚实得多。
+            "auc": cfg.refusal.auc,
+            "verdict": cfg.refusal.verdict,
+            "n_samples": cfg.refusal.n_samples,
             # 有标定文件但样本不足时，界面上要说清"为什么现在用的是出厂阈值"，
             # 否则用户只会看到阈值和他上次标定的数字不一样，以为程序没保存。
-            "note": (
-                None if cfg.refusal.calibrated_at
-                else ("标定样本不足，已回退出厂阈值" if calibration_of(cfg) else "尚未标定，使用出厂阈值")
-            ),
+            "note": _refusal_note(cfg, kb_id),
         },
         "support": {
             "enabled": cfg.support.enabled,
             "threshold": cfg.support.threshold,
             "weak_ratio": cfg.support.weak_ratio,
-            # 句级阈值是经验值，没有评估集扫过。界面必须标出来，否则用户会
-            # 把它当成和下面 refusal.min_score 一样"标定出来的"数字。
-            "calibrated": False,
+            # 语义层：句子和它引用的块是不是同一件事。这一层能标定，也确实分得开。
+            "auc": cfg.support.auc,
+            # 事实层：块没变、句子里的事实被换掉。余弦对这事近乎无感，
+            # 所以这个数天生接近 0.5——它不是缺陷报告，是分工说明。
+            "auc_fact": cfg.support.auc_fact,
+            "anchor_catch": cfg.support.anchor_catch,
+            "verdict": cfg.support.verdict,
+            "n_samples": cfg.support.n_samples,
+            "calibrated": bool(cfg.support.auc is not None),
         },
         "uptime_s": int(time.time() - state.started_at),
         "params": {
@@ -1501,9 +1555,39 @@ def kb_config(kb_id: int) -> dict:
     row = state.conn.execute("SELECT id FROM kb WHERE id=?", (kb_id,)).fetchone()
     if not row:
         raise HTTPException(404, "知识库不存在")
-    return kbconfig.snapshot(
+    data = kbconfig.snapshot(
         state.cfg, kbconfig.load_full(state.conn, kb_id, state.cfg)
     )
+    # 面板里显示的是"这个库存的参数值"，而标定是叠在上面的另一层：存的可能是
+    # 出厂 0.35，实际跑的是标定出来的 0.692。两个数不一样却都不显示，用户
+    # 打开面板只会更困惑。所以在这里把"实际生效值"写进参数说明。
+    calib = calibration_of_kb(state.cfg, kb_id)
+    if calib:
+        ref = calib.get("refusal") or {}
+        sup = calib.get("support") or {}
+        notes = {}
+        if ref.get("min_score") is not None and ref.get("verdict") != "invalid":
+            notes["refusal.min_score"] = (
+                f"本库已用留一法标定：实际生效 {ref['min_score']}"
+                f"（AUC {ref.get('auc')}，{ref.get('n_samples')} 组探针，"
+                f"误拒 {ref.get('false_refusal_rate', 0):.1%} / "
+                f"漏拒 {ref.get('missed_refusal_rate', 0):.1%}）。"
+                "改动这里的值会覆盖标定结果。")
+        if sup.get("threshold") is not None and sup.get("verdict") != "invalid":
+            notes["support.threshold"] = (
+                f"本库已标定：实际生效 {sup['threshold']}（AUC {sup.get('auc')}；"
+                f"事实层 AUC {sup.get('auc_fact')}，那一层靠锚点兜）。"
+                "改动这里的值会覆盖标定结果。")
+        marked = set()
+        for g in data.get("groups", []):
+            for it in g.get("items", []):
+                extra = notes.get(it.get("key"))
+                if extra:
+                    it["desc"] = (it.get("desc") or "") + " " + extra
+                    it["calibrated"] = True
+                    marked.add(it["key"])
+        data["calibrated_keys"] = sorted(marked)
+    return data
 
 
 @app.patch("/api/kb/{kb_id}/config")
@@ -2837,6 +2921,72 @@ def search_debug(req: DebugRequest) -> dict:
     payload = _debug_payload(result, cfg, state.tuned(req.kb_id))
     payload["total_ms"] = int((time.perf_counter() - started) * 1000)
     return payload
+
+
+class SupportProbe(BaseModel):
+    """句 × 块的余弦矩阵。标定 support 阈值时用，不做任何判定。"""
+
+    sentences: list[str] = Field(min_length=1, max_length=300)
+    blocks: list[str] = Field(min_length=1, max_length=300)
+    block_chars: int = Field(default=600, ge=100, le=4000)
+    # >0 时按「块内滑窗、每块取窗口最大分」计算——与运行时口径一致。
+    # 0 表示整块算，只用于对照实验。
+    window: int = Field(default=0, ge=0, le=2000)
+    step: int = Field(default=0, ge=0, le=1000)
+
+
+@app.post("/api/search/debug/support")
+def support_probe(req: SupportProbe) -> dict:
+    """把「这句有没有被那块支撑」的原始分数交出来。
+
+    存在的理由：support 阈值只能用**你这个库的句对分布**扫，而扫的时候要
+    几千对句子乘块。让标定脚本自己装一套 torch + 嵌入模型来算余弦，是把
+    几十行的活变成几个 G 的依赖；这里已经把模型加载好了，直接问它。
+
+    只返回分数，不返回向量——向量除了算余弦没别的用，传出去只是把接口
+    变成一个免费的 embedding 代理。
+    """
+    import numpy as np
+
+    emb = state.engine.embedder
+    try:
+        if not emb.available:
+            emb.load()
+        trimmed = [b[: req.block_chars] for b in req.blocks]
+        if req.window:
+            step = req.step or max(1, req.window // 2)
+            win_texts: list[str] = []
+            owner: list[int] = []
+            for bi, b in enumerate(trimmed):
+                for w in support_mod.split_windows(b, req.window, step):
+                    win_texts.append(w)
+                    owner.append(bi)
+            probe_units = win_texts
+        else:
+            owner = list(range(len(trimmed)))
+            probe_units = trimmed
+        texts = list(req.sentences) + probe_units
+        vecs = np.asarray(emb.encode(texts), dtype=np.float32)
+    except Exception as exc:
+        raise HTTPException(503, f"嵌入模型不可用：{type(exc).__name__}: {exc}") from exc
+    if vecs.ndim != 2 or len(vecs) != len(texts):
+        raise HTTPException(500, "编码结果与输入数量不符")
+    vecs = vecs / np.maximum(np.linalg.norm(vecs, axis=1, keepdims=True), 1e-9)
+    ns = len(req.sentences)
+    raw = vecs[:ns] @ vecs[ns:].T
+    if req.window:
+        own = np.asarray(owner)
+        sims = np.stack(
+            [raw[:, own == bi].max(axis=1) for bi in range(len(req.blocks))], axis=1)
+    else:
+        sims = raw
+    return {
+        "sims": [[round(float(x), 4) for x in row] for row in sims],
+        "n_sent": ns,
+        "n_block": len(req.blocks),
+        "n_window": int(sims.shape[1] if not req.window else len(probe_units)),
+        "model": f"{state.cfg.embedding.model}@{state.cfg.embedding.dim}",
+    }
 
 
 def _debug_chunk_info(conn, chunk_ids: list[int]) -> dict[int, dict]:
