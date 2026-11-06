@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import json
+import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -41,9 +42,67 @@ _ERROR_HINTS = {
     "connect": "端口上没有服务在监听（进程没起，或地址写错）",
     "timeout": "连接超时：端口没有响应（服务没起、被防火墙丢弃，或模型还在加载）",
     "404": "服务在跑，但这个路径没有 /models —— 大概率 base_url 少了 /v1",
-    "401": "鉴权失败：检查环境变量里的密钥",
-    "403": "服务拒绝访问：检查密钥权限或来源限制",
+    # 旧文案写"检查环境变量里的密钥"。密钥是用户在弹窗里填的、存在内存或
+    # secrets.json 里，根本不经过环境变量——照着这句话去找，只会找到一片空地。
+    "401": "密钥被拒绝（没复制全、已失效/被停用，或不属于这个站点）",
+    "403": "密钥有效但没权限（模型未开通、账户欠费，或来源 IP 受限）",
 }
+
+
+def _srv_detail(resp: httpx.Response, limit: int = 180) -> str:
+    """捞出服务端自己写的错误消息。
+
+    以前这里把 body 整个丢掉，只留一句自编提示。硅基流动返回的是
+    `{"code":30014,"message":"Token is invalid."}`——一句话就点明了是密钥，
+    我们却翻译成"检查环境变量里的密钥"，把唯一准确的线索扔了。
+    """
+    try:
+        text = resp.text or ""
+    except Exception:  # noqa: BLE001 - 读不到 body 不值得让探测失败
+        return ""
+    msg = ""
+    try:
+        body = resp.json()
+    except Exception:  # noqa: BLE001
+        body = None
+    if isinstance(body, dict):
+        err = body.get("error")
+        for cand in (
+            body.get("message"), body.get("msg"), body.get("detail"),
+            err.get("message") if isinstance(err, dict) else err,
+        ):
+            if isinstance(cand, str) and cand.strip():
+                msg = cand.strip()
+                break
+        if not msg and body.get("code") is not None:
+            msg = f"code={body['code']}"
+    if not msg:
+        msg = " ".join(text.split())[:limit]
+    # 有些网关会把密钥回显在错误里。原样展示等于把它写进界面和日志。
+    msg = re.sub(r"sk-[A-Za-z0-9_\-]{6,}", "sk-***", msg)
+    return msg[:limit]
+
+
+def _key_shape(key: str) -> str:
+    """给用户一面镜子：只说形态，不泄露本体。
+
+    401 的常见原因不是"密钥错"，而是"密钥不完整"——少了后半截、末尾带着
+    换行、从网页或聊天记录里复制时混进全角字符。光看"鉴权失败"四个字，
+    谁也查不出来；报出长度和异常字符，用户一眼就能看出"我填的怎么只有 20 位"。
+    """
+    raw = key or ""
+    s = raw.strip()
+    bits = [f"长度 {len(s)}"]
+    if len(raw) != len(s):
+        bits.append("首尾有空白")
+    weird = [c for c in s if not (c.isascii() and not c.isspace())]
+    if weird:
+        shown = "".join(dict.fromkeys(weird))[:4]
+        bits.append(f"含非 ASCII 或内部空白 {shown!r}")
+    if s and not s.startswith("sk-"):
+        bits.append("不是 sk- 开头")
+    bits.append(f"指纹 {hashlib.sha256(s.encode('utf-8', 'ignore')).hexdigest()[:8]}")
+    return "，".join(bits)
 
 
 def _classify(exc: Exception) -> tuple[str, str]:
@@ -53,7 +112,11 @@ def _classify(exc: Exception) -> tuple[str, str]:
         return "timeout", _ERROR_HINTS["timeout"]
     if isinstance(exc, httpx.HTTPStatusError):
         code = exc.response.status_code
-        return "error", f"HTTP {code}：{_ERROR_HINTS.get(str(code), '服务返回了错误')}"
+        msg = f"HTTP {code}：{_ERROR_HINTS.get(str(code), '服务返回了错误')}"
+        detail = _srv_detail(exc.response)
+        if detail:
+            msg += f"｜服务端原话：{detail}"
+        return "error", msg
     return "error", f"{type(exc).__name__}: {exc}"
 
 
@@ -239,10 +302,15 @@ def probe_one(
                       models_total=len(ids), model_listed=listed)
     except Exception as exc:  # noqa: BLE001 - 探测必须吞掉一切异常
         status, message = _classify(exc)
-        code = getattr(exc, "response", None)
-        code = getattr(code, "status_code", None) if code is not None else None
+        resp = getattr(exc, "response", None)
+        code = getattr(resp, "status_code", None) if resp is not None else None
         if auth_miss and (code in (401, 403) or "401" in message or "403" in message):
             status, message = "no_key", "这个服务要鉴权，但还没填密钥——在弹窗里填 API Key 再探测"
+        elif code in (401, 403) and key:
+            # 密钥填了却被拒：把"我们实际发出去的那把密钥长什么样"报出来。
+            # 这是用户唯一能自查的东西——服务端只会说 invalid，不会告诉他
+            # 自己只粘了一半。
+            message += f"｜本次用的密钥：{_key_shape(key)}"
         result.update(
             status=status, ok=False,
             latency_ms=int((time.perf_counter() - started) * 1000),

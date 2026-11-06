@@ -5531,7 +5531,7 @@ async function openModelEditor(name) {
       if (!/^[a-z][a-z0-9_-]{1,23}$/.test(newName)) {
         throw new Error("名字只能用小写字母、数字、- 和 _，2-24 个字符（它会被写进配置文件）");
       }
-      const keyInput = ($("mKey").value || "").trim();
+      const keyInput = readKey();
       const payload = {
         base_url: $("mBase").value.trim(),
         model: $("mModel").value.trim(),
@@ -5607,6 +5607,20 @@ async function openModelEditor(name) {
       $("mKeyTip").innerHTML = "保存后会删掉内存里的密钥。";
     };
   }
+  // 密钥里不可能有空白，也不可能是全角字符。从聊天记录、网页、PDF 复制时
+  // 常带进末尾一整行换行或全角空格——发送时它们被当成密钥的一部分，
+  // 服务端回 401，而用户看到的密钥"肉眼完全正确"。就地擦掉，比事后解释便宜。
+  const readKey = () => {
+    const raw = ($("mKey").value || "");
+    const clean = raw.replace(/\s+/g, "").replace(/[^\x21-\x7e]/g, "");
+    if (clean !== raw) {
+      const tip = $("mKeyTip");
+      if (tip) {
+        tip.innerHTML = `已自动去掉密钥里 <b>${raw.length - clean.length}</b> 个空白或全角字符（复制时常带进来）。`;
+      }
+    }
+    return clean;
+  };
   $("mKey").oninput = () => { if ($("mKey").value.trim()) keyCleared = false; };
 
   /* 模型清单：抄 ccswitch 的做法——**清单是人维护的候选表**，探测只负责验证。
@@ -5857,7 +5871,7 @@ async function openModelEditor(name) {
       const r = await jsonPost("/api/services/probe-url", {
         base_url: $("mBase").value.trim(),
         // 探测用的密钥就是刚敲进去的那份：留空时后端会退到已存的内存密钥
-        api_key: $("mKey").value.trim(),
+        api_key: readKey(),
         kind: $("mKind").value,
         model: $("mModel").value.trim(),
         name: cur ? cur.name : "",
