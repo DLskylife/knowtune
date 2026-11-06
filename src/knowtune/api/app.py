@@ -683,6 +683,14 @@ def status(kb_id: int | None = None) -> dict:
                 for name, p in cfg.generation.providers.items()
             },
         },
+        # 库参数里写的后端名可能压根不存在（参数面板允许先填名字、后加端点）。
+        # 那一步不会报错，报错发生在用户提问的那一刻——所以这里提前说出来。
+        "generation": {
+            "provider": cfg.generation.provider,
+            "configured": bool(cfg.generation.provider)
+            and cfg.generation.provider in cfg.generation.providers,
+            "known": sorted(cfg.generation.providers),
+        },
         "rerank": {
             "enabled": cfg.retrieval.rerank.enabled,
             # 全局值也报一份：库参数是独立快照，"全局开着、本库关着"是常态，

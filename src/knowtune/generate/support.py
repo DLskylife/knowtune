@@ -68,6 +68,13 @@ _CLI_FLAG = re.compile(r"--[A-Za-z][\w-]*")
 # 文件名不是事实锚点：答案里写《xxx.pdf》而证据正文不含文件名，是正常的，
 # 不该算"编造"。第一版实测就被 luckclub.pdf 这类误报拉低了锚点命中率。
 _FILE_NAME = re.compile(r"\.(pdf|docx?|xlsx?|pptx?|md|txt|csv|json|html?|zip)$", re.I)
+# 引用指代也不是事实。「以上内容出自第 1 条资料」里的「1 条」会被数字单位规则
+# 抓成锚点，然后在证据里找不到，把一句本来有据的话判成编造——而"根据第 N 条
+# 资料"恰恰是模型最爱的句式，等于每答一次就自伤一次。
+_REF_POINTER = re.compile(r"第\s*\d+\s*(?:条|项|页|段|句|处|篇)")
+# 书名号里放的是文档名，不是内容。整段剥掉，顺手解决「《xx.md》」被英文 token
+# 规则拆出个孤零零的 "md" 的问题——那碎片同样会被算作缺失锚点。
+_SOURCE_TITLE = re.compile(r"《[^》]{0,80}》")
 # 送进编码器的块长度上限。块常被切成多窗口再平均，一次问答要多付几百毫秒
 # （实测 5 块 + 7 句要 1.2 秒）。判定"这句话有没有被这块支撑"用不到整块——
 # 答案句对应的通常就是其中一段。
@@ -133,10 +140,14 @@ def _norm(text: str) -> str:
 def split_facts(answer: str) -> list[str]:
     """切出事实句。带不带引用都算——`grounded` 要覆盖整个答案。
 
-    剔掉两类不是句子的东西：
+    剔掉三类不是句子的东西：
     - OCR 碎片：PDF 抽出来的标题常带字间空格（「古 籍 典 藏 · 原 文」）。它的
       相似度天然偏低，留着会把分母撑大、把分数压低，看起来像"答案没依据"；
-    - 结构性引导语：见 STRUCT_PREFIX。
+    - 结构性引导语：见 STRUCT_PREFIX；
+    - **元话语**：「以上内容出自第 1 条资料」这种句子是在描述自己的引用动作，
+      不是陈述事实。它必然找不到语义支撑，留在分母里等于每答一次自扣一分。
+      判据是"把引用动作剥掉之后还剩多少实质内容"，不是列关键词——关键词列
+      不全，而剥引用这一步反正锚点也要做。
     """
     out: list[str] = []
     for raw in SENT_SPLIT.split(answer or ""):
@@ -146,6 +157,11 @@ def split_facts(answer: str) -> list[str]:
         if s.startswith(STRUCT_PREFIX):
             continue
         if s.count(" ") / len(s) > 0.25:
+            continue
+        core = _SOURCE_TITLE.sub("", s)
+        core = _REF_POINTER.sub("", core)
+        core = CITE_RE.sub("", core)
+        if len(core.strip(" ，。、；：·（）()")) < FACT_MIN_CHARS:
             continue
         out.append(s)
     return out
@@ -160,6 +176,11 @@ def anchors_of(text: str) -> list[str]:
     按长度去重：`80GB` 会同时被英文 token 和数字单位两条规则抓到，再被拆出
     一个 `GB` 碎片。碎片留在列表里会让"缺失 4 个"看起来比实际严重。
     """
+    # 先剥掉「引用动作」本身：方括号编号、书名号里的文档名、「第 N 条资料」。
+    # 它们描述的是"我在引用"，不是"我在陈述事实"，混进锚点就是自伤。
+    text = _SOURCE_TITLE.sub("", text or "")
+    text = _REF_POINTER.sub("", text)
+    text = CITE_RE.sub("", text)
     toks: list[str] = []
     for pat in (_CLI_FLAG, _VERSION, _NUM_UNIT, _EN_TOKEN):
         toks.extend(m.group(0).strip() for m in pat.finditer(text or ""))

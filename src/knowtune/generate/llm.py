@@ -136,7 +136,13 @@ class LLMClient:
         name, _model = roles_mod.split(provider)
         name = name or self.cfg.generation.provider
         if name not in self.cfg.generation.providers:
-            raise LLMError(f"未知 provider: {name}")
+            # 「未知 provider: siliconflow」这种话对用户零帮助：他不知道是名字
+            # 打错了、还是根本没配过、还是配在别的机器上。把两条出路直接写出来。
+            known = "、".join(self.cfg.generation.providers) or "一个都没配"
+            raise LLMError(
+                f"模型服务「{name}」不存在（已配置：{known}）。"
+                "到「模型服务」页添加端点，或在参数面板把本库的生成后端改成已配置的那个。"
+            )
         return name, self.cfg.generation.providers[name]
 
     def _target(self, provider: str | None, model: str | None) -> tuple[str, ProviderCfg, str | None]:

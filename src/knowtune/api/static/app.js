@@ -797,6 +797,23 @@ function renderStatus() {
     if (s.rerank.last_error) bits.push(`⚠ ${s.rerank.last_error}`);
     rr.title = bits.join(" · ");
   }
+
+  // 生成后端缺失时，提问会一路跑到"模型服务不存在"。与其让用户在那个时刻
+  // 才看到报错，不如状态栏先红：他至少知道该先去配端点，而不是怀疑检索坏了。
+  const gen = s.generation || {};
+  const gb = $("statGen");
+  const gd = $("genDot");
+  if (gen.configured) {
+    gb.textContent = gen.provider;
+    gb.title = `当前生成后端：${gen.provider}`;
+    gd.className = "dot ok";
+  } else {
+    gb.textContent = gen.provider ? "未配置" : "未选择";
+    gb.title = gen.provider
+      ? `参数里写的是「${gen.provider}」，但模型服务里没有这个端点（已配：${(gen.known || []).join("、") || "一个都没有"}）。到「模型服务」页添加，或改本库的生成后端。`
+      : "还没有选择生成后端。到「模型服务」页添加一个端点。";
+    gd.className = "dot err";
+  }
   const pill = $("refusalPill");
   const pillText = $("refusalText");
   // 四种状态必须分开说，别再显示一个"看起来像个决定"的数字：
