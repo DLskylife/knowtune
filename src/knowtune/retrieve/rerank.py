@@ -11,7 +11,9 @@ D5 已确认：默认 base 档，复杂任务按请求切 m3。所以重排器�
 
 from __future__ import annotations
 
+import hashlib
 import threading
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeout
 from pathlib import Path
@@ -22,10 +24,14 @@ from ..config import Config
 
 
 class RerankResult:
-    def __init__(self, scores: list[float] | None, model: str, degraded: str | None) -> None:
+    def __init__(self, scores: list[float] | None, model: str, degraded: str | None,
+                 cached: int = 0) -> None:
         self.scores = scores
         self.model = model
         self.degraded = degraded
+        # 本轮有多少对（问题, 片段）直接命中缓存、没走模型——给排障一个
+        # "精排为什么这次是 0ms" 的直读答案，不用去翻日志猜。
+        self.cached = cached
 
 
 class Reranker:
@@ -36,6 +42,19 @@ class Reranker:
         self._lock = threading.Lock()
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="rerank")
         self._last_error: str | None = None
+        # 逐对缓存：(模型, 问题摘要, 片段摘要) -> 分数。CrossEncoder 给一对文本
+        # 打分，与这批候选里还有哪些片段无关，所以同问重提、示例问题、超时重试
+        # 都能整轮命中；换个问题也能命中两问共有的那些片段（检索候选高度重叠
+        # 是这个库的常态）。键用文本摘要而不是 chunk_id：重建索引后 chunk_id
+        # 可能复用，拿旧分给新文本就是悄悄给错答案排序。摘要是 16 字节 hex，
+        # 撞上的概率远低于模型自己打错分的概率。
+        self._cache: OrderedDict[tuple[str, str, str], float] = OrderedDict()
+        self._cache_cap = 4096
+        self._cache_lock = threading.Lock()
+
+    @staticmethod
+    def _digest(text: str) -> str:
+        return hashlib.blake2b(text.encode("utf-8"), digest_size=8).hexdigest()
 
     @property
     def last_error(self) -> str | None:
@@ -137,24 +156,47 @@ class Reranker:
             self._failed.add(model_name)
             return RerankResult(None, model_name, "rerank_load_failed")
 
-        pairs = [(query, d) for d in docs]
-        future = self._executor.submit(
-            model.predict, pairs, batch_size=cfg.batch_size, show_progress_bar=False
-        )
-        try:
-            raw = future.result(timeout=cfg.timeout_s)
-        except FutureTimeout:
-            self._last_error = f"精排超时（>{cfg.timeout_s}s，模型 {model_name}）"
-            return RerankResult(None, model_name, "rerank_timeout")
-        except Exception as exc:
-            self._last_error = f"精排执行失败：{type(exc).__name__}: {exc}"
-            return RerankResult(None, model_name, "rerank_failed")
+        q_hash = self._digest(query)
+        keys = [(model_name, q_hash, self._digest(d)) for d in docs]
+        scores: list[float | None] = [None] * len(docs)
+        todo: list[int] = []
+        with self._cache_lock:
+            for i, k in enumerate(keys):
+                hit = self._cache.get(k)
+                if hit is None:
+                    todo.append(i)
+                else:
+                    self._cache.move_to_end(k)
+                    scores[i] = hit
+        cached_n = len(docs) - len(todo)
 
-        scores = np.asarray(raw, dtype=np.float32).reshape(-1).tolist()
-        if len(scores) != len(docs):
-            self._last_error = f"精排返回数量不符：{len(scores)} vs {len(docs)}"
-            return RerankResult(None, model_name, "rerank_bad_output")
-        return RerankResult(scores, model_name, None)
+        if todo:
+            pairs = [(query, docs[i]) for i in todo]
+            future = self._executor.submit(
+                model.predict, pairs, batch_size=cfg.batch_size, show_progress_bar=False
+            )
+            try:
+                raw = future.result(timeout=cfg.timeout_s)
+            except FutureTimeout:
+                self._last_error = f"精排超时（>{cfg.timeout_s}s，模型 {model_name}）"
+                return RerankResult(None, model_name, "rerank_timeout", cached_n)
+            except Exception as exc:
+                self._last_error = f"精排执行失败：{type(exc).__name__}: {exc}"
+                return RerankResult(None, model_name, "rerank_failed", cached_n)
+
+            fresh = np.asarray(raw, dtype=np.float32).reshape(-1).tolist()
+            if len(fresh) != len(todo):
+                self._last_error = f"精排返回数量不符：{len(fresh)} vs {len(todo)}"
+                return RerankResult(None, model_name, "rerank_bad_output", cached_n)
+            with self._cache_lock:
+                for i, sc in zip(todo, fresh):
+                    val = float(sc)
+                    scores[i] = val
+                    self._cache[keys[i]] = val
+                    self._cache.move_to_end(keys[i])
+                while len(self._cache) > self._cache_cap:
+                    self._cache.popitem(last=False)
+        return RerankResult(scores, model_name, None, cached_n)
 
 
 def mmr_select(

@@ -54,6 +54,9 @@ class RetrievalResult:
     degraded: list[str] = field(default_factory=list)
     rerank_model: str | None = None
     rerank_used: bool = False
+    # 精排里有多少对（问题, 片段）命中了进程内缓存、没走模型。
+    # rerank_ms 突然从 3000 掉到 1 时，看这个字段就知道是缓存还是出了别的事。
+    rerank_cached: int = 0
     refusal: RefusalDecision | None = None
 
 
@@ -349,6 +352,7 @@ class RetrievalEngine:
                 query, doc_texts, model_name=rerank_model or rcfg.rerank.model
             )
             result.rerank_model = rr.model
+            result.rerank_cached = rr.cached
             if rr.scores is None:
                 degraded.append(rr.degraded or "rerank_failed")
                 result.rerank_used = False

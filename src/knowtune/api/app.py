@@ -3207,6 +3207,7 @@ def _debug_payload(result, cfg: Config | None = None, overrides: dict | None = N
             "fusion_top_k": cfg.retrieval.fusion.top_k,
             "rerank_model": result.rerank_model,
             "rerank_used": result.rerank_used,
+            "rerank_cached": result.rerank_cached,
             "refusal_min_score": cfg.refusal.min_score,
             "refusal_min_margin": cfg.refusal.min_margin,
             "kb_overrides": len(overrides or {}),

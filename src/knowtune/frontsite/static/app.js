@@ -22,7 +22,7 @@
 
 /* 构建号：和 index.html 里那份必须一致，不一致说明浏览器拿的是旧 JS，
    页面加载完会强制换一次（见 index.html 里的自检脚本）。 */
-window.SITE_BUILD = "1.7.8";
+window.SITE_BUILD = "1.7.9";
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
@@ -727,22 +727,41 @@ function renderRich(text) {
   return `<div class="md">${out.join("")}</div>`;
 }
 
+/* 同一篇文档可能被切进好几条引用（[2][3][4] 全是《宫颈肿指南》），逐条列出来
+   的来源面板又长又显得"怎么都是同一篇"。这里按文档归组：一篇一行，行首把
+   它贡献的编号并排摆出来，预览取排位最前的那一段。编号本身不动——正文里的
+   [n] 仍按 chunk 槽位编号，点击定位靠 data-ns 匹配整组。 */
+function groupCitations(citations) {
+  const byDoc = new Map();
+  for (const c of citations || []) {
+    const key = c.doc_title || "";
+    let g = byDoc.get(key);
+    if (!g) { g = { doc_title: key, items: [], ns: [] }; byDoc.set(key, g); }
+    g.items.push(c);
+    g.ns.push(c.n);
+  }
+  return [...byDoc.values()];
+}
+
 function sourcesBar(citations) {
   if (!citations || !citations.length) return null;
   const det = document.createElement("details");
   det.className = "srcs";
-  const items = citations.map((c) => {
-    const head = [c.doc_title, c.page_no ? `${c.page_no}` : "", c.heading_path || ""]
+  const groups = groupCitations(citations);
+  const items = groups.map((g) => {
+    const first = g.items[0];
+    const head = [g.doc_title, first.page_no ? `${first.page_no}` : "", first.heading_path || ""]
       .filter(Boolean).join(" · ");
-    return `<li class="src-item" data-n="${esc(c.n)}">
-        <span class="n">${esc(c.n)}</span>
+    const ns = g.ns.map((n) => `<span class="n">${esc(n)}</span>`).join("");
+    return `<li class="src-item" data-n="${esc(g.ns[0])}" data-ns="${esc(g.ns.join(","))}">
+        <div class="src-ns">${ns}</div>
         <div class="src-body">
           <div class="src-head" dir="auto">${esc(head)}</div>
-          <div class="src-prev" dir="auto">${esc(c.preview || "")}</div>
+          <div class="src-prev" dir="auto">${esc(first.preview || "")}</div>
         </div>
       </li>`;
   }).join("");
-  det.innerHTML = `<summary>${esc(t.srcCount(citations.length))}<span class="caret"></span></summary>
+  det.innerHTML = `<summary>${esc(t.srcCount(groups.length))}<span class="caret"></span></summary>
     <ul>${items}</ul>`;
   return det;
 }
@@ -901,7 +920,7 @@ function relabelBot(bot) {
 
   const sum = bot.querySelector(".srcs summary");
   if (sum && rec && rec.cit && rec.cit.length) {
-    sum.firstChild.textContent = t.srcCount(rec.cit.length);
+    sum.firstChild.textContent = t.srcCount(groupCitations(rec.cit).length);
   }
 
   const lw = bot.querySelector(".loop-warn:not(.tr-warn)");
@@ -1348,7 +1367,13 @@ document.addEventListener("click", (e) => {
     const det = bot && bot.querySelector(".srcs");
     if (!det) return;
     det.open = true;
-    const item = det.querySelector(`.src-item[data-n="${btn.dataset.n}"]`);
+    const want = String(btn.dataset.n);
+    let item = null;
+    det.querySelectorAll(".src-item").forEach((it) => {
+      if (item) return;
+      const ns = (it.dataset.ns || it.dataset.n || "").split(",").map((x) => x.trim());
+      if (ns.includes(want)) item = it;
+    });
     if (!item) return;
     item.scrollIntoView({ block: "nearest", behavior: "smooth" });
     item.classList.remove("flash");
