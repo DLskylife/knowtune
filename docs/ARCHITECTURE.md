@@ -2,6 +2,7 @@
 
 > 对应需求规格说明书 F1–F5。本文是 Phase 0（需求锚定）+ Phase 1（架构设计）的交付物。
 > 状态：v0.1 已交付（259 条单测全绿），设计与实测数据持续更新。
+> 注：`scripts/`（开发运维脚本）与 `tests/`（单测）已在精简版仓库中移除，下文提及它们处均为当时的开发记录，工具本身不再随仓库提供；`evals/` 保留。
 
 ---
 
@@ -2590,10 +2591,10 @@ F1–F5 的逐条对照见 **§14**（含未完成项与原因）。
 
 ### 13.4 环境限制（非代码问题）
 
-本机 `huggingface.co` 直连返回 502（代理拦截），`hf-mirror.com` 可达但 `huggingface_hub` 的 Xet 下载路径会失败。最终用 `scripts/fetch_model.sh`（curl 直取 + 镜像）把 `bge-small-zh-v1.5` 下到 `data/models/`，`embedding.local_path` 指向本地即可。**`bge-reranker-base` 尚未下载**，所以当前所有请求都在 `rerank_model_missing` 降级路径上——这不是 bug，是缺模型。补下载只需：
+本机 `huggingface.co` 直连返回 502（代理拦截），`hf-mirror.com` 可达但 `huggingface_hub` 的 Xet 下载路径会失败。当时用 `scripts/fetch_model.sh`（curl 直取 + 镜像）把 `bge-small-zh-v1.5` 下到 `data/models/`，`embedding.local_path` 指向本地即可（该脚本已在精简版移除，等价命令见下）。**`bge-reranker-base` 尚未下载**，所以当前所有请求都在 `rerank_model_missing` 降级路径上——这不是 bug，是缺模型。补下载只需：
 
 ```bash
-./scripts/fetch_model.sh BAAI/bge-reranker-base
+huggingface-cli download BAAI/bge-reranker-base --local-dir data/models/BAAI--bge-reranker-base
 ```
 
 ---

@@ -55,8 +55,6 @@ cli.py  ← 命令行
 | `config/` | 全部配置：默认值、本机覆盖、模型注册表、站点实例、提示词 | 不能 |
 | `data/` | 运行期数据：数据库、上传原件、模型权重、密钥、标定结果 | 不能（删了等于重建库） |
 | `evals/` | 评估题集与基线结果 | 不能（没有基线就无法判断改动是好是坏） |
-| `tests/` | 单测（259 条） | 不能 |
-| `scripts/` | 开发与运维工具（截图、冒烟、校准、WBS 生成） | 可删，但删了下次改 UI 要重写 |
 | `docs/` | 架构文档、WBS、本文件 | 不能 |
 | `.venv/` | 虚拟环境（1.3 GB，含 torch） | 可删，重装见 README |
 | `.workbuddy/memory/` | 开发过程的工作日志 | 可删，属于过程记录 |
@@ -163,28 +161,17 @@ cli.py  ← 命令行
 | `static/app.js` | 前台逻辑：流式问答、会话历史（存在 localStorage）、引用牌断行绑定、三语文案。 |
 | `static/style.css` | 前台样式。和后台完全独立：配色、字体、圆角三套都不共用，改后台不会动到这里。维吾尔语字体必须走 `Microsoft Uighur` 一族，字体选错会让阿拉伯字母连写断开。 |
 
-### 4.10 `scripts/` 工具
+### 4.10 `evals/` 评估集
 
 | 文件 | 职责 |
 |---|---|
-| `check_env.py` | 环境自检：解释器、依赖、SQLite/FTS5、模型、网络。 |
-| `fetch_model.sh` | 从国内镜像拉模型到 `data/models/`。直连 HuggingFace 在墙内必挂。 |
-| `uismoke.py` | 前台**交互**冒烟：48 项断言（点引用跳转、断行、切语言不位移、会话删除…），中维各跑一遍。`pytest` 测不到 DOM 与双向文本，这层只能真浏览器。 |
-| `shot.py` | 前台静态截图：把三个静态文件内联成自包含 HTML，接口换成假数据，交给 Edge headless 截图。不需要起服务、不需要密钥、不花钱。 |
-| `citewrap.py` | 引用牌掉行探针：把正文列宽从 420 扫到 736，量每档有没有牌被挤到行首。 |
-| `bidicheck.py` | 双向文本检查：验证 RTL 段落里数字、标点、按钮位置是否符合预期。 |
-| `livecheck.py` | 真实站点联调：起服务、提问、抓 SSE、核对引用与翻译。 |
-| `gen_wbs.py` | 生成 `docs/WBS.html`。数据写在脚本里，改完模块结构重跑一次即可刷新。 |
-
-### 4.11 `tests/` `evals/`
-
-| 文件 | 职责 |
-|---|---|
-| `tests/test_core.py` | 259 条单测。覆盖检索数学、分块、清洗、抽取、引用、配置、语言、拒答分档等**纯函数层**。不起服务、不连模型，13 秒跑完。 |
 | `evals/cases.jsonl` | 22 条评估题（20 可答 + 2 应拒）。用「文档标题 + 关键词」判定，不用 `chunk_id`——重新分块后不失效。 |
 | `evals/baseline.json` | 评估基线。`knowtune eval` 与它比对，参数指纹不一致时明确报「不可比」而不是给个假差值。 |
+| `evals/scoreboard.py` | 模型打分台（Gradio 独立进程，跑在 `evals/.venv` 里），横向比较多个后端的答案质量。首次使用需先建 `evals/.venv` 并装 gradio/httpx/pyyaml。 |
 
-### 4.12 `data/` 运行期数据
+> 注：开发期的 `scripts/`（截图、冒烟、环境自检、WBS 生成）与 `tests/`（单测）已在精简版仓库中移除，仅保留 `src/` 运行时与 `evals/` 评估能力。需要自测可另建 `tests/` 复用 `src` 的纯函数层。
+
+### 4.11 `data/` 运行期数据
 
 | 路径 | 内容 |
 |---|---|
@@ -320,7 +307,7 @@ config/default.yaml          ← 出厂值，代码里不再有第二份默认�
 | 改前台界面 | `frontsite/static/{index.html,app.js,style.css}`，改完升 `SITE_BUILD` |
 | 改站点文案 / 加一种界面语言 | `config/instances.yaml`（`title`/`alt`）+「站点」页；判定逻辑在 `frontsite/site.py` 的 `_content_lang` / `_fill_copy`，内置文案在 `instcfg._DEFAULTS_UG/_DEFAULTS_ZH` |
 | 加一个 HTTP 接口 | `api/app.py`（按域加在对应分组里） |
-| 加一条单测 | `tests/test_core.py`；DOM 行为进 `scripts/uismoke.py` |
+| 加一条单测 | 单测与前端冒烟工装已从精简版仓库移除；需要时自建 `tests/` 复用 `src` 的纯函数层（`src` 各层都可单独喂数据，无需起服务、不连模型） |
 
 **两个构建号**（`ADMIN_BUILD` / `SITE_BUILD`）别忘了一起改：HTML 是 no-store 的，
 但 WebView 可能把旧 JS 留在缓存里，编号对不上时页面会强制换一次，否则会出现
@@ -340,7 +327,7 @@ config/default.yaml          ← 出厂值，代码里不再有第二份默认�
 | `_patch.py` | 一次性补丁脚本（改动早已落到 `tests/test_core.py`） |
 | `_serve.log` | 一次启动的临时输出 |
 | `data/knowtune.db` | 0 字节空壳，真实库是 `data/library.db` |
-| `docs/env_report.json` | `scripts/check_env.py` 的输出，随时可重跑 |
+| `docs/env_report.json` | `scripts/check_env.py` 的输出（脚本已在精简版移除，此为历史产物） |
 | `.idea/workspace.xml` | IDE 窗口状态。删了会被 PyCharm 立刻重建，已写进 `.gitignore` |
 
 ### 10.1 第二轮清理：数据库瘦身（2026-11-01）
@@ -357,7 +344,7 @@ config/default.yaml          ← 出厂值，代码里不再有第二份默认�
 1. **`embedding` 是向量的唯一存储**（`chunk` 表里没有 vec 列），删错等于毁索引；
 2. 活跃块的向量覆盖率必须是 100%，不是就拒绝执行。
 
-这两条已经写进 `scripts/prune_db.py` 做成硬闸门，默认 dry-run。
+这两条当时写进了 `scripts/prune_db.py` 做成硬闸门、默认 dry-run（该脚本已在精简版移除）。
 
 **曾误判、已排除**：一度怀疑 FTS 缺索引（`chunk_fts` 1120 行 vs `chunk` 3179 行），
 查下来是虚惊——活跃块恰好 1120 个且全部已索引，差的 2059 个正是上述废弃旧代块，
@@ -374,5 +361,5 @@ config/default.yaml          ← 出厂值，代码里不再有第二份默认�
 顺带补了一个 `.gitignore`：缓存、数据、模型、截图都写进去了，以后接版本库不会再把
 69 MB 的数据库和 92 MB 的模型提交上去。
 
-**刻意没删的**：`docs/WBS.html` 与 `scripts/gen_wbs.py`（交付文档，改了模块结构可以重跑刷新）、
+**刻意没删的**：`docs/WBS.html`（交付文档；`scripts/gen_wbs.py` 已在精简版移除，WBS 作为静态快照保留）、
 `data/models/`（92 MB 模型权重，删了要重新下载）、`data/uploads/`（原文副本，删了引用回查会断）。
