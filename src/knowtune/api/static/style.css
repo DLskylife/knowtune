@@ -81,7 +81,7 @@ button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-
 }
 
 kbd {
-  font-family: var(--mono); font-size: 10.5px;
+  font-family: var(--mono); font-size: 11.5px;
   padding: 1px 5px; border-radius: 4px;
   background: var(--surface-3); color: var(--text-2);
   border: 1px solid var(--line);
@@ -156,7 +156,7 @@ kbd {
   align-items: center;
   justify-content: space-between;
   padding: 14px 6px 4px;
-  font-size: 10.5px;
+  font-size: 11.5px;
   font-weight: 600;
   letter-spacing: 1.1px;
   text-transform: uppercase;
@@ -219,7 +219,7 @@ kbd {
   display: inline-grid; place-items: center;
   border-radius: 5px;
   background: var(--surface-3);
-  font-size: 10.5px; line-height: 1;
+  font-size: 11.5px; line-height: 1;
   color: var(--text-3);
 }
 .kb-item.active .ct { color: var(--text-2); background: rgba(255, 255, 255, .07); }
@@ -773,7 +773,7 @@ option:checked { color: var(--text); }
 .dbg-block { margin-bottom: 20px; }
 .dbg-block:last-child { margin-bottom: 0; }
 .dbg-block h4 {
-  font-size: 10.5px; font-weight: 600; letter-spacing: .9px;
+  font-size: 11.5px; font-weight: 600; letter-spacing: .9px;
   text-transform: uppercase; color: var(--text-3);
   margin-bottom: 8px;
   display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
@@ -790,9 +790,9 @@ option:checked { color: var(--text); }
   align-items: center;
 }
 .row:hover { background: var(--surface-2); }
-.row .rk { color: var(--text-3); font-family: var(--mono); font-size: 10.5px; }
+.row .rk { color: var(--text-3); font-family: var(--mono); font-size: 11.5px; }
 .row .tx { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); }
-.row .sc { font-family: var(--mono); font-size: 10.5px; color: var(--text-3); }
+.row .sc { font-family: var(--mono); font-size: 11.5px; color: var(--text-3); }
 
 .bar {
   height: 2px;
@@ -815,7 +815,7 @@ option:checked { color: var(--text); }
 
 .tag {
   display: inline-block;
-  font-size: 10.5px;
+  font-size: 11.5px;
   padding: 2px 7px;
   border-radius: 5px;
   margin: 0 4px 4px 0;
@@ -910,7 +910,7 @@ option:checked { color: var(--text); }
   display: flex; align-items: center; gap: 8px;
   padding: 16px 0 8px;
   text-align: left;
-  font-size: 10.5px; font-weight: 600;
+  font-size: 11.5px; font-weight: 600;
   letter-spacing: 1px; text-transform: uppercase;
   color: var(--text-3);
   min-height: 34px;
@@ -925,7 +925,7 @@ option:checked { color: var(--text); }
   display: inline-block;
 }
 .set-group.closed .chev { transform: rotate(0deg); }
-.set-group-head .cnt { margin-left: auto; font-size: 10.5px; letter-spacing: 0; font-weight: 400; }
+.set-group-head .cnt { margin-left: auto; font-size: 11.5px; letter-spacing: 0; font-weight: 400; }
 
 .set-group-note {
   font-size: 11.5px; color: var(--text-3); line-height: 1.7;
@@ -946,7 +946,7 @@ option:checked { color: var(--text); }
 .set-row.is-unsaved .set-val { color: var(--warn); }
 .set-row.is-unsaved input.num { border-color: rgba(232, 163, 61, .45); color: var(--warn); }
 .mark {
-  font-style: normal; font-size: 9.5px; letter-spacing: .2px;
+  font-style: normal; font-size: 10.5px; letter-spacing: .2px;
   padding: 1px 5px; border-radius: 4px;
   background: rgba(232, 163, 61, .13); color: var(--warn);
 }
@@ -1295,7 +1295,7 @@ input[type=number].num::-webkit-outer-spin-button { -webkit-appearance: none; ma
   padding: 7px 0 6px;
   border-radius: 8px;
   color: var(--text-3);
-  font-size: 10.5px;
+  font-size: 11.5px;
   letter-spacing: .2px;
   white-space: nowrap;
   transition: background .12s, color .12s, box-shadow .12s;
@@ -1366,7 +1366,7 @@ input[type=number].num::-webkit-outer-spin-button { -webkit-appearance: none; ma
 .badge {
   display: inline-flex; align-items: center;
   height: 18px; padding: 0 7px; border-radius: 20px;
-  font-size: 10.5px; background: var(--surface-3); color: var(--text-2);
+  font-size: 11.5px; background: var(--surface-3); color: var(--text-2);
   white-space: nowrap;
 }
 .badge.local { background: rgba(62, 207, 142, .12); color: var(--ok); }
@@ -1496,7 +1496,7 @@ input[type=number].num::-webkit-outer-spin-button { -webkit-appearance: none; ma
 }
 .tabs-bar button:hover { color: var(--text-2); }
 .tabs-bar button.active { color: var(--text); border-bottom-color: var(--accent); }
-.tabs-bar .count { font-family: var(--mono); font-size: 10.5px; color: var(--text-3); margin-left: 5px; }
+.tabs-bar .count { font-family: var(--mono); font-size: 11.5px; color: var(--text-3); margin-left: 5px; }
 
 /* 参数组：默认折叠，标题行就带上当前值。24 项参数全摊开是三屏，
    折叠起来一屏能扫完七组，改哪个展开哪个。 */
@@ -1624,10 +1624,10 @@ input[type=number].num::-webkit-outer-spin-button { -webkit-appearance: none; ma
   font-size: 11.5px;
 }
 .log-row:first-child { border-top: none; }
-.log-row .tm { font-family: var(--mono); font-size: 10.5px; color: var(--text-3); }
-.log-row .src { font-size: 10.5px; color: var(--text-3); }
+.log-row .tm { font-family: var(--mono); font-size: 11.5px; color: var(--text-3); }
+.log-row .src { font-size: 11.5px; color: var(--text-3); }
 .log-row .txt { color: var(--text-2); overflow: hidden; text-overflow: ellipsis; }
-.log-row .rt { font-family: var(--mono); font-size: 10.5px; color: var(--text-3); white-space: nowrap; }
+.log-row .rt { font-family: var(--mono); font-size: 11.5px; color: var(--text-3); white-space: nowrap; }
 .log-row.error .txt { color: #f0898d; }
 .log-row.warning .txt { color: var(--warn); }
 
@@ -1793,7 +1793,7 @@ input[type=number].num::-webkit-outer-spin-button { -webkit-appearance: none; ma
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   max-width: 300px;
 }
-.cfg-btn .chev { font-size: 10px; color: var(--text-3); transition: transform .15s; }
+.cfg-btn .chev { font-size: 11px; color: var(--text-3); transition: transform .15s; }
 .cfg-btn.on .chev { transform: rotate(180deg); }
 .cfg-btn.on { background: var(--surface-3); border-color: var(--line); }
 .cfg-btn .dot { flex: none; }
@@ -1819,7 +1819,7 @@ input[type=number].num::-webkit-outer-spin-button { -webkit-appearance: none; ma
   font-size: 11px; letter-spacing: .3px; color: var(--text-3);
   display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
 }
-.cfg-label .cfg-note { font-size: 10.5px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.cfg-label .cfg-note { font-size: 11.5px; color: var(--text-3); font-variant-numeric: tabular-nums; }
 .cfg-pop select {
   width: 100%; height: 32px;
   background: var(--surface-2); color: var(--text);
@@ -1909,7 +1909,7 @@ input[type=number].num::-webkit-outer-spin-button { -webkit-appearance: none; ma
 .svc-card .pick {
   display: flex; align-items: center; gap: 7px;
   margin: 6px 0 2px;
-  font-size: 10.5px; color: var(--text-3);
+  font-size: 11.5px; color: var(--text-3);
 }
 .svc-card .pick > span { flex: none; }
 .svc-card .pick select {
@@ -1936,7 +1936,7 @@ input[type=number].num::-webkit-outer-spin-button { -webkit-appearance: none; ma
 .icon-btn.danger:hover { color: var(--err); border-color: rgba(230, 90, 90, .5); }
 .icon-btn[disabled] { opacity: .3; cursor: not-allowed; }
 .svc-card header .sp { flex: 1 1 auto; }
-.svc-card .msg .ago { font-size: 10.5px; color: var(--text-3); opacity: .75; }
+.svc-card .msg .ago { font-size: 11.5px; color: var(--text-3); opacity: .75; }
 .launch-fold { margin-top: 12px; }
 .launch-fold > summary {
   cursor: pointer; font-size: 12.5px; color: var(--text-2);
@@ -2202,7 +2202,7 @@ input[type=number].num::-webkit-outer-spin-button { -webkit-appearance: none; ma
   flex: 0 0 auto;
   color: var(--text-2);
   font-family: var(--mono);
-  font-size: 10.5px;
+  font-size: 11.5px;
 }
 .hit-doc { flex: 1 1 auto; min-width: 0; }
 .hit-text {
@@ -2217,7 +2217,7 @@ input[type=number].num::-webkit-outer-spin-button { -webkit-appearance: none; ma
 }
 .hit-extra {
   margin-top: 4px;
-  font-size: 10.5px;
+  font-size: 11.5px;
   color: var(--text-3);
   font-variant-numeric: tabular-nums;
 }
@@ -2246,7 +2246,7 @@ input[type=number].num::-webkit-outer-spin-button { -webkit-appearance: none; ma
   white-space: nowrap;
 }
 .dbg-hit .hit-sub {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-3);
   font-family: var(--mono);
   white-space: nowrap;
@@ -2305,7 +2305,7 @@ input[type=number].num::-webkit-outer-spin-button { -webkit-appearance: none; ma
 .sbk-sec + .sbk-sec { border-top: 1px solid var(--line-soft); }
 .sbk-label {
   display: flex; align-items: baseline; gap: 10px;
-  font-size: 10.5px; font-weight: 600; letter-spacing: 1px;
+  font-size: 11.5px; font-weight: 600; letter-spacing: 1px;
   text-transform: uppercase; color: var(--text-3);
   margin-bottom: 10px;
 }
@@ -2447,7 +2447,7 @@ input[type=number].num::-webkit-outer-spin-button { -webkit-appearance: none; ma
   background: var(--surface-3);
 }
 .pr-role h4 { font-size: 12.5px; font-weight: 600; }
-.pr-role > header .hint { font-family: var(--mono); font-size: 10.5px; }
+.pr-role > header .hint { font-family: var(--mono); font-size: 11.5px; }
 
 .pr-field { padding: 12px 14px; }
 .pr-field + .pr-field { border-top: 1px solid var(--line-soft); }
@@ -2457,7 +2457,7 @@ input[type=number].num::-webkit-outer-spin-button { -webkit-appearance: none; ma
 /* 来源徽标：改过和没改过必须一眼分开。这决定「恢复默认」按下去会发生什么，
    全靠描述文字说清楚不现实。 */
 .pr-src {
-  font-size: 10.5px; color: var(--text-3);
+  font-size: 11.5px; color: var(--text-3);
   border: 1px solid var(--line); border-radius: 999px;
   padding: 1px 7px; flex: none;
 }
@@ -2475,10 +2475,10 @@ input[type=number].num::-webkit-outer-spin-button { -webkit-appearance: none; ma
   border: 1px solid var(--line); border-radius: 6px;
   background: var(--surface-3); padding: 4px 8px;
 }
-.pr-ph em { font-style: normal; font-size: 10.5px; color: var(--text-3); }
+.pr-ph em { font-style: normal; font-size: 11.5px; color: var(--text-3); }
 .pr-ph:hover { color: var(--text); border-color: #333b4a; }
 
-.pr-count { font-size: 10.5px; color: var(--text-3); margin-left: auto; flex: none; }
+.pr-count { font-size: 11.5px; color: var(--text-3); margin-left: auto; flex: none; }
 
 /* resize 关掉：高度由 prAutoSize 按内容算，留着拖拽手柄会和自动高度打架 ——
    用户拖大一次，下次输入又被算回去，看起来像"拖了没用"。 */
@@ -2507,7 +2507,7 @@ input[type=number].num::-webkit-outer-spin-button { -webkit-appearance: none; ma
 }
 .pr-panel > .hint { padding: 8px 14px 0; }
 .pr-panel-label {
-  font-size: 10.5px; color: var(--text-3);
+  font-size: 11.5px; color: var(--text-3);
   letter-spacing: .04em; padding: 12px 14px 5px;
 }
 .pr-panel pre {
@@ -2536,7 +2536,7 @@ input[type=number].num::-webkit-outer-spin-button { -webkit-appearance: none; ma
   border: 1px solid var(--line); background: var(--surface-2);
   font-size: 11.5px; color: var(--text-2); max-width: 100%;
 }
-.pv-chip i { font-style: normal; font-size: 10.5px; color: var(--text-3); flex: none; }
+.pv-chip i { font-style: normal; font-size: 11.5px; color: var(--text-3); flex: none; }
 .pv-chip.warn { border-color: rgba(232, 163, 61, .4); color: var(--warn); }
 
 /* 弹窗里的分组：每组之间留一条细线，别让二十几个字段糊成一片。 */
@@ -2557,7 +2557,7 @@ input[type=number].num::-webkit-outer-spin-button { -webkit-appearance: none; ma
 .pv-chg {
   margin-left: 6px; padding: 0 5px; border-radius: 4px;
   background: rgba(91, 140, 255, .14); color: var(--accent);
-  font-size: 10px; font-weight: 500;
+  font-size: 11px; font-weight: 500;
 }
 .form-row.full { grid-column: 1 / -1; }
 .form-row.full textarea { font-family: var(--mono); font-size: 11.5px; line-height: 1.7; }
@@ -2648,7 +2648,7 @@ input[type=number].num::-webkit-outer-spin-button { -webkit-appearance: none; ma
 }
 .gw-src {
   display: inline-flex; align-items: center; height: 18px; padding: 0 7px;
-  border-radius: 20px; font-size: 10.5px; white-space: nowrap;
+  border-radius: 20px; font-size: 11.5px; white-space: nowrap;
   background: var(--surface-3); color: var(--text-2);
   border: 1px solid var(--card-line);
 }

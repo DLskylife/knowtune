@@ -12,6 +12,12 @@
    所以骨架一律用物理 left/right 定位，方向只交给具体文本节点的 dir=auto。
 */
 
+/* ── 字号基线（2026-11-06，1.7.11）──
+   11.5px 是全局下限，只留给引用编号这种"方寸标签"；说明文字 12–13px；
+   正文与输入框 16px。输入框那 16px 不是审美：小于 16 时 iOS Safari 聚焦会
+   自动放大整页，用户点一下输入框页面就跳一下。
+   改字号前先看这四行，别再把说明文字写回 10px。 */
+
 :root {
   --paper: #fbfbf9;
   --side: #f4f4f0;
@@ -83,7 +89,7 @@ html, body {
   margin: 0; height: 100%;
   background: var(--paper); color: var(--ink);
   font-family: var(--ui);
-  font-size: 15px; line-height: 1.9;
+  font-size: 15.5px; line-height: 1.9;
   -webkit-font-smoothing: antialiased;
 }
 html[lang="zh"], html[lang="en"] { font-family: var(--zh); line-height: 1.72; }
@@ -135,11 +141,11 @@ body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
 
 .side-id { min-width: 0; }
 .side-name {
-  margin: 0; font-size: 13.5px; font-weight: 700; line-height: 1.5;
+  margin: 0; font-size: 14.5px; font-weight: 700; line-height: 1.5;
   text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .side-meta {
-  margin: 1px 0 0; font-size: 11px; color: var(--ink-3); line-height: 1.5;
+  margin: 1px 0 0; font-size: 12px; color: var(--ink-3); line-height: 1.5;
   text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
@@ -155,7 +161,7 @@ body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
   width: 100%; height: 36px; padding: 0 10px;
   border: 1px solid transparent; border-radius: 10px;
   background: transparent; color: var(--ink-2);
-  font: inherit; font-size: 13.5px; font-weight: 600; line-height: 1;
+  font: inherit; font-size: 14px; font-weight: 600; line-height: 1;
   cursor: pointer; text-align: left;
   transition: background .14s, color .14s, border-color .14s, box-shadow .14s;
 }
@@ -171,14 +177,14 @@ body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
 /* 右侧那个数字是"这一栏有多少篇资料"。维医和古籍的差别就在语料上，
    不写出来，用户不知道两个入口为什么答案风格差这么远。 */
 .nav-item .ni-meta {
-  flex: none; font-size: 11px; font-weight: 500; color: var(--ink-3);
+  flex: none; font-size: 12px; font-weight: 500; color: var(--ink-3);
   /* 等宽数字：26 篇 / 5 篇 上下对齐，扫一眼就能比出两个库的体量差 */
   font-variant-numeric: tabular-nums;
 }
 /* 预问诊那栏没有"多少篇"，给的是一个说明标签而不是留空：同一个位置、
    更弱一级，既不会让人以为数字没加载出来，也不会和上面两个计数混淆。 */
 .nav-item .ni-meta.is-tag {
-  font-size: 10px; letter-spacing: .02em; opacity: .8;
+  font-size: 11.5px; letter-spacing: .02em; opacity: .8;
 }
 .nav-item:hover { background: color-mix(in srgb, var(--ink) 6%, transparent); color: var(--ink); }
 .nav-item.on {
@@ -200,7 +206,7 @@ body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
   padding: 6px 12px 2px 18px;
 }
 .hist-head > span {
-  flex: 1; font-size: 10.5px; font-weight: 600; letter-spacing: .04em;
+  flex: 1; font-size: 11.5px; font-weight: 600; letter-spacing: .04em;
   color: var(--ink-3);
 }
 .hist-add {
@@ -228,13 +234,13 @@ body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
 
 .side-group {
   margin: 0; padding: 10px 8px 3px;
-  font-size: 10.5px; font-weight: 600; letter-spacing: .04em;
+  font-size: 11.5px; font-weight: 600; letter-spacing: .04em;
   color: var(--ink-3); text-align: left; text-transform: none;
 }
 .sess {
   display: block; width: 100%; padding: 7px 9px; margin: 1px 0;
   border: 1px solid transparent; border-radius: 9px; background: transparent;
-  color: var(--ink-2); font: inherit; font-size: 13px; line-height: 1.6;
+  color: var(--ink-2); font: inherit; font-size: 13.5px; line-height: 1.6;
   text-align: left; cursor: pointer;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   transition: background .13s, color .13s, border-color .13s;
@@ -263,7 +269,7 @@ body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
 .sess-row.ask .sess-del, .sess-row.ask .sess-del:hover {
   width: auto; height: 22px; padding: 0 7px;
   background: var(--warn); color: #fff; opacity: 1;
-  font-family: var(--zh); font-size: 11px; font-weight: 600;
+  font-family: var(--zh); font-size: 11.5px; font-weight: 600;
   white-space: nowrap;
 }
 /* 触屏没有 hover：删除入口常显，否则只能靠猜 */
@@ -272,7 +278,7 @@ body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
 }
 
 .side-empty {
-  margin: 14px 10px; font-size: 12px; color: var(--ink-3); line-height: 1.7;
+  margin: 14px 10px; font-size: 12.5px; color: var(--ink-3); line-height: 1.7;
   text-align: left;
 }
 
@@ -289,13 +295,13 @@ body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
 }
 .top-id { min-width: 0; flex: 1; }
 .top h1 {
-  margin: 0; font-size: 14px; font-weight: 700; line-height: 1.5;
+  margin: 0; font-size: 15px; font-weight: 700; line-height: 1.5;
   /* 物理左对齐：dir=rtl 时只改字形顺序，不把标题推到右边 */
   text-align: left;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .top .sub {
-  margin: 1px 0 0; font-size: 11.5px; color: var(--ink-3); line-height: 1.5;
+  margin: 1px 0 0; font-size: 12.5px; color: var(--ink-3); line-height: 1.5;
   text-align: left;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
@@ -322,7 +328,7 @@ body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
 }
 .lang-switch button {
   appearance: none; border: 0; background: transparent; cursor: pointer;
-  font: inherit; font-size: 12.5px; line-height: 1.6; padding: 4px 11px;
+  font: inherit; font-size: 13px; line-height: 1.6; padding: 4px 11px;
   /* 两段等宽：'ئۇيغۇرچە' 和 '中文' 字数差三倍，不定宽的话点一次切换，
      整个胶囊的宽度就变一次，右边的按钮肉眼可见地横移。 */
   min-width: 62px; text-align: center;
@@ -358,7 +364,7 @@ body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
 }
 .wel-hint {
   margin: 10px auto 0; max-width: 34em;
-  font-size: 13px; line-height: 1.7; color: var(--ink-3);
+  font-size: 13.5px; line-height: 1.7; color: var(--ink-3);
 }
 /* 示例问题：居中的胶囊，换行自动收拢。不做成卡片网格——落地页上
    三块大方卡会把"输入框"这个主角抢掉。 */
@@ -370,7 +376,7 @@ body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
   display: inline-flex; align-items: center; gap: 7px;
   max-width: 100%; padding: 8px 14px;
   background: var(--surface); border: 1px solid var(--line); border-radius: 999px;
-  color: var(--ink-2); font: inherit; font-size: 13px; line-height: 1.6;
+  color: var(--ink-2); font: inherit; font-size: 13.5px; line-height: 1.6;
   text-align: left; cursor: pointer;
   transition: border-color .16s, color .16s, background .16s, box-shadow .16s;
 }
@@ -417,7 +423,7 @@ body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
 }
 
 /* ------------------------------------------------------------ 答案正文 */
-.answer { white-space: pre-wrap; font-size: 15px; }
+.answer { white-space: pre-wrap; font-size: 16px; }
 .answer .md { white-space: normal; }
 /* 流式光标：正在出字和"出完了"必须能分辨，否则用户会一直等下去 */
 .answer.streaming > .md > :last-child::after {
@@ -450,7 +456,7 @@ body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
   background: var(--surface-2); border: 1px solid var(--line-soft);
   border-radius: 5px; padding: 1px 5px;
 }
-.md h4 { margin: .2em 0 .5em; font-size: 15.5px; }
+.md h4 { margin: .2em 0 .5em; font-size: 16.5px; }
 
 /* 引用编号：必须隔离，否则 RTL 段落里 [1] 会被双向算法挪到数字另一侧。
    做成可点的小牌——"这结论从哪来"是这种问答界面唯一值得点的地方。 */
@@ -460,10 +466,10 @@ body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
      圈号数字，读者根本不知道那是个能点的来源。18px 的方块 + 两侧 3px 间距，
      才在一屏汉字里立得住。 */
   display: inline-flex; align-items: center; justify-content: center;
-  min-width: 18px; height: 18px; padding: 0 4px; margin: 0 3px;
+  min-width: 19px; height: 19px; padding: 0 4px; margin: 0 3px;
   border-radius: 5px; border: 1px solid var(--brand-line);
   background: var(--brand-soft); color: var(--brand);
-  font-family: var(--zh); font-size: 11px; font-weight: 700; line-height: 1;
+  font-family: var(--zh); font-size: 11.5px; font-weight: 700; line-height: 1;
   direction: ltr; unicode-bidi: isolate; vertical-align: -.08em;
   cursor: pointer; transition: background .14s, color .14s;
 }
@@ -480,7 +486,7 @@ body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
 .ev-badge {
   display: inline-flex; align-items: center; gap: 6px;
   margin-bottom: 9px;
-  font-size: 11.5px; font-weight: 600; line-height: 1.6;
+  font-size: 12.5px; font-weight: 600; line-height: 1.6;
   padding: 2px 10px; border-radius: 999px;
   border: 1px solid var(--line);
 }
@@ -491,7 +497,7 @@ body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
 
 .thinking {
   display: inline-flex; align-items: center; gap: 7px;
-  margin-top: 8px; font-size: 12.5px; color: var(--ink-3);
+  margin-top: 8px; font-size: 13px; color: var(--ink-3);
 }
 /* 三点呼吸：流式等待时页面必须有东西在动，否则 30 秒的翻译阶段像死机 */
 .thinking::before {
@@ -513,19 +519,19 @@ body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
   /* 加了反馈键之后这一行最多有 5 个元素（耗时/语言/占位/两个反馈/复制）。
      窄屏 + 长耗时文案时允许折行，否则按钮会被压成两行字。 */
   flex-wrap: wrap; row-gap: 4px;
-  margin-top: 10px; font-size: 11.5px; color: var(--ink-3);
+  margin-top: 10px; font-size: 12.5px; color: var(--ink-3);
 }
 .foot .spacer { flex: 1; }
 /* 答案语言标记：只在"这条答案不是当前界面语言"时出现。
    小、灰、不抢眼——它的作用是不让人误会，不是让人盯。 */
 .foot .alang {
-  font-size: 11px; color: var(--ink-3);
+  font-size: 12px; color: var(--ink-3);
   border: 1px solid var(--line); border-radius: 999px;
   padding: 1px 8px; line-height: 1.6; white-space: nowrap;
 }
 .copy {
   appearance: none; border: 1px solid transparent; background: transparent;
-  color: var(--ink-3); font: inherit; font-size: 11.5px; line-height: 1.6;
+  color: var(--ink-3); font: inherit; font-size: 12.5px; line-height: 1.6;
   border-radius: 7px; padding: 2px 9px; cursor: pointer;
   transition: color .14s, background .14s, border-color .14s;
 }
@@ -537,7 +543,7 @@ body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
    按钮原地消失会让人怀疑自己点错了。 */
 .foot .fb {
   appearance: none; border: 1px solid transparent; background: transparent;
-  color: var(--ink-3); font: inherit; font-size: 11.5px; line-height: 1.6;
+  color: var(--ink-3); font: inherit; font-size: 12.5px; line-height: 1.6;
   border-radius: 7px; padding: 2px 9px; cursor: pointer;
   white-space: nowrap; flex: 0 0 auto;
   transition: color .14s, background .14s, border-color .14s;
@@ -554,7 +560,7 @@ body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
 .srcs summary {
   display: inline-flex; align-items: center; gap: 7px;
   list-style: none; cursor: pointer; user-select: none;
-  font-size: 12.5px; font-weight: 600; color: var(--brand);
+  font-size: 13px; font-weight: 600; color: var(--brand);
   background: var(--brand-soft); border: 1px solid var(--brand-line);
   border-radius: 999px; padding: 4px 13px;
   transition: background .14s;
@@ -576,17 +582,17 @@ body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
 }
 .src-item .n {
   flex: none; display: inline-flex; align-items: center; justify-content: center;
-  min-width: 20px; height: 20px; padding: 0 5px; border-radius: 6px;
+  min-width: 21px; height: 21px; padding: 0 5px; border-radius: 6px;
   background: var(--brand); color: #fff;
-  font-family: var(--zh); font-size: 11px; font-weight: 700; line-height: 1;
+  font-family: var(--zh); font-size: 11.5px; font-weight: 700; line-height: 1;
   direction: ltr; unicode-bidi: isolate;
 }
 /* 按文档归组后，一篇文档贡献的多个编号并排挂在行首 */
 .src-ns { flex: none; display: inline-flex; gap: 4px; flex-wrap: wrap; max-width: 96px; }
 .src-body { min-width: 0; flex: 1; }
-.src-head { font-size: 12.5px; font-weight: 600; color: var(--ink); line-height: 1.6; }
+.src-head { font-size: 13px; font-weight: 600; color: var(--ink); line-height: 1.6; }
 .src-prev {
-  margin-top: 3px; font-size: 12px; color: var(--ink-2); line-height: 1.75;
+  margin-top: 3px; font-size: 13px; color: var(--ink-2); line-height: 1.75;
   display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
 }
 /* 点了正文里的 [1]，对应来源闪一下——不然用户滚过去也不知道该看哪条 */
@@ -602,7 +608,7 @@ body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
 
 /* 复读截断提示：不能假装没发生，否则用户会以为答案本来就长这样。 */
 .loop-warn {
-  margin-top: 10px; font-size: 12px; color: var(--warn);
+  margin-top: 10px; font-size: 13px; color: var(--warn);
   background: var(--warn-soft); border: 1px solid color-mix(in srgb, var(--warn) 22%, transparent);
   border-radius: 8px; padding: 7px 10px; line-height: 1.7;
 }
@@ -627,7 +633,7 @@ body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
   display: inline-flex; align-items: center; gap: 6px;
   background: var(--surface); color: var(--brand);
   border: 1px solid var(--brand-line); border-radius: 999px;
-  padding: 5px 13px; font: inherit; font-size: 12px; cursor: pointer;
+  padding: 5px 13px; font: inherit; font-size: 13px; cursor: pointer;
   box-shadow: var(--shadow); z-index: 5;
   animation: pop .18s ease-out;
 }
@@ -639,7 +645,7 @@ body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
 .status {
   display: flex; align-items: center; gap: 8px;
   max-width: var(--col); margin: 0 auto 7px;
-  font-size: 12px; color: var(--ink-2); line-height: 1.7;
+  font-size: 13px; color: var(--ink-2); line-height: 1.7;
 }
 
 /* 输入框做成一张圆角大卡：上面一行写字，下面一行放工具与发送键。
@@ -658,7 +664,7 @@ body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
 #q {
   display: block; width: 100%; resize: none; border: none; outline: none;
   background: transparent; padding: 2px 0 6px;
-  font: inherit; font-size: 15px; line-height: 1.75;
+  font: inherit; font-size: 16px; line-height: 1.75;
   color: var(--ink); max-height: 176px; min-height: 27px;
 }
 #q::placeholder { color: var(--ink-3); opacity: .85; }
@@ -668,7 +674,7 @@ body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
 .tool {
   display: inline-flex; align-items: center; gap: 6px;
   max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  font-size: 11.5px; line-height: 1.6; color: var(--brand);
+  font-size: 12.5px; line-height: 1.6; color: var(--brand);
   background: var(--brand-soft); border: 1px solid var(--brand-line);
   border-radius: 999px; padding: 3px 10px;
 }
@@ -702,7 +708,7 @@ body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
 
 .disclaimer {
   max-width: var(--col); margin: 8px auto 0;
-  font-size: 11px; color: var(--ink-3); line-height: 1.7; text-align: center;
+  font-size: 12px; color: var(--ink-3); line-height: 1.7; text-align: center;
 }
 
 .fatal {
@@ -730,12 +736,13 @@ body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
   .msgs { padding: 6px 14px 8px; gap: 18px; }
   .msg.user { max-width: 88%; }
   .to-bottom { bottom: 124px; }
-  .disclaimer { font-size: 10.5px; }
+  /* 免责声明不再在窄屏缩小：手机上它本来就已经是最小的字，
+     再缩 1.5px 等于让最该看清的一段变成灰度装饰。 */
 }
 
 @media (max-width: 400px) {
-  .lang-switch button { padding: 4px 9px; font-size: 12px; }
-  .top h1 { font-size: 13px; }
+  .lang-switch button { padding: 4px 9px; font-size: 13px; }
+  .top h1 { font-size: 14px; }
 }
 
 /* ------------------------------------------------------------ 预问诊病历卡
@@ -750,7 +757,7 @@ body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
   border-radius: var(--r-lg); box-shadow: var(--shadow-sm);
 }
 .pv-card > h3 {
-  margin: 0 0 10px; font-size: 15px; font-weight: 700; color: var(--ink);
+  margin: 0 0 10px; font-size: 16px; font-weight: 700; color: var(--ink);
 }
 .pv-triage {
   display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px;
@@ -758,27 +765,27 @@ body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
   background: var(--brand-soft); border-radius: var(--r-md);
   border: 1px solid var(--brand-line);
 }
-.pv-triage .dept { font-size: 15.5px; font-weight: 700; color: var(--brand); }
-.pv-triage .urg { font-size: 12.5px; color: var(--ink-2); }
+.pv-triage .dept { font-size: 16.5px; font-weight: 700; color: var(--brand); }
+.pv-triage .urg { font-size: 13px; color: var(--ink-2); }
 /* 红旗征 / 急诊：这里必须显眼。它和普通"尽快就诊"不是一个量级。 */
 .pv-triage.is-urgent { background: var(--warn-soft); border-color: color-mix(in srgb, var(--warn) 34%, transparent); }
 .pv-triage.is-urgent .dept, .pv-triage.is-urgent .urg { color: var(--warn); }
 
 .pv-sec + .pv-sec { margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--line-soft); }
 .pv-sec > h4 {
-  margin: 0 0 4px; font-size: 11.5px; font-weight: 600; letter-spacing: .03em;
+  margin: 0 0 4px; font-size: 12.5px; font-weight: 600; letter-spacing: .03em;
   color: var(--ink-3);
 }
-.pv-sec > p { margin: 0; font-size: 14px; line-height: 1.85; white-space: pre-wrap; }
+.pv-sec > p { margin: 0; font-size: 15px; line-height: 1.85; white-space: pre-wrap; }
 .pv-acts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
 .pv-btn {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 7px 13px; border: 1px solid var(--line); border-radius: 9px;
   background: var(--surface-2); color: var(--ink-2);
-  font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer;
+  font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
   transition: border-color .14s, color .14s, background .14s;
 }
 .pv-btn:hover { border-color: var(--brand-line); color: var(--brand); background: var(--brand-soft); }
 .pv-btn.primary { background: var(--brand); border-color: var(--brand); color: #fff; }
 .pv-btn.primary:hover { background: var(--brand-2); color: #fff; }
-.pv-hint { margin: 10px 0 0; font-size: 12px; color: var(--ink-3); line-height: 1.7; }
+.pv-hint { margin: 10px 0 0; font-size: 12.5px; color: var(--ink-3); line-height: 1.7; }
