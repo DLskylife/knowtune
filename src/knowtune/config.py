@@ -158,6 +158,28 @@ class RefusalCfg(BaseModel):
     calibration_file: str = "./data/refusal_calibration.json"
 
 
+class SupportCfg(BaseModel):
+    """答案支撑度：生成之后的校验，不是检索之前的猜测。
+
+    与 RefusalCfg 分开，是因为它们回答的问题根本不同：拒答问「库里有没有」，
+    支撑度问「答案有没有被库里的资料接住」。后者能算准，前者算不准——所以
+    真正该做拦截判断的是后者，前者只保留一个「明显不沾边」的粗筛。
+
+    threshold 是经验初值（0.55，bge-small 上「同主题但不同事实」的句对通常
+    落在 0.35~0.5，「同一事实换个说法」在 0.65 以上）。**未标定**，所以 UI 上
+    必须标出这一点，别让用户以为它是扫出来的。
+    """
+
+    enabled: bool = True
+    threshold: float = 0.55
+    # 每份答案最多判几句。长答案全算会让一次问答多花几百毫秒，收益却集中在
+    # 前几句结论上；超出的部分交给 grounded 的整体比例兜底。
+    max_sentences: int = 24
+    min_answer_chars: int = 40
+    # 低于这个整体的 grounded 视为「没落地」，前端给醒目提示。
+    weak_ratio: float = 0.3
+
+
 class ModelEntry(BaseModel):
     """一个模型。它现在是配置里的一等实体，不再是后端下面的一个字符串。
 
@@ -346,6 +368,7 @@ class Config(BaseModel):
     chunking: ChunkingCfg = ChunkingCfg()
     retrieval: RetrievalCfg = RetrievalCfg()
     refusal: RefusalCfg = RefusalCfg()
+    support: SupportCfg = SupportCfg()
     evidence: EvidenceCfg = EvidenceCfg()
     generation: GenerationCfg = GenerationCfg()
     chat: ChatCfg = ChatCfg()
@@ -410,6 +433,24 @@ def calibration_of(cfg: "Config") -> dict[str, Any] | None:
     if data.get("model") != f"{cfg.embedding.model}@{cfg.embedding.dim}":
         return None
     return data
+
+
+def refusal_mode(cfg: "Config") -> str:
+    """拒答现在到底处于哪种状态。
+
+    三种，界面上必须区分开——把 advisory 显示成"阈值 0.35"是过去最误导人的
+    一处：数字看着像个决定，实际上 0.35 低于本语料全部实测可答分（最低 0.541），
+    除了检索完全空，它一次都不会触发。
+
+    - off        用户主动关了
+    - calibrated 阈值由评估集扫出来的，样本量达标，可以当判据
+    - advisory   没标定 / 样本不足，只在"明显不沾边"时拦，其余交给人看引用
+    """
+    if not cfg.refusal.enabled:
+        return "off"
+    if cfg.refusal.calibrated_at and cfg.refusal.calibrated_samples_ok:
+        return "calibrated"
+    return "advisory"
 
 
 def _apply_calibration(cfg: "Config", skip: "set[str] | frozenset[str]" = frozenset()) -> None:

@@ -781,15 +781,20 @@ function renderStatus() {
   rr.title = s.rerank.enabled ? s.rerank.default_model : "精排已关闭";
   const pill = $("refusalPill");
   const pillText = $("refusalText");
-  // 阈值只在"没过标定"时才值得占一块屏幕。标定不可靠的时候必须说清楚
-  // 用的是哪个数，否则用户会发现阈值跟他上次标定的不一样，以为没保存。
+  // 三种状态必须分开说，别再显示一个"看起来像个决定"的数字：
+  // advisory 时那个 0.35 低于本语料全部可答分（最低 0.541），除了检索完全空
+  // 一次都不会触发。把它渲染成"阈值 0.35"，等于告诉用户有个判定在保护他。
+  const rmode = s.refusal?.mode || (s.refusal_calibrated ? "calibrated" : "advisory");
   const note = s.refusal?.note;
-  if (!s.refusal_calibrated) {
+  if (rmode === "off") {
+    pill.hidden = true;
+    pill.title = "";
+  } else if (rmode === "advisory") {
     pill.hidden = false;
-    pillText.textContent = `阈值 ${s.refusal?.min_score ?? "-"}（未标定）`;
-    pill.title = note
-      ? `${note}。拒答只在"明显不沾边"时触发，其余交给人看引用。`
-      : "拒答阈值还没用评估集标定。";
+    pillText.textContent = "无有效拒答判定";
+    pill.title = (note ? `${note}。` : "拒答阈值还没用评估集标定。")
+      + "top1 余弦量的是「话题像不像」，主题相邻的问题分数照样高，分不开该拒的和该答的。"
+      + "所以现在只在「明显不沾边」时拦，真正的依据看每份答案的支撑度。";
   } else if (!s.refusal?.samples_ok) {
     pill.hidden = false;
     pillText.textContent = `阈值 ${s.refusal.min_score}`;
@@ -1458,9 +1463,24 @@ async function ask(question) {
             bindFootActions(foot, obj);
           } else if (!obj.refused) {
             const bits = [];
+            // 支撑度与覆盖率是两个问题：覆盖率只看"这句有没有编号、编号超没超范围"，
+            // 编号挂对了但指向的段落根本没在讲这件事，它照样算 100%。支撑度才算
+            // "这句话在引用的资料里找不找得到"。两个数一起看才有意义。
+            const sup = obj.support;
+            const supLow = sup && !sup.skipped && sup.grounded != null
+              && sup.verdict === "unsupported";
+            if (supLow) {
+              bits.push(`<span class="err" title="${esc(supTooltip(sup))}">资料未支撑</span>`);
+            }
             if (obj.cite_coverage !== undefined) {
               const pct = Math.round(obj.cite_coverage * 100);
               bits.push(`<span class="${pct >= 80 ? "ok" : "warn"}">引用覆盖 ${pct}%</span>`);
+            }
+            if (sup && !sup.skipped && sup.grounded != null) {
+              const pct = Math.round(sup.grounded * 100);
+              const cls = sup.verdict === "grounded" ? "ok"
+                : (sup.verdict === "unsupported" ? "err" : "warn");
+              bits.push(`<span class="${cls}" title="${esc(supTooltip(sup))}">句句有据 ${pct}%</span>`);
             }
             // 引用存疑：模型嘴上说没依据、编号挂一串（或单句全引）。
             // 覆盖率数字解释不了的事，这句话解释。
@@ -1531,6 +1551,27 @@ function genTag(g) {
 function bindFootActions(foot, obj) {
   bindCiteBtn(foot, obj);
   bindFeedback(foot, obj);
+}
+
+/* 支撑度的 tooltip。两件事必须说清，否则这个百分比会被当成又一个人为设定的分数：
+   1. 判据是什么（句子与证据块的余弦，超过阈值才算被接住）；
+   2. 阈值有没有标定过（没有，是经验值）。
+   顺带把「证据里根本没出现的事实」列出来——那是最能说服人的部分。 */
+function supTooltip(sup) {
+  const parts = [];
+  if (sup.n_facts) {
+    parts.push(`${sup.n_facts} 句里 ${Math.round(sup.grounded * 100)}% 能在证据中找对应内容`);
+  }
+  if (sup.n_cited) {
+    const s = sup.score == null ? "—" : `${Math.round(sup.score * 100)}%`;
+    parts.push(`带引用的 ${sup.n_cited} 句中被接住 ${s}`);
+  }
+  if (sup.missed && sup.missed.length) {
+    parts.push(`证据里没有的事实：${sup.missed.slice(0, 6).join("、")}`);
+  }
+  parts.push(`判据：句子与证据块余弦 ≥ ${sup.threshold}`);
+  if (!sup.calibrated) parts.push("阈值是经验值，未用评估集标定");
+  return parts.join("；");
 }
 
 function bindCiteBtn(foot, obj) {

@@ -56,11 +56,12 @@ GROUPS: tuple[tuple[str, str, str], ...] = (
     ("rerank", "精排与去重", "精排决定最终顺序，MMR 在 Top-K 内部压掉重复片段。"),
     ("refusal", "拒答与分档", "分数阈值 + 分布区分度双条件，任一不满足即拒答；"
                               "证据分档决定模型「贴着资料答」还是「允许自由作答」。"),
+    ("support", "答案支撑度", "生成之后校验答案有没有被资料接住。与拒答不同："
+                             "拒答猜的是「库里有没有」，支撑度看的是「答出来的话有没有依据」。"),
     ("generation", "生成", "只影响 LLM，不影响检索命中。"),
     ("chunking", "分块", "只影响之后导入或重建索引的文档，已入库的 chunk 不会被动。"),
     ("chat", "会话", "多轮对话带几轮历史进 prompt。"),
     ("ingest", "导入", "只影响之后新导入的文档；已入库内容不会因为改这里而变化。"),
-    ("eval", "评估", "评测口径。改了 K 之后，旧 baseline 的 R@K / MRR 不可直接比较。"),
 )
 
 PARAMS: tuple[Param, ...] = (
@@ -144,14 +145,16 @@ PARAMS: tuple[Param, ...] = (
     Param("refusal.enabled", "启用拒答", "refusal", "bool",
           "关掉后无论检索多差都会硬答，容易出现「看起来有理但全靠编」。"),
     Param("refusal.min_score", "分数阈值", "refusal", "float",
-          "top1 余弦低于此值即拒答。正解是用 knowtune eval --calibrate 按评估集扫出来，别手调。",
+          "top1 余弦低于此值即拒答。注意它量的是「话题像不像」，不是「有没有答案」——"
+          "主题相邻的问题（库里有 K8s、问的是 GPU 推理）经常拿高分。"
+          "真正该用来判定的是「答案支撑度」。",
           lo=0.0, hi=1.0, step=0.005),
     Param("refusal.min_margin", "区分度阈值", "refusal", "float",
           "top1 减 mean(top2..5)。分数全挤在一起说明模型对哪条都没把握，此时就该拒答。",
           lo=0.0, hi=0.5, step=0.005),
     Param("refusal.margin_window", "margin 窗口", "refusal", "int",
           "取前几条算 margin。它同时是标定口径——改了窗口，历史标定结果不再可比，"
-          "要重跑 knowtune eval --calibrate。",
+          "需要在 model-eval 项目里重跑标定。",
           lo=2, hi=20, step=1, unit="条"),
     Param("refusal.soft_margin", "低置信提醒余量", "refusal", "float",
           "top1 低于 min_score + 此值时不拦截、只在答案旁提示『相关度偏低』。"
@@ -164,6 +167,21 @@ PARAMS: tuple[Param, ...] = (
           "证据分档：top1 >= min_score 为充足，>= min_score × 此值 为一般，其余不足。"
           "调高更容易判成『不足』（模型更敢用自身知识），调低更要求贴着资料答。",
           lo=0.1, hi=1.0, step=0.05),
+
+    # ------------------------------------------------------------ 答案支撑度
+    Param("support.enabled", "启用支撑度校验", "support", "bool",
+          "生成后把答案逐句和证据块比对。关掉后只剩「编号有没有越界」这种格式检查。"),
+    Param("support.threshold", "句级支撑阈值", "support", "float",
+          "句子与证据块的余弦高于此值才算「被接住」。0.55 是经验初值，**未经标定**；"
+          "本语料里「同主题不同事实」约 0.35~0.50，「同一事实换个说法」多在 0.65 以上。",
+          lo=0.2, hi=0.9, step=0.01),
+    Param("support.max_sentences", "最多判定句数", "support", "int",
+          "长答案只判前 N 句。调大更全面，代价是每次问答多花一点编码时间。",
+          lo=4, hi=80, step=2, unit="句"),
+    Param("support.weak_ratio", "未落地判定线", "support", "float",
+          "整份答案里被支撑的句子低于此比例，就标为「资料未支撑」。"
+          "调高 = 更严格（更多答案被标黄）。",
+          lo=0.0, hi=1.0, step=0.05),
 
     # ---------------------------------------------------------------- 生成
     Param("generation.provider", "后端", "generation", "enum",
@@ -227,11 +245,6 @@ PARAMS: tuple[Param, ...] = (
           "单页文字少于此时判定『没有文本层，需要 OCR』并明确报错。"
           "扫描件多的库调低能收进来，但入库的会是空白页。",
           lo=0, hi=200, step=5, unit="字"),
-
-    # ---------------------------------------------------------------- 评估
-    Param("eval.k", "评估 Top-K", "eval", "int",
-          "算 R@K / MRR 的 K。改了之后旧 baseline 不可直接比较，建议同时 --save。",
-          lo=1, hi=50, step=1, unit="条"),
 )
 
 PARAM_MAP: dict[str, Param] = {p.path: p for p in PARAMS}

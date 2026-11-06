@@ -660,7 +660,6 @@ def build_site(spec, state: Any) -> FastAPI:
                 "citations": citations, "answer": answer,
                 "cite_coverage": report.coverage,
                 "cite_blanket": report.blanket,
-                "cite_blanket": report.blanket,
                 "message_id": msg_id,
                 "invalid_ids": report.invalid_ids,
                 "loop_truncated": looped,

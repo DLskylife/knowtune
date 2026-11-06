@@ -138,7 +138,8 @@ cli.py  ← 命令行
 | `llm.py` | LLM 客户端：一个协议（OpenAI 兼容）、三档后端（vLLM / LM Studio / 云端）。整条链路唯一不可控的一段，超时、重试、字段退让、`reasoning_effort` 都在这里。 |
 | `think.py` | 剥掉思考型模型吐出的 `<think>…</think>` 块，避免推理过程被当成答案正文。 |
 | `evidence.py` | 证据分档：把"这批资料有多可信"量化成高/中/低，既不直接扔给模型、也不让界面假装很有把握。 |
-| `cite.py` | 引用校验：把"模型说它引用了"变成"确认它引用了"。算覆盖率、抓越界编号、给 feedback 关联 `message_id`。 |
+| `cite.py` | 引用校验：把"模型说它引用了"变成"确认它引用了"。算覆盖率、抓越界编号、给 feedback 关联 `message_id`。**它只判格式**——编号在不在、超没超范围。 |
+| `support.py` | 答案支撑度：把"引用了"变成"引到了"。答案逐句与所引证据块算余弦，外加事实锚点（数字/型号/命令行）比对，回答"这句话在资料里找不找得到"。不依赖 LLM，本地嵌入模型即可，所以能进每次问答的运行时链路。 |
 
 ### 4.8 `src/knowtune/api/` 后台
 
@@ -169,7 +170,7 @@ cli.py  ← 命令行
 | `models/` | 本地模型权重（嵌入 92M，精排可选）。 |
 | `vectors/` | 预留的向量落盘目录，当前向量直接存在 SQLite 里。 |
 | `secrets.json` | 会话密钥（服务停止即失效）。 |
-| `refusal_calibration.json` | 拒答阈值的标定结果，由 `knowtune eval --calibrate` 写出。 |
+| `refusal_calibration.json` | 拒答阈值的标定结果，由 `model-eval` 项目产出（leave-one-doc-out 造负例 → 扫两类分布），主项目只读。 |
 | `probe_cache.json` | 后端探测结果缓存，15 秒过期。 |
 
 ---

@@ -29,10 +29,11 @@ from fastapi.responses import FileResponse, JSONResponse, Response, StreamingRes
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from ..config import Config, ProviderCfg, calibration_of, load_config
+from ..config import Config, ProviderCfg, calibration_of, load_config, refusal_mode
 from ..db import Database
 from ..generate import cite as cite_mod
 from ..generate import llm as llm_mod
+from ..generate import support as support_mod
 from ..generate.llm import LLMClient, LLMError
 from ..generate.prompt import REFUSE_TEMPLATE, build_context, build_direct
 from ..index.embedder import Embedder
@@ -634,12 +635,23 @@ def status() -> dict:
             "min_margin": cfg.refusal.min_margin,
             "calibrated_at": cfg.refusal.calibrated_at,
             "samples_ok": cfg.refusal.calibrated_samples_ok,
+            # off / calibrated / advisory。前端据此决定那颗 pill 显示阈值还是
+            # 直接说「无有效判定」——显示一个永不触发的数字比不显示更误导。
+            "mode": refusal_mode(cfg),
             # 有标定文件但样本不足时，界面上要说清"为什么现在用的是出厂阈值"，
             # 否则用户只会看到阈值和他上次标定的数字不一样，以为程序没保存。
             "note": (
                 None if cfg.refusal.calibrated_at
                 else ("标定样本不足，已回退出厂阈值" if calibration_of(cfg) else "尚未标定，使用出厂阈值")
             ),
+        },
+        "support": {
+            "enabled": cfg.support.enabled,
+            "threshold": cfg.support.threshold,
+            "weak_ratio": cfg.support.weak_ratio,
+            # 句级阈值是经验值，没有评估集扫过。界面必须标出来，否则用户会
+            # 把它当成和下面 refusal.min_score 一样"标定出来的"数字。
+            "calibrated": False,
         },
         "uptime_s": int(time.time() - state.started_at),
         "params": {
@@ -2857,6 +2869,44 @@ def _debug_chunk_info(conn, chunk_ids: list[int]) -> dict[int, dict]:
     }
 
 
+def _support_payload(answer: str, bundle, cfg: Config) -> dict:
+    """答案支撑度：生成之后的校验。
+
+    与检索阶段的拒答判定是两件事。拒答猜的是「库里有没有」，靠 top1 余弦——
+    它量的是话题相似度，主题相邻的问题（库里有 K8s、问的是 GPU 推理）照样拿
+    高分，所以那个判据天生分不开。支撑度问的是「这段话在引用的资料里找得到吗」，
+    答案写出来了才判，判得准。
+
+    先看 is_loaded 是刻意的：`encode()` 会顺手把模型加载起来（import torch +
+    读权重，冷启动几十秒）。一条普通问答顺手把服务卡住半分钟，比少给一个指标
+    糟得多。
+    """
+    if not cfg.support.enabled:
+        return {"enabled": False, "skipped": "支撑度校验已关闭", "verdict": "unknown"}
+    if not bundle.citations:
+        return {"enabled": True, "skipped": "本次未使用资料（直答模式）", "verdict": "unknown"}
+    if not state.embedder.is_loaded:
+        return {"enabled": True, "skipped": "嵌入模型未加载，跳过语义支撑判定", "verdict": "unknown"}
+
+    evidence = {c.n: t for c, t in zip(bundle.citations, bundle.used_texts)}
+    started = time.perf_counter()
+    rep = support_mod.evaluate(
+        answer,
+        evidence,
+        state.embedder.encode,
+        threshold=cfg.support.threshold,
+        max_sentences=cfg.support.max_sentences,
+        min_answer_chars=cfg.support.min_answer_chars,
+    )
+    out = rep.as_dict()
+    out.update({
+        "enabled": True,
+        "weak_ratio": cfg.support.weak_ratio,
+        "ms": int((time.perf_counter() - started) * 1000),
+    })
+    return out
+
+
 def _debug_payload(result, cfg: Config | None = None, overrides: dict | None = None) -> dict:
     """一次检索的结果同时服务"回答"和"调试"两个消费者，绝不为了调试再跑一遍。"""
     cfg = cfg or state.cfg
@@ -3075,6 +3125,9 @@ def ask(req: AskRequest) -> Response:
                 "mode": "refuse",
                 "reason": result.refusal.reason,
                 "calibrated": result.refusal.calibrated,
+                # advisory = 阈值没标定过，这次拦截只是"明显不沾边"的粗筛，
+                # 不是统计上站得住的判定。前端不该把它渲染成确定结论。
+                "refusal_mode": refusal_mode(kb_cfg),
                 "candidates": len(result.candidates),
                 "degraded": result.degraded,
                 "timings_ms": timings,
@@ -3188,6 +3241,11 @@ def ask(req: AskRequest) -> Response:
         vr = cite_mod.verbatim_ratio(answer, bundle.used_texts)
         if vr >= 0.6 and not report.blanket:
             report.blanket = f"疑似照抄原文：{vr:.0%} 的句子与资料逐字相同，未归纳作答"
+        # 覆盖率管格式（编号在不在、越没越界），支撑度管内容（编号指的那段是不是
+        # 真在说这句话）。两个一起给：只报覆盖率时，"覆盖率 100% + 整段胡说"是
+        # 可以同时成立的，界面上就成了自相矛盾的信号。
+        sup = _support_payload(answer, bundle, kb_cfg)
+        timings["support_ms"] = sup.get("ms", 0)
         citations = [asdict(c) for c in bundle.citations]
         msg_id = (
             _save(conn, session_id, req.question, answer, trace_id, citations)
@@ -3203,6 +3261,7 @@ def ask(req: AskRequest) -> Response:
             "cite_blanket": report.blanket,
             "invalid_ids": report.invalid_ids,
             "uncited": report.uncited_sentences,
+            "support": sup,
             "degraded": result.degraded + ([f"llm_error:{error}"] if error else []),
             "answer": answer,
             "message_id": msg_id,

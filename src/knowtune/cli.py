@@ -20,6 +20,7 @@ from pathlib import Path
 from .config import load_config
 from .db import Database
 from .generate import cite as cite_mod
+from .generate import support as support_mod
 from .generate.llm import LLMClient, LLMError
 from .generate.prompt import REFUSE_TEMPLATE, build_context
 from .index.embedder import Embedder
@@ -159,6 +160,30 @@ def cmd_ask(args) -> int:
     print(f"引用覆盖率={report.coverage:.0%}  "
           f"越界编号={report.invalid_ids or '无'}  "
           f"降级={result.degraded or '无'}")
+
+    # 覆盖率只说明"编号在不在"，不说明"编号指的那段是不是真在讲这句话"。
+    # 支撑度补上后半句——这也是唯一能在本地算出来、不需要第二个大模型的内容级指标。
+    if cfg.support.enabled and bundle.citations:
+        evidence = {c.n: t for c, t in zip(bundle.citations, bundle.used_texts)}
+        sup = support_mod.evaluate(
+            answer, evidence, engine.embedder.encode,
+            threshold=cfg.support.threshold,
+            max_sentences=cfg.support.max_sentences,
+            min_answer_chars=cfg.support.min_answer_chars,
+        )
+        if sup.skipped:
+            print(f"支撑度=跳过（{sup.skipped}）")
+        else:
+            cited = f"{sup.score:.0%}" if sup.score is not None else "无引用句"
+            anchor = f"{sup.anchor_rate:.0%}" if sup.anchor_rate is not None else "无锚点"
+            print(f"支撑度 grounded={sup.grounded:.0%}  "
+                  f"引用句被支撑={cited}  锚点命中={anchor}  "
+                  f"判定={sup.verdict()}（阈值 {sup.threshold}，未标定）")
+            if sup.missed:
+                print(f"  证据里没有的锚点：{', '.join(sup.missed[:8])}")
+            for w in sup.weak[:3]:
+                flag = "引用" if w["cited"] else "无引用"
+                print(f"  未支撑({w['score']:.2f}, {flag})：{w['text']}")
     return 0
 
 
