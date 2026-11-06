@@ -269,8 +269,16 @@ def probe_one(
         # 图像/语音/实时/向量这几类也会挂在同一个 /models 下，不能让人去点它们
         chat_ids, hidden = split_chat_models(ids)
         # /models 200 ≠ 联通。追加对话验证：真能出 1 个 token 才算 ok。
-        chat_ok, chat_msg = _verify_chat(p, headers=headers, timeout_s=chat_timeout_s)
-        if chat_ok:
+        # 但弹窗里刚填完地址、还没选模型时就点验证，手里只有个 placeholder——
+        # 拿它去对话必然失败，报出来就是"placeholder 对话失败"，把"地址和密钥
+        # 都对"这个好消息盖掉了，用户以为配错了。这种情况 /models 通了就算通。
+        blind = p.model in ("", "placeholder")
+        chat_ok, chat_msg = (False, "") if blind else _verify_chat(
+            p, headers=headers, timeout_s=chat_timeout_s)
+        if blind and ids:
+            status = "ok"
+            msg = "地址和密钥都通 —— 从下面的候选里选一个模型（选完再验一次）"
+        elif chat_ok:
             # 只报结论。以前这里写"就绪 · 对话验证通过 · 12 个可对话模型
             # （另有 3 个图像/语音/实时类已隐藏）"，用户每测一次就被灌一遍
             # 与"通不通"无关的统计。模型数量在下拉里看得见，状态行不需要复述。
