@@ -21,9 +21,12 @@ from .config import load_config
 from .db import Database
 from .evaluate import (
     calibrate,
+    format_answer_report,
+    format_calibration,
     format_report,
     load_baseline,
     run_eval,
+    run_eval_answer,
     save_baseline,
     save_calibration,
 )
@@ -208,11 +211,7 @@ def cmd_eval(args) -> int:
             return 2
         save_calibration(cfg.refusal.calibration_file, result)
         print("拒答阈值标定完成（网格扫描评估集）：")
-        print(f"  min_score   = {result['min_score']}   (当前配置 {cfg.refusal.min_score})")
-        print(f"  min_margin  = {result['min_margin']}   (当前配置 {cfg.refusal.min_margin})")
-        print(f"  误拒率 {result['false_refusal_rate']:.1%}  "
-              f"漏拒率 {result['missed_refusal_rate']:.1%}  "
-              f"（可答 {result['n_answerable']} / 应拒 {result['n_should_refuse']}）")
+        print(format_calibration(result))
         print(f"  写入 {cfg.refusal.calibration_file}")
         if not result.get("reliable", True):
             print(
@@ -220,6 +219,44 @@ def cmd_eval(args) -> int:
                 "\n  多补几条 expect_refusal: true 的题再跑一次，否则阈值随样本抖得很厉害。"
             )
         print("\n重启服务后生效（配置在启动时加载）。换嵌入模型必须重新标定。")
+        return 0
+
+    if args.answer:
+        if not (cfg.generation.provider or "").strip():
+            print("未配置生成后端：去「模型」页新增一个 OpenAI 兼容地址，或扫本地 .gguf。",
+                  file=sys.stderr)
+            print("（答案质量评测需要先生成答案再让模型当裁判，必须有一个可用后端。）",
+                  file=sys.stderr)
+            return 2
+
+        client = LLMClient(cfg)
+
+        def _gen(question: str, candidates) -> str:
+            bundle = build_context(
+                candidates,
+                question=question,
+                token_budget=cfg.generation.context_token_budget,
+                min_context_chars=cfg.generation.min_context_chars,
+                prompt_version=cfg.prompt_version,
+                provider=cfg.generation.provider,
+            )
+            return "".join(client.stream(bundle.messages(question),
+                                        provider=cfg.generation.provider))
+
+        try:
+            report = run_eval_answer(
+                cfg, conn, engine, client,
+                k=args.k or cfg.eval.k,
+                gen=_gen,
+                rerank=None if args.rerank is None else args.rerank,
+            )
+        except FileNotFoundError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        print(format_answer_report(report))
+        if args.json:
+            print("\n--- json ---")
+            print(json.dumps(report.as_dict(), ensure_ascii=False, indent=2))
         return 0
 
     try:
@@ -313,6 +350,8 @@ def main(argv: list[str] | None = None) -> int:
     p_eval.add_argument("--no-rerank", dest="rerank", action="store_false")
     p_eval.add_argument("--save", action="store_true", help="把本次结果写成新基线")
     p_eval.add_argument("--calibrate", action="store_true", help="标定拒答阈值并写标定文件")
+    p_eval.add_argument("--answer", action="store_true",
+                        help="答案质量评测：生成答案 + LLM 裁判打分（需配置生成后端）")
     p_eval.add_argument("--json", action="store_true")
     p_eval.set_defaults(func=cmd_eval)
 

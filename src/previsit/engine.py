@@ -276,6 +276,9 @@ class PrevisitEngine:
         self.store = store
         self.llm = llm
         self._last_error: str | None = None
+        # 分诊来源：rule = 本地规则/域/图谱；llm = 完全没线索时的推理兜底。
+        # 病历里如实标注，医生能分清"系统判的"还是"模型猜的"。
+        self._triage_source: str = "rule"
         # 熔断：模型连不上时不要在**每一轮**都重试一遍。
         # 实测本地 lmstudio 没启动时，一次 start 要 7 秒（httpx 连接超时 +
         # tenacity 退避），而患者每答一句都要再等 7 秒——体感就是"卡死了"。
@@ -1139,7 +1142,8 @@ class PrevisitEngine:
             report, ok = self._report(sess, merged, dept, urgency, slots)
             if not ok:
                 degraded.append("report_template")
-            record = self._record(sess, merged, dept, urgency, report, slots=slots)
+            record = self._record(sess, merged, dept, urgency, report, slots=slots,
+                                  triage_source=self._triage_source)
             self.store.update(sid, state="done", dept=dept, urgency=urgency,
                               report=report, record=record)
             self.store.add_turn(sid, "assistant", report)
@@ -1166,7 +1170,8 @@ class PrevisitEngine:
             report, ok = self._report(sess, merged, dept, urgency, slots)
             if not ok:
                 degraded.append("report_template")
-            record = self._record(sess, merged, dept, urgency, report, slots=slots)
+            record = self._record(sess, merged, dept, urgency, report, slots=slots,
+                                  triage_source=self._triage_source)
             self.store.update(sid, state="done", dept=dept, urgency=urgency,
                               report=report, record=record)
             self.store.add_turn(sid, "assistant", report)
@@ -1527,7 +1532,8 @@ class PrevisitEngine:
     def _record(self, sess: dict[str, Any], merged: dict[str, Any],
                 dept: str, urgency: str, summary: str,
                 extra_note: str = "",
-                slots: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+                slots: list[dict[str, Any]] | None = None,
+                triage_source: str = "rule") -> dict[str, Any]:
         """把档案拼成结构化病历。
 
         为什么不用大模型整篇写：主诉、现病史、既往史、分诊结论都是**已经结构化**
@@ -1634,6 +1640,9 @@ class PrevisitEngine:
             "chief": chief_line,
             "dept": dept,
             "urgency": urgency,
+            # 分诊来源：rule = 本地规则/域/图谱；llm = 完全没线索时的推理兜底。
+            # 医生端/接口可据此区分"系统判的"与"模型猜的"，不进患者可见的 text。
+            "triage_source": triage_source,
             "sections": sections,
             "text": text,
             "note": note,
@@ -1709,7 +1718,65 @@ class PrevisitEngine:
             if votes and str(votes[0].get("ratio") or 0) not in ("", "0"):
                 return str(votes[0].get("dept") or ""), str(d.get("urgency") or "门诊就诊")
         dept = dom_dept or str(d.get("dept") or "") or "全科医学科"
+        # 规则/域/图谱都没给具体科室（落到「全科医学科」裸兜底）时，再用 LLM
+        # 做一次**轻量分诊兜底**——只建议科室 + 紧急程度，不做诊断。只要前面
+        # 有任何一条具体依据（规则命中 / 域默认 / 图谱投票），就不碰 LLM：
+        # 可审计的本地结论优先，模型只是"完全没线索"时的最后手段。无模型
+        # 时 _triage_llm 直接返回 None，这里退回原规则，行为不变。
+        if dept == "全科医学科":
+            llm_tri = self._triage_llm(merged, profile)
+            if llm_tri:
+                self._triage_source = "llm"
+                return llm_tri[0], llm_tri[1]
+        self._triage_source = "rule"
         return dept, str(d.get("urgency") or "门诊就诊")
+
+    def _triage_llm(self, merged: dict[str, Any],
+                    profile: dict[str, Any] | None = None) -> tuple[str, str] | None:
+        """分诊的轻量推理兜底（**非诊断**）。
+
+        仅在 `_triage` 落到「全科医学科」裸兜底时调用。模型只回答两件事：
+        最可能的就诊科室、紧急程度（门诊就诊 / 尽快就诊 / 急诊），不诊断、
+        不给治疗建议。任何解析失败或没配模型都返回 None，调用方退回规则。
+        """
+        if self.llm is None:
+            return None
+        # 只挑症状相关字段，别把年龄/性别/过敏史这些无关信息喂进去干扰判断。
+        skip = {"name", "gender", "age", "pregnant", "allergy", "past_history"}
+        syms = [f"{k}={v}" for k, v in merged.items()
+                if k not in skip and v not in (None, "", [], {})]
+        chief = (profile or {}).get("chief") or ""
+        if not syms and not chief:
+            return None
+        user = "患者自述症状：\n" + "\n".join(syms[:20])
+        if chief:
+            user += f"\n主诉：{chief}"
+        system = (
+            "你是分诊助手。只根据患者自述的症状，建议最可能的就诊科室和紧急程度。"
+            "不要做诊断，不要给任何治疗建议。严格只输出一行，格式：科室｜紧急程度。"
+            "紧急程度从[门诊就诊, 尽快就诊, 急诊]三选一。"
+            "示例：消化内科｜尽快就诊"
+        )
+        out = self._complete(system, user)
+        if not out:
+            return None
+        # 取最后一行：模型偶尔会先复述一遍指令，最后那行才是答案。
+        line = [ln for ln in out.splitlines() if ln.strip()][-1]
+        if "｜" in line:
+            parts = line.split("｜", 1)
+        elif "|" in line:
+            parts = line.split("|", 1)
+        elif "·" in line:
+            parts = line.split("·", 1)
+        else:
+            return None
+        dept = parts[0].strip().strip("【】[]（）()")
+        urg = parts[1].strip() if len(parts) > 1 else ""
+        if not dept:
+            return None
+        if urg not in ("门诊就诊", "尽快就诊", "急诊"):
+            urg = "门诊就诊"
+        return dept, urg
 
     def _cond(self, c: dict[str, Any], merged: dict[str, Any],
               profile: dict[str, Any] | None = None) -> bool:

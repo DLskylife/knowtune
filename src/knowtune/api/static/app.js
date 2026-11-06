@@ -599,10 +599,11 @@ function noModelCard(reason) {
   return `<div class="empty-state gate" id="emptyState">
     <span class="es-mark">!</span>
     <h2>还没配模型</h2>
-    <p>${esc(reason)}。回答要靠一个能连上的生成后端，配好再回来问。</p>
+    <p>${esc(reason)}。<b>在配好生成后端之前，这里提问只会返回检索到的片段，不会生成答案</b>——检索和问答是两个环节，后者必须有一个能连上的模型。</p>
+    <p class="hint">开箱三步：① 配后端（云端填密钥 / 本地扫 <code>.gguf</code> 起实例） → ② 建知识库 → ③ 回来提问出答案。</p>
     <div class="gate-actions">
       <button class="primary-btn" data-gate="models">去配置模型</button>
-      <button class="ghost-btn" data-gate="mock">先用 Mock 跑通</button>
+      <button class="ghost-btn" data-gate="mock">先用 Mock 看检索链路</button>
       <button class="ghost-btn" data-gate="kb">先去建知识库</button>
     </div>
     <div class="es-keys">
@@ -640,10 +641,10 @@ function maybeWarnNoModel() {
   state.noModelWarned = true;
   const close = showModal("还没有可用的模型", `
     <p class="hint u-mb12">
-      ${esc(c.reason)}。<br>配好之后再说，否则每次提问都会以失败告终。
+      ${esc(c.reason)}。<br>在配好生成后端之前，提问只会返回检索片段、生成不了答案——检索和问答是两个环节，后者必须有一个能连上的模型。
     </p>
     <div class="gate-actions" style="justify-content:flex-start;margin:0">
-      <button class="ghost-btn" id="warnMock">用 Mock 跑通</button>
+      <button class="ghost-btn" id="warnMock">用 Mock 看检索链路</button>
       <button class="ghost-btn" id="warnKb">先去建知识库</button>
     </div>
     <p class="hint u-mt12">

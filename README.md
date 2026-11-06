@@ -6,7 +6,7 @@
 数据全部落在本地 SQLite，LLM 接任意 OpenAI 兼容端点（vLLM / LM Studio / Ollama / 云端）。
 不联网也能跑，不把你的文档发给任何人。
 
-![tests](https://img.shields.io/badge/tests-255%20passed-brightgreen) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![license](https://img.shields.io/badge/license-MIT-lightgrey)
+![tests](https://img.shields.io/badge/tests-372%20passed-brightgreen) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![license](https://img.shields.io/badge/license-MIT-lightgrey)
 
 评估基线：**Recall@5 95.0% · MRR 0.779 · p50 17ms**。需求覆盖 32 项：24 已落地 / 4 部分 / 4 未做（逐条对照见 [docs/ARCHITECTURE.md §14](docs/ARCHITECTURE.md)）。
 
@@ -292,7 +292,7 @@ src/knowtune/      全部 Python 源码 + 两套前端静态文件
 config/            default / local / models / instances / prompts
 data/              library.db、上传原件、模型权重、密钥、标定结果
 evals/             题集与基线
-tests/             259 条单测
+tests/             374 条单测（372 passed / 1 skip）
 scripts/           截图、冒烟、模型下载、WBS 生成
 docs/              架构文档、项目地图、WBS
 ```
