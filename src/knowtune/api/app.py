@@ -344,6 +344,16 @@ async def lifespan(app: FastAPI):
     # 端口监听，不阻塞，而放到后台线程里会让"启动失败"变得没有反馈。
     for name in state.sites.start_autostart():
         print(f"[sites] 已自动启动站点 {name}")
+    # 同一个端口上已经有同名站点在跑（多半是另开了一个后台）：这不是故障，
+    # 但必须说出来。否则用户会在两个后台之间反复点"启动"，两边都给他一句
+    # "端口被占用，换一个端口"——而那个链接其实一直是通的。
+    for it in state.sites.status_list():
+        if it.get("status") != "external":
+            continue
+        pid = (it.get("managed_by") or {}).get("pid")
+        logbus.note(
+            f"站点 {it['name']}（:{it['port']}）已由{'PID ' + str(pid) if pid else '另一个后台进程'}"
+            "托管，本后台不重复启动；要启停请去那个后台", level="WARNING", source="sites")
     yield
     state.sites.stop_all()
 

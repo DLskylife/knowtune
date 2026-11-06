@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 import uuid
 from dataclasses import asdict
@@ -301,6 +302,11 @@ def build_site(spec, state: Any) -> FastAPI:
         alt_name = str(alt_raw.get("kb_name") or "").strip() or kb["name"]
         return {
             "name": s.name,
+            # 让别的进程能认出"这个端口上是知谱的前台站点"。两个后台同时开着时，
+            # 后者靠这两个字段判断该不该重复启动，而不是笼统报"端口被占用"。
+            "app": instcfg.SITE_APP_TAG,
+            "pid": os.getpid(),
+            "port": s.port,
             "lang": main_lang,
             "dir": "rtl" if main_lang == "ug" else "ltr",
             # 配置里声明的那个值：只在排查"为什么判定和填写不一样"时有意义。

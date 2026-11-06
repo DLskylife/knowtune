@@ -23,6 +23,9 @@ dependencies = [
     "jieba>=0.42.1",
     "structlog>=24.4.0",
     "python-multipart>=0.0.9",
+    # 端口被占时查出"占的是谁"（PID / 进程名）。前台实例是进程内线程，
+    # 两个后台撞同一个端口时，能不能说清占用者决定了用户是去关进程还是去改端口。
+    "psutil>=6.0.0",
 ]
 
 [project.optional-dependencies]

@@ -36,6 +36,10 @@ ANSWER_MODES = ("translate", "direct")
 PORT_MIN = 8800
 PORT_MAX = 8899
 
+# 前台站点在 /api/info 里报的身份。后台靠它回答"这个端口上跑的是谁"——
+# 少了这个字段，两个后台撞同一个端口时只能说"已被占用"，说不出占的是谁。
+SITE_APP_TAG = "knowtune-frontsite"
+
 
 @dataclass
 class InstanceSpec:

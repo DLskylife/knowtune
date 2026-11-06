@@ -6120,6 +6120,9 @@ function siteStatusBadge(st) {
   const map = {
     running: ["ok", "运行中"], stopped: ["", "已停止"], starting: ["warn", "启动中"],
     stopping: ["warn", "停止中"], error: ["err", "异常"],
+    // 端口上是同一个站点，但跑在**另一个后台进程**里：链接能用，本页管不了。
+    // 混进"异常"里就变成两件事共用一句"端口被占用"，用户会去改端口——改了就真错了。
+    external: ["warn", "外部托管"],
   };
   const [cls, label] = map[st] || ["", st || "未知"];
   return `<span class="badge ${cls}">${label}</span>`;
@@ -6220,6 +6223,7 @@ const KB_LANG_NAME = { zh: "中文语料", ug: "维吾尔语料", en: "英语语
 function siteBlock(i, meta, plan, defProv) {
   const d = state.sites || {};
   const running = i.status === "running";
+  const external = i.status === "external";
   const busy = i.status === "starting" || i.status === "stopping";
   const kb = (d.kbs || []).find((k) => k.id === i.kb_id);
   const resolved = (plan && plan.resolved) || {};
@@ -6228,14 +6232,21 @@ function siteBlock(i, meta, plan, defProv) {
     ? `<span class="sbk-dim warn" title="页面语言按文案内容判定，下拉只在判不出时兜底"
         >实际显示：${esc(LANG_NAME[i.content_lang] || i.content_lang)}</span>`
     : "";
+  const stateText = running
+    ? (i.uptime_s ? "已运行 " + i.uptime_s + "s" : "运行中")
+    : external
+      ? ((i.managed_by && i.managed_by.pid) ? "PID " + i.managed_by.pid
+        : "另开的那个后台在跑")
+      : "未运行";
 
-  return `<section class="site-block${running ? "" : " is-off"}" data-name="${esc(i.name)}">
+  return `<section class="site-block${running || external ? "" : " is-off"}"
+      data-name="${esc(i.name)}">
     <header class="sbk-head">
       <div class="sbk-id">
         <span class="sbk-name">${esc(i.name)}</span>
         ${siteStatusBadge(i.status)}
         <span class="sbk-dim">端口 ${i.port}</span>
-        <span class="sbk-dim">${running && i.uptime_s ? "已运行 " + i.uptime_s + "s" : "未运行"}</span>
+        <span class="sbk-dim">${stateText}</span>
         ${i.public ? `<span class="sbk-dim">局域网可访问</span>` : ""}
         ${shown}
       </div>
@@ -6243,9 +6254,10 @@ function siteBlock(i, meta, plan, defProv) {
         <button class="mini" data-scfg
           title="知识库、端口、模型角色、语言与全部界面文案">模型与参数</button>
         <button class="mini" data-sact="copy" data-url="${esc(i.url)}">复制链接</button>
-        <button class="mini" data-sact="${running ? "stop" : "start"}" ${busy ? "disabled" : ""}
-          >${running ? "停止" : "启动"}</button>
-        <button class="mini" data-sact="restart" ${busy ? "disabled" : ""}>重启</button>
+        ${external ? "" : `<button class="mini" data-sact="${running ? "stop" : "start"}"
+          ${busy ? "disabled" : ""}>${running ? "停止" : "启动"}</button>`}
+        ${external ? "" : `<button class="mini" data-sact="restart"
+          ${busy ? "disabled" : ""}>重启</button>`}
         <a class="mini loc" href="${esc(i.url)}" target="_blank" rel="noreferrer">打开</a>
       </div>
     </header>
@@ -6269,6 +6281,7 @@ function siteBlock(i, meta, plan, defProv) {
       >维吾尔语自检：${esc(i.ug_note)}${i.ug_sample
         ? `（模型返回：${esc(i.ug_sample.slice(0, 40))}）` : ""}</div>` : ""}
     ${i.error ? `<div class="sbk-note-line bad">${esc(i.error)}</div>` : ""}
+    ${i.note ? `<div class="sbk-note-line">${esc(i.note)}</div>` : ""}
   </section>`;
 }
 
@@ -6703,9 +6716,13 @@ function paintSites(d, roles, meta, pvCfg, gw) {
   state.gateway = gw || null;
   const items = data.items || [];
   const running = items.filter((i) => i.status === "running").length;
+  // 外部托管的站点是**能访问**的，只是不归这个后台管。把它算成"没在跑"，
+  // 页面顶部就会写着"0 个运行中"，而下面那张卡明明白白给了个能打开的链接。
+  const external = items.filter((i) => i.status === "external").length;
   $("pageTitle").textContent = "前台站点";
   $("pageSub").textContent = items.length
     ? `${items.length} 个站点 · ${running} 个运行中`
+      + (external ? ` · ${external} 个由别的后台托管` : "")
     : "还没有站点";
   $("pageActions").innerHTML =
     `<button class="primary-btn" id="btnNewSite">＋ 新建站点</button>`;
