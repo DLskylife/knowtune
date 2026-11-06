@@ -714,6 +714,11 @@ def status(kb_id: int | None = None) -> dict:
             "configured": bool(cfg.generation.provider)
             and cfg.generation.provider in cfg.generation.providers,
             "known": sorted(cfg.generation.providers),
+            # 库参数里没填后端名时跟随全局。界面要说清这一点，否则用户看到一个
+            # 自己没选过的名字会以为串库了；反过来，空字段也不该亮红点说"未选择"。
+            "follows_global": bool(kb_id) and not str(
+                (state.overrides(kb_id) or {}).get("generation.provider") or ""
+            ).strip(),
         },
         "rerank": {
             "enabled": cfg.retrieval.rerank.enabled,

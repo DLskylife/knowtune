@@ -143,29 +143,71 @@ body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
   text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
-.new-chat {
-  display: flex; align-items: center; gap: 8px;
-  margin: 2px 12px 10px; padding: 0 12px; height: 38px;
-  background: var(--surface); color: var(--ink);
-  border: 1px solid var(--line); border-radius: 11px;
+/* ------------------------------------------------------------ 板块导航
+
+   三颗等宽条目，不是三张卡：它们回答的是"现在在哪一栏"，不是"要不要点我"。
+   选中态用白底 + 品牌色描边，和会话列表里"当前会话"是同一套视觉语言——
+   同一个侧栏里两种"选中"长得不一样，用户会以为其中一个不是选中。 */
+.nav { display: flex; flex-direction: column; gap: 2px; padding: 2px 10px 10px; }
+.nav-item {
+  display: flex; align-items: center; gap: 9px;
+  width: 100%; height: 36px; padding: 0 10px;
+  border: 1px solid transparent; border-radius: 10px;
+  background: transparent; color: var(--ink-2);
   font: inherit; font-size: 13.5px; font-weight: 600; line-height: 1;
   cursor: pointer; text-align: left;
-  transition: border-color .14s, color .14s, background .14s, box-shadow .14s;
+  transition: background .14s, color .14s, border-color .14s, box-shadow .14s;
 }
-.new-chat svg {
-  width: 15px; height: 15px; flex: none; fill: none;
-  stroke: var(--brand); stroke-width: 2.2; stroke-linecap: round;
+.nav-item svg {
+  width: 16px; height: 16px; flex: none; fill: none;
+  stroke: currentColor; stroke-width: 1.7;
+  stroke-linecap: round; stroke-linejoin: round;
 }
-.new-chat:hover {
-  border-color: var(--brand-line); color: var(--brand);
-  background: var(--brand-soft); box-shadow: var(--shadow-sm);
+.nav-item .ni-label {
+  flex: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-/* 预问诊入口。外形沿用"新对话"，但用**虚线**边框区分：它不是开一个新会话，
-   而是跳到另一套前端（/previsit/）。两者长得一模一样会让人点错，点错之后
-   界面上又没有"返回"，只能靠浏览器后退——那是最容易被当成功能坏掉的情形。 */
-a.new-chat { text-decoration: none; }
-.new-chat.previsit-link { border-style: dashed; }
-.new-chat.previsit-link svg { stroke-width: 1.8; }
+/* 右侧那个数字是"这一栏有多少篇资料"。维医和古籍的差别就在语料上，
+   不写出来，用户不知道两个入口为什么答案风格差这么远。 */
+.nav-item .ni-meta { font-size: 11px; font-weight: 500; color: var(--ink-3); }
+.nav-item:hover { background: color-mix(in srgb, var(--ink) 6%, transparent); color: var(--ink); }
+.nav-item.on {
+  background: var(--surface); color: var(--brand);
+  border-color: var(--line); box-shadow: var(--shadow-sm);
+}
+.nav-item.on svg { stroke-width: 2; }
+.nav-item.on .ni-meta { color: var(--brand); opacity: .7; }
+/* 空板块：能看见、点得动（点进去会说"这一栏还没有资料"），但明显弱化——
+   直接置灰会让人以为按钮坏了，而它其实是想告诉你"去导入资料"。 */
+.nav-item.is-empty .ni-label { opacity: .55; }
+
+/* 会话区：标题行（"对话" + 新对话）+ 列表。
+   「新对话」从一颗通栏大按钮降级成这里的小加号：三栏并排之后，再放一颗
+   通栏按钮就和导航抢视觉层级，而且它只对前两栏有意义。 */
+.side-hist { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.hist-head {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 12px 2px 18px;
+}
+.hist-head > span {
+  flex: 1; font-size: 10.5px; font-weight: 600; letter-spacing: .04em;
+  color: var(--ink-3);
+}
+.hist-add {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; padding: 0;
+  border: 1px solid transparent; border-radius: 7px;
+  background: transparent; color: var(--ink-2); cursor: pointer;
+  transition: background .13s, color .13s, border-color .13s;
+}
+.hist-add svg {
+  width: 14px; height: 14px; fill: none;
+  stroke: currentColor; stroke-width: 2.2; stroke-linecap: round;
+}
+.hist-add:hover {
+  background: var(--brand-soft); color: var(--brand); border-color: var(--brand-line);
+}
+
 
 .side-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 2px 8px 14px; }
 .side-scroll::-webkit-scrollbar { width: 8px; }
@@ -683,3 +725,48 @@ a.new-chat { text-decoration: none; }
   .lang-switch button { padding: 4px 9px; font-size: 12px; }
   .top h1 { font-size: 13px; }
 }
+
+/* ------------------------------------------------------------ 预问诊病历卡
+
+   问诊结束后要落一份东西。之前它是独立站点里的一张整页表单；现在收在同一个
+   聊天流里，所以做成"最后一条回答"的形态：和答案同宽、同样的字号，只是加了
+   边框把它跟对话区分开。
+   分诊结论单独一块置顶：患者翻十屏摘要，最后想知道的还是"该去哪个科、急不急"。 */
+.pv-card {
+  margin-top: 4px; padding: 16px 18px;
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--r-lg); box-shadow: var(--shadow-sm);
+}
+.pv-card > h3 {
+  margin: 0 0 10px; font-size: 15px; font-weight: 700; color: var(--ink);
+}
+.pv-triage {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px;
+  padding: 10px 12px; margin-bottom: 14px;
+  background: var(--brand-soft); border-radius: var(--r-md);
+  border: 1px solid var(--brand-line);
+}
+.pv-triage .dept { font-size: 15.5px; font-weight: 700; color: var(--brand); }
+.pv-triage .urg { font-size: 12.5px; color: var(--ink-2); }
+/* 红旗征 / 急诊：这里必须显眼。它和普通"尽快就诊"不是一个量级。 */
+.pv-triage.is-urgent { background: var(--warn-soft); border-color: color-mix(in srgb, var(--warn) 34%, transparent); }
+.pv-triage.is-urgent .dept, .pv-triage.is-urgent .urg { color: var(--warn); }
+
+.pv-sec + .pv-sec { margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--line-soft); }
+.pv-sec > h4 {
+  margin: 0 0 4px; font-size: 11.5px; font-weight: 600; letter-spacing: .03em;
+  color: var(--ink-3);
+}
+.pv-sec > p { margin: 0; font-size: 14px; line-height: 1.85; white-space: pre-wrap; }
+.pv-acts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.pv-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 7px 13px; border: 1px solid var(--line); border-radius: 9px;
+  background: var(--surface-2); color: var(--ink-2);
+  font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer;
+  transition: border-color .14s, color .14s, background .14s;
+}
+.pv-btn:hover { border-color: var(--brand-line); color: var(--brand); background: var(--brand-soft); }
+.pv-btn.primary { background: var(--brand); border-color: var(--brand); color: #fff; }
+.pv-btn.primary:hover { background: var(--brand-2); color: #fff; }
+.pv-hint { margin: 10px 0 0; font-size: 12px; color: var(--ink-3); line-height: 1.7; }

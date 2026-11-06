@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
 <title>ئۇيغۇر تېبابىتى بىلىم سوئال-جاۋاب سىستېمىسى</title>
-<link rel="stylesheet" href="/style.css?v=1.7.5">
+<link rel="stylesheet" href="/style.css?v=1.7.7">
 <link rel="icon" href="data:,">
 <script>
   /*
@@ -15,7 +15,7 @@
    * 核对 app.js 报上来的编号，对不上就强制换一次。只换一次（sessionStorage 记
    * 一笔），免得极端情况下刷成死循环。
    */
-  window.SITE_REQ_BUILD = "1.7.5";
+  window.SITE_REQ_BUILD = "1.7.7";
   addEventListener("load", function () {
     if (window.SITE_BUILD === window.SITE_REQ_BUILD) return;
     if (sessionStorage.getItem("knowtune.site.reloaded")) return;
@@ -41,20 +41,22 @@
       </div>
     </div>
 
-    <button class="new-chat" id="btnNew" type="button">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
-      <span id="newLabel"></span>
-    </button>
+    <!-- 三个板块：维医问答 / 古籍问答 / 预问诊。
+         前两个是同一套问答、只是检索范围不同（维医库 vs 古籍），所以它们
+         共用一个会话列表；预问诊是另一条链路，进去就没有"对话历史"可列。
+         以前这里是两颗按钮（新对话、预问诊）——一个动词、一个名词并排，
+         用户看不出"预问诊"是另一套东西，点进去还换了个模样。 -->
+    <nav class="nav" id="nav" aria-label="板块"></nav>
 
-    <a class="new-chat previsit-link" id="btnPrevisit" href="previsit/">
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M9 3h6M12 3v6M6 9h12v9a3 3 0 0 1-3 3H9a3 3 0 0 1-3-3Z"/>
-        <path d="M10.5 15.5h3M12 14v3"/>
-      </svg>
-      <span>预问诊</span>
-    </a>
-
-    <div class="side-scroll" id="sideScroll"></div>
+    <div class="side-hist" id="sideHist">
+      <div class="hist-head">
+        <span id="histTitle"></span>
+        <button class="hist-add" id="btnNewChat" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+        </button>
+      </div>
+      <div class="side-scroll" id="sideScroll"></div>
+    </div>
   </aside>
 
   <div class="scrim" id="scrim" hidden></div>
@@ -83,6 +85,10 @@
         <div class="samples" id="samples"></div>
       </div>
       <div class="msgs" id="msgs"></div>
+      <!-- 预问诊用同一个聊天区、同一套气泡与输入框，只是把消息画在这里。
+           两块列表分开是为了切板块时不互相冲掉：共用一个容器的话，从预问诊
+           切回维医问答，刚才那串症状问答就会顶在知识库问答上面。 -->
+      <div class="msgs" id="pvMsgs" hidden></div>
     </main>
 
     <!-- 用户往上翻看旧答案时，新内容不该把他拽回底部。这个按钮只在
@@ -116,6 +122,6 @@
     </footer>
   </div>
 </div>
-<script src="/app.js?v=1.7.5"></script>
+<script src="/app.js?v=1.7.7"></script>
 </body>
 </html>

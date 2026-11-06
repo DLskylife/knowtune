@@ -70,6 +70,14 @@ class InstanceSpec:
     #       "samples": [...], "disclaimer": ...}
     # 缺的字段由 default_copy(lang) 补齐，所以只写要改的那几项就行。
     alt: dict[str, Any] = field(default_factory=dict)
+    # 「古籍问答」怎么认：文档标题里含这些词的归古籍，其余归维医。
+    #
+    # 库里同时躺着《黄帝内经》《本草纲目》和维吾尔医诊疗指南，混在一次检索里
+    # 的结果就是"肚子疼"召回到《本草纲目》的"腹中虚冷"，再被模型当成维医方案
+    # 讲给用户。分板块是最小代价的修法：不改索引、不动打分，只在检索时把
+    # doc_ids 限死。
+    # 留空 = 没有古籍板块（界面上只剩维医问答）。
+    classic_keywords: list[str] = field(default_factory=lambda: ["古籍"])
 
     def host(self) -> str:
         return "0.0.0.0" if self.public else "127.0.0.1"

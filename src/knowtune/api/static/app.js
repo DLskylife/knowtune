@@ -805,7 +805,9 @@ function renderStatus() {
   const gd = $("genDot");
   if (gen.configured) {
     gb.textContent = gen.provider;
-    gb.title = `当前生成后端：${gen.provider}`;
+    gb.title = gen.follows_global
+      ? `跟随全局生成后端：${gen.provider}（本库没有单独指定）`
+      : `当前生成后端：${gen.provider}`;
     gd.className = "dot ok";
   } else {
     gb.textContent = gen.provider ? "未配置" : "未选择";

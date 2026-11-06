@@ -201,6 +201,13 @@ def effective(cfg: Config, overrides: dict[str, Any]) -> Config:
     for key, value in overrides.items():
         if key not in KB_PARAM_MAP:
             continue
+        # 全量快照里常年存着一个空的 "generation.provider": ""。它不是用户
+        # "特意不要生成后端"，而是参数面板保存时留下的空字段。真按空串覆盖，
+        # 状态栏就会亮一颗写着「未选择」的红点，而问答其实走的是全局后端
+        # （2026-11-06 截图里 28020 chunk / bge-reranker-base 那张卡就是它）。
+        # 空串一律视为"跟随全局"，只有填了名字才算显式指定。
+        if key == "generation.provider" and not str(value or "").strip():
+            continue
         try:
             settings_mod.write_value(clone, key, value)
         except AttributeError:

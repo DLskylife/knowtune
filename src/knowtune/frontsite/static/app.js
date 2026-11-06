@@ -22,7 +22,7 @@
 
 /* 构建号：和 index.html 里那份必须一致，不一致说明浏览器拿的是旧 JS，
    页面加载完会强制换一次（见 index.html 里的自检脚本）。 */
-window.SITE_BUILD = "1.7.5";
+window.SITE_BUILD = "1.7.7";
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
@@ -72,6 +72,29 @@ const T = {
     earlier: "ئىلگىرى",
     del: "سۆھبەتنى ئۆچۈرۈش",
     delConfirm: "ئۆچۈرەمسىز؟",
+    // 左侧三个板块。文案跟着界面语言走，和答案语言是两件事。
+    navMed: "ئۇيغۇر تېبابىتى",
+    navClassic: "قەدىمكى كىتابلار",
+    navPv: "ئالدىن سوراش",
+    histTitle: "سۆھبەتلەر",
+    navEmpty: "يوق",
+    classicSub: "پەقەت قەدىمكى كىتابلاردىن ئىزدەيدۇ، ھازىرقى داۋالاش ئۆلچىمىنى ئارىلاشتۇرمايدۇ",
+    // 古籍栏的示例问题单独一套：直接把维医那三句搬过来，在古籍库里是必空的。
+    classicSamples: [
+      "قەدىمكى كىتابلاردا باش ئاغرىقىنى قانداق داۋالايدۇ؟",
+      "قەدىمكى كىتابلاردا ئىسسىقلىقنى قانداق چۈشۈرىدۇ؟",
+      "قەدىمكى كىتابلاردا يۆتەلگە نېمە ئىشلىتىلىدۇ؟",
+    ],
+    pvSub: "ئالامەتلەرنى تەرتىپكە سېلىپ، قايسى بۆلۈمگە كۆرۈنۈشنى ئېيتىدۇ",
+    pvDisc: "بۇ ئالدىن سوراش پەقەت ئۇچۇر تەرتىپلەش ئۈچۈن، دىئاگنوز ئەمەس. ئېغىر ياكى داۋاملىق ئېغىرلىشىۋاتقان ئالامەت بولسا دەرھال دوختۇرغا كۆرۈنۈڭ.",
+    pvPh: "نېمە يېرىڭىز ئاغرىيدۇ؟ مەسىلەن: قورساق ئاغرىقى",
+    classicPh: "قەدىمكى كىتابلاردا قانداق يېزىلغان؟ مەسىلەن: قورساق سوغۇق",
+    pvRestart: "قايتا باشلاش",
+    pvCopy: "خاتىرىنى كۆچۈرۈش",
+    pvThinking: "تەييارلىنىۋاتىدۇ…",
+    pvFailed: "ئالدىن سوراش مۇلازىمىتى جاۋاب بەرمىدى، سەل تۇرۇپ قايتا سىناڭ.",
+    pvEmpty: "بۇ بۆلەكتە تېخى ماتېرىيال يوق.",
+    pvEnded: "بۇ قېتىملىق سوراش ئاخىرلاشتى.",
     // 资料语言 · 作答语言。不能写死"维语作答"：答案语言现在跟着右上角走，
     // 高亮中文时那句"维语作答"就是当着用户的面撒谎。
     chip: (src, dst) =>
@@ -119,6 +142,27 @@ const T = {
     earlier: "更早",
     del: "删除这条对话",
     delConfirm: "确认删除",
+    navMed: "维医问答",
+    navClassic: "古籍问答",
+    navPv: "预问诊",
+    histTitle: "对话",
+    navEmpty: "未导入",
+    classicSub: "只检索古籍，不混入现代诊疗规范",
+    classicSamples: [
+      "古籍里头疼怎么治？",
+      "古籍里发热怎么处理？",
+      "古籍里咳嗽用什么药？",
+    ],
+    pvSub: "先整理症状，再给出就诊科室建议",
+    pvDisc: "预问诊只做信息整理，不构成诊断。出现剧烈或持续加重的症状，请立即就医或拨打 120。",
+    pvPh: "描述一下哪里不舒服，例如：肚子疼",
+    classicPh: "问古籍里怎么讲，例如：腹中虚冷",
+    pvRestart: "重新开始",
+    pvCopy: "复制病历",
+    pvThinking: "正在整理…",
+    pvFailed: "预问诊服务没有响应，稍后再试。",
+    pvEmpty: "这一栏还没有资料，请先在后台导入文档。",
+    pvEnded: "本次问诊已结束。",
     chip: (src, dst) =>
       `${LANG_LABEL.zh[src] || src}资料 · ${LANG_LABEL.zh[dst] || dst}作答`,
     stamp: (lang) => `${LANG_LABEL.zh[lang] || lang}作答`,
@@ -141,6 +185,23 @@ const T = {
     newChat: "New chat", noChats: "No conversations yet",
     today: "Today", earlier: "Earlier",
     del: "Delete this chat", delConfirm: "Delete",
+    navMed: "Uyghur medicine", navClassic: "Classics", navPv: "Pre-visit",
+    histTitle: "Chats", navEmpty: "none",
+    classicSub: "Classical texts only — no modern guidelines",
+    classicSamples: [
+      "How do the classics treat headache?",
+      "How do the classics handle fever?",
+      "What do the classics use for cough?",
+    ],
+    pvSub: "Collect symptoms, then suggest a department",
+    pvDisc: "Pre-visit only organizes information; it is not a diagnosis. "
+      + "For severe or worsening symptoms, seek care or call emergency services now.",
+    pvPh: "Where does it hurt? e.g. stomach ache",
+    classicPh: "What do the classics say? e.g. cold in the abdomen",
+    pvRestart: "Start over", pvCopy: "Copy record", pvThinking: "Preparing…",
+    pvFailed: "The pre-visit service is not responding. Please retry.",
+    pvEmpty: "No documents in this section yet.",
+    pvEnded: "This pre-visit session has ended.",
     chip: (src, dst) =>
       `${LANG_LABEL.en[src] || src} sources · answer in ${LANG_LABEL.en[dst] || dst}`,
     stamp: (lang) => `answered in ${LANG_LABEL.en[lang] || lang}`,
@@ -160,6 +221,21 @@ let uiLang = "ug";                // 当前界面语言（info.lang 或 info.alt
 let altMode = false;              // true = 当前在用另一套语言（中文）
 let follow = true;                // 滚动跟随：只有本来就贴底时才跟着走
 let activeAnswer = null;          // 正在流式的那个 .answer，停止时靠它收光标
+
+/* 当前板块。
+   med / classic 是同一套问答、只是检索范围不同（维医语料 vs 古籍）；
+   pv 是预问诊，走 /previsit 那条链路，但**界面还是这一个**：同一个聊天区、
+   同一种气泡、同一个输入框。换板块只换内容与顶栏文案，不换页面——
+   以前点"预问诊"会跳到另一个前端，整套配色、字体、交互全变，像开了另一个
+   系统；现在它只是左边第三栏。 */
+const VIEW_KEY = "knowtune.site.view";
+let view = localStorage.getItem(VIEW_KEY) || "med";
+if (!["med", "classic", "pv"].includes(view)) view = "med";
+
+/* 预问诊的会话状态。sid 为空 = 还没开诊。
+   done 之后输入框不再往后端发（引擎那边会回"本次问诊已结束"），改由卡片上的
+   「重新开始」接管。 */
+let pv = { sid: null, busy: false, done: false, record: null, turns: [] };
 
 const LANG_NAME = { ug: "ئۇيغۇرچە", zh: "中文", en: "English" };
 
@@ -192,7 +268,9 @@ function loadChats() {
 function saveChats() {
   try {
     const slim = chats.slice(0, MAX_CHATS).map((c) => ({
-      id: c.id, title: c.title, at: c.at,
+      // c: 这条对话属于哪一栏（med / classic）。老存档没有这个字段，
+      // 读的时候按 med 处理——它们确实都是维医问答时代留下的。
+      id: c.id, title: c.title, at: c.at, c: c.c || "med",
       msgs: c.msgs.map((m) => ({ ...m, a: String(m.a || "").slice(0, MAX_ANSWER) })),
     }));
     localStorage.setItem(CHAT_KEY, JSON.stringify(slim));
@@ -208,7 +286,7 @@ function currentChat() {
 function ensureChat(title) {
   let c = currentChat();
   if (!c) {
-    c = { id: sessionId, title: "", at: Date.now(), msgs: [] };
+    c = { id: sessionId, title: "", at: Date.now(), c: view === "pv" ? "med" : view, msgs: [] };
     chats.unshift(c);
   }
   if (!c.title && title) c.title = title.replace(/\s+/g, " ").slice(0, 40);
@@ -267,13 +345,16 @@ function sessRow(c) {
 function renderSessions() {
   const box = $("sideScroll");
   if (!info) return;
-  if (!chats.length) {
+  // 列表只列**当前这一栏**的对话：维医问答里出现一条"《本草纲目》说……"的
+  // 古籍对话，点进去会把人带到另一个检索范围里，而侧栏上看不出区别。
+  const mine = chats.filter((c) => (c.c || "med") === (view === "pv" ? "med" : view));
+  if (!mine.length) {
     box.innerHTML = `<p class="side-empty">${esc(t.noChats)}</p>`;
     return;
   }
   const today = new Date().toDateString();
   const groups = [[t.today, []], [t.earlier, []]];
-  chats.forEach((c) => {
+  mine.forEach((c) => {
     groups[new Date(c.at).toDateString() === today ? 0 : 1][1].push(c);
   });
   box.innerHTML = groups.filter((g) => g[1].length).map(([name, list]) =>
@@ -398,11 +479,43 @@ function renderChat() {
     openChat(b.dataset.id);
   };
 
+  $("nav").onclick = (e) => {
+    const b = e.target.closest("[data-view]");
+    if (!b) return;
+    switchView(b.dataset.view);
+  };
+
+  // 病历卡上的两颗按钮：卡片是每次渲染重建的，所以绑在容器上做事件委托。
+  $("pvMsgs").onclick = (e) => {
+    if (e.target.closest("[data-pv-restart]")) { pvStart(""); return; }
+    const cp = e.target.closest("[data-pv-copy]");
+    if (!cp || !pv.record) return;
+    copyText(pv.record.text || "").then((ok) => {
+      if (!ok) return;
+      const old = cp.textContent;
+      cp.textContent = t.copied;
+      setTimeout(() => { cp.textContent = old; }, 1600);
+    });
+  };
+
   $("btnSide").onclick = () => openSide(true);
   $("scrim").onclick = () => closeSide();
 
-  if (!sessionId) newSession();
-  else { renderSessions(); renderChat(); }
+  // 首屏按上次所在的板块进入。直接调 switchView 会走一遍"切板块"的收尾动作
+  // （关抽屉、重新聚焦），刷新页面时那些动作都不需要，所以这里分开走。
+  renderNav();
+  applyViewCopy();
+  if (view === "pv") {
+    $("welcome").hidden = true;
+    $("main").classList.remove("empty");
+    $("chat").classList.remove("empty");
+    enterPv();
+  } else if (!sessionId) {
+    newSession();
+  } else {
+    renderSessions();
+    renderChat();
+  }
 })();
 
 /* 自动聚焦只在有鼠标的桌面端做：手机上 focus 会立刻弹出键盘，
@@ -445,7 +558,7 @@ $("q").addEventListener("input", () => { autosize(); syncSend(); });
 $("q").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
 });
-$("btnNew").onclick = () => newSession();
+$("btnNewChat").onclick = () => newSession();
 $("btnSend").onclick = () => (busy ? stop() : send());
 
 /* Esc：先生成中则停止；否则收起侧栏抽屉 */
@@ -874,14 +987,286 @@ function applyChrome() {
   // 输入框的书写方向跟界面语言走：维语界面里占位符与光标就该在右侧开始。
   // 不能用 dir=auto——输入框为空时 auto 会退回父级 ltr，维语占位符被甩到左边。
   $("q").dir = dirOf(uiLang);
-  $("btnNew").lastElementChild.textContent = t.newChat;
-  $("btnNew").title = t.newChat;
+  $("btnNewChat").title = t.newChat;
+  $("histTitle").textContent = t.histTitle;
   syncSend();
   renderLangSwitch();
+  renderNav();
+  applyViewCopy();
+  renderSamples();
+}
+
+/* 示例问题。维医栏用站点自己配的那三句（本来就是照着这个库写的）；
+   古籍栏用另一套——点一下就是"古籍里没有四种体液"，示例的意义是让人
+   看到这里能问什么。 */
+function renderSamples() {
   const box = $("samples");
-  box.innerHTML = (c.samples || []).map((s) =>
+  const c = copy();
+  const samples = view === "classic" ? (t.classicSamples || []) : (c.samples || []);
+  box.innerHTML = samples.map((s) =>
     `<button class="chip" type="button" dir="auto"><span class="txt">${esc(s)}</span></button>`).join("");
 }
+
+/* ------------------------------------------------------------ 板块
+
+   三个入口：维医问答 / 古籍问答 / 预问诊。
+   前两个是"检索范围"的差别，第三个是另一条链路，但对用户来说它们是平级的
+   三个栏目——所以长相、位置、选中态必须一致，切过去也不换页面。 */
+
+const NAV_ICONS = {
+  // 问诊：对话气泡 + 十字
+  med: `<svg viewBox="0 0 24 24" aria-hidden="true">`
+    + `<path d="M20 12.5c0 3.6-3.6 6.5-8 6.5-1 0-2-.15-2.9-.42L4 20l1.1-3.2`
+    + `C4.4 15.7 4 14.1 4 12.5 4 8.9 7.6 6 12 6s8 2.9 8 6.5Z"/>`
+    + `<path d="M12 9.2v3.6M10.2 11h3.6"/></svg>`,
+  // 古籍：翻开的书
+  classic: `<svg viewBox="0 0 24 24" aria-hidden="true">`
+    + `<path d="M12 6.6C10.4 5.5 8.4 5 6 5H4v13h2c2.4 0 4.4.5 6 1.6`
+    + ` 1.6-1.1 3.6-1.6 6-1.6h2V5h-2c-2.4 0-4.4.5-6 1.6Z"/>`
+    + `<path d="M12 6.6V19.6"/></svg>`,
+  // 预问诊：病历夹 + 脉搏
+  pv: `<svg viewBox="0 0 24 24" aria-hidden="true">`
+    + `<path d="M9 4h6M12 4v3M6 8h12v10a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2Z"/>`
+    + `<path d="M8 14h2l1.2-2 1.6 4 1.3-2H16"/></svg>`,
+};
+
+const NAV_ORDER = ["med", "classic", "pv"];
+
+function navLabel(key) {
+  return key === "classic" ? t.navClassic : key === "pv" ? t.navPv : t.navMed;
+}
+
+function renderNav() {
+  const box = $("nav");
+  if (!box || !info) return;
+  const corp = info.corpora || {};
+  box.innerHTML = NAV_ORDER.map((key) => {
+    const on = key === view ? " on" : "";
+    // 预问诊没有"多少篇资料"，它读的是另一套知识库；这里不编一个数字给
+    // 它，右侧留空比给一个假数诚实。
+    const info_ = key === "pv" ? null : (corp[key] || {});
+    const empty = info_ && !info_.available;
+    const meta = info_
+      ? `<span class="ni-meta">${esc(empty ? t.navEmpty : info_.docs)}</span>` : "";
+    return `<button type="button" class="nav-item${on}${empty ? " is-empty" : ""}"`
+      + ` data-view="${key}">${NAV_ICONS[key]}`
+      + `<span class="ni-label">${esc(navLabel(key))}</span>${meta}</button>`;
+  }).join("");
+}
+
+/* 顶栏副标题、输入框占位符、免责声明都跟着板块走。
+   三个栏目共用一套骨架，如果这三处还留着"基于知识库检索"那句，用户在古籍
+   问答里就会以为古籍也能按现代规范回答。 */
+function applyViewCopy() {
+  const c = copy();
+  const pvOn = view === "pv";
+  if (pvOn) {
+    $("siteSub").textContent = t.pvSub || "";
+    $("q").placeholder = t.pvPh || "";
+    $("disclaimer").textContent = t.pvDisc || "";
+  } else {
+    $("siteSub").textContent =
+      view === "classic" ? (t.classicSub || c.subtitle || "") : (c.subtitle || "");
+    $("q").placeholder = view === "classic"
+      ? (t.classicPh || placeholderFor(uiLang)) : placeholderFor(uiLang);
+    $("disclaimer").textContent = c.disclaimer || "";
+  }
+  // "中文资料 · 维语作答"讲的是知识库检索那条链路，预问诊不沾边，藏掉。
+  $("toolChip").style.visibility = pvOn ? "hidden" : "";
+  $("sideHist").hidden = pvOn;
+  $("pvMsgs").hidden = !pvOn;
+  $("msgs").hidden = pvOn;
+}
+
+function switchView(key) {
+  if (!NAV_ORDER.includes(key)) key = "med";
+  const changed = key !== view;
+  if (busy) stop();
+  view = key;
+  localStorage.setItem(VIEW_KEY, key);
+  renderNav();
+  applyViewCopy();
+  renderSamples();
+  if (key === "pv") {
+    $("welcome").hidden = true;
+    $("main").classList.remove("empty");
+    $("chat").classList.remove("empty");
+    enterPv(changed);
+  } else {
+    renderChat();
+    renderSessions();
+    focusInput();
+  }
+  closeSide();
+}
+
+/* ------------------------------------------------------------ 预问诊
+
+   数据和后端在 /previsit 那套里（引擎、槽位、分诊规则一行没动），这里只是
+   换了一层皮：把"系统问一句、患者答一句"画成和知识库问答完全一样的气泡，
+   回答完的落点是最后一张病历卡。
+
+   为什么不是 iframe：iframe 里那套页面有自己的配色、字体、按钮圆角，塞进
+   来一眼就能看出是"另一个系统"。用户要的是合在一起，那就只能在这边重画。 */
+
+const PV_ROOT = "previsit";
+
+async function pvPost(path, body) {
+  const r = await fetch(`${PV_ROOT}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  return r.json();
+}
+
+function enterPv() {
+  // 已经有会话（切走又切回来）就保持原样，不重开——重开等于把刚说过的
+  // 症状全丢了，而用户只是想回来看一眼。
+  if (pv.sid || pv.busy) { scrollToBottom(); return; }
+  pvStart("");
+}
+
+async function pvStart(complaint) {
+  pv.busy = true;
+  pv.sid = null;
+  pv.done = false;
+  pv.record = null;
+  $("pvMsgs").innerHTML = "";
+  busy = true;
+  syncSend();
+  $("status").hidden = false;
+  $("status").textContent = t.pvThinking;
+  try {
+    const d = await pvPost("/api/previsit/start", { complaint: complaint || "" });
+    pvApply(d);
+  } catch (err) {
+    pvFail(err);
+  } finally {
+    pv.busy = false;
+    busy = false;
+    $("status").hidden = true;
+    syncSend();
+    focusInput();
+  }
+}
+
+async function pvSend(text) {
+  if (!text || pv.busy) return;
+  // 还没开诊（首屏 start 还没回来、或者失败了）：这句话本身就是主诉。
+  if (!pv.sid) return pvStart(text);
+
+  pv.busy = true;
+  busy = true;
+  syncSend();
+  $("q").value = "";
+  autosize();
+  // 先把自己的话画上去：等后端这两三秒里，输入框已经清空，不给回显的话
+  // 用户会以为这句没发出去，接着再打一遍。
+  const u = document.createElement("div");
+  u.className = "msg user";
+  u.dir = "auto";
+  u.textContent = text;
+  $("pvMsgs").appendChild(u);
+  $("status").hidden = false;
+  $("status").textContent = t.pvThinking;
+  scrollToBottom();
+
+  try {
+    const d = await pvPost("/api/previsit/reply", { session_id: pv.sid, message: text });
+    pvApply(d);
+  } catch (err) {
+    pvFail(err);
+  } finally {
+    pv.busy = false;
+    busy = false;
+    $("status").hidden = true;
+    syncSend();
+  }
+}
+
+function pvApply(d) {
+  if (!d) return;
+  if (d.session_id) pv.sid = d.session_id;
+  pv.done = d.state === "done" || d.state === "emergency";
+  pv.record = d.record || null;
+  pv.turns = d.turns || [];
+  pvRender(d);
+}
+
+function pvRender(d) {
+  const box = $("pvMsgs");
+  box.innerHTML = "";
+  (d.turns || []).forEach((turn) => {
+    const el = document.createElement("div");
+    if (turn.role === "user") {
+      el.className = "msg user";
+      el.dir = "auto";
+      el.textContent = turn.content || "";
+    } else {
+      el.className = "msg bot";
+      const a = document.createElement("div");
+      a.className = "answer";
+      a.dir = "auto";
+      // 复用答案渲染：分点、加粗都按同一套规则走，不然同一页里两种排版。
+      a.innerHTML = renderRich(turn.content || "");
+      el.appendChild(a);
+    }
+    box.appendChild(el);
+  });
+  if (pv.done && d.record) box.appendChild(pvCard(d));
+  follow = true;
+  scrollToBottom();
+}
+
+/* 病历卡。分诊结论放在最上面：患者翻完十行摘要，最后要知道的还是"去哪个科、
+   急不急"。急诊/红旗征单独配色，跟普通"尽快就诊"不是一个量级。 */
+function pvCard(d) {
+  const rec = d.record || {};
+  const wrap = document.createElement("div");
+  wrap.className = "msg bot";
+
+  const urgent = d.state === "emergency" || !!d.danger
+    || /立即|急诊|拨打|emergency/i.test(`${rec.urgency || ""}${d.urgency || ""}`);
+  const dept = rec.dept || d.dept || "";
+  const urg = rec.urgency || d.urgency || "";
+
+  const triage = (dept || urg)
+    ? `<div class="pv-triage${urgent ? " is-urgent" : ""}">`
+      + (dept ? `<span class="dept">${esc(dept)}</span>` : "")
+      + (urg ? `<span class="urg" dir="auto">${esc(urg)}</span>` : "")
+      + `</div>` : "";
+
+  const secs = (rec.sections || []).map((s) =>
+    `<div class="pv-sec"><h4>${esc(s.label || "")}</h4>`
+    + `<p dir="auto">${esc(s.text || "")}</p></div>`).join("");
+
+  wrap.innerHTML = `<div class="pv-card">
+      <h3 dir="auto">${esc(rec.title || "")}</h3>
+      ${triage}${secs}
+      <div class="pv-acts">
+        <button class="pv-btn primary" type="button" data-pv-copy>${esc(t.pvCopy)}</button>
+        <button class="pv-btn" type="button" data-pv-restart>${esc(t.pvRestart)}</button>
+      </div>
+      ${rec.note ? `<p class="pv-hint" dir="auto">${esc(rec.note)}</p>` : ""}
+    </div>`;
+  return wrap;
+}
+
+function pvFail(err) {
+  const el = document.createElement("div");
+  el.className = "msg bot";
+  const a = document.createElement("div");
+  a.className = "answer err";
+  a.dir = "auto";
+  a.textContent = `${t.pvFailed}（${err && err.message ? err.message : err}）`;
+  el.appendChild(a);
+  $("pvMsgs").appendChild(el);
+  scrollToBottom();
+}
+
+
 
 function altLang() {
   return (info && info.alt && info.alt.lang) || "zh";
@@ -1032,6 +1417,8 @@ function errorBubble(bot, raw) {
 async function send() {
   const q = $("q").value.trim();
   if (!q || busy) return;
+  // 预问诊走另一条链路：同一个输入框、同一颗发送键，只是请求打到 /previsit。
+  if (view === "pv") return pvSend(q);
   const chat = ensureChat(q);
   $("welcome").hidden = true;
   $("main").classList.remove("empty");
@@ -1078,6 +1465,9 @@ async function send() {
         // 答案语言 = 右上角高亮的语言。把界面语言随请求发下去，
         // 后端才不会按"它猜的提问语种"作答（猜错一次就是满屏错语言）。
         ui_lang: uiLang,
+        // 检索范围：med = 维医语料，classic = 古籍。不传就是整库——
+        // 这里必须传，否则顾客在"古籍问答"里问一句，拿回的可能是临床指南。
+        corpus: view,
       }),
       signal: ctrl.signal,
     });
@@ -1166,6 +1556,14 @@ async function send() {
     }
     if (ev.event === "done") {
       const d = ev.data || {};
+      // 后端做了确定性的收尾清理（剪掉「总之/综上所述」总结段与检索报告句）。
+      // 流式期间那几个字已经上屏，这里必须同步掉，否则当场看到的和刷新后
+      // 从历史里读到的不一样。
+      if (typeof d.answer === "string" && d.answer && d.answer !== acc) {
+        acc = d.answer;
+        bot.dataset.main = acc;
+        paintAnswer(bot, answerEl);
+      }
       const st = bot.querySelector(".answer.streaming");
       if (st) st.classList.remove("streaming");
       metaEl.remove();

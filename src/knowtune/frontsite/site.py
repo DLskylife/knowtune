@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import uuid
 from dataclasses import asdict
@@ -52,6 +53,61 @@ _LANG_TAIL = {
 _PREFILL = {"ug": "جاۋاب: "}
 
 
+# 中文指令模型有两个几乎改不掉的收尾习惯：正文写完了补一句「总之，……」，
+# 以及开头先交代「根据资料，……资料里没有……」。提示词里写"不要这样"没用，
+# 列了禁词反而会被它原样念出来（负向提示的反效果）。这两处用**确定性**规则收：
+# 只剪纯总结、纯检索报告句，不碰任何带 [n] 的事实句。
+_SUMMARY_OPENERS = (
+    "综上所述", "总之", "总的来说", "总的来看", "总体来说", "总体来看",
+    "概括起来", "概括来说", "简而言之", "综上",
+)
+_REPORT_STARTS = (
+    "根据资料", "资料显示", "资料中提到", "资料中未找到", "资料里没有",
+    "资料并未", "资料主要", "资料未提及", "以上资料", "资料不足以",
+)
+_ID_RE = re.compile(r"\[\d+\]")
+
+
+def tidy_answer(text: str) -> str:
+    """收尾清理：删检索报告句、删末尾总结段。删到没内容时原样退回。"""
+    if not text.strip():
+        return text
+    # ① 报告句：按句拆、保留标点与换行。只删不带编号的短句——带 [n] 的
+    #   句子往往夹着真正的事实，删了会把引用一起丢掉。
+    sentences = re.split(r"(?<=[。！？])", text)
+    kept = [
+        s for s in sentences
+        if not (s.strip() and s.strip().startswith(_REPORT_STARTS)
+                and len(s.strip()) <= 100 and not _ID_RE.search(s))
+    ]
+    out = "".join(kept)
+    if not out.strip():
+        return text
+    # ② 末尾总结段
+    paras = out.split("\n\n")
+    while len(paras) > 1:
+        tail = paras[-1].strip()
+        if len(tail) <= 160 and tail.startswith(_SUMMARY_OPENERS):
+            paras.pop()
+            continue
+        break
+    out = "\n\n".join(paras).rstrip()
+    # 总结句挂在上一段末尾（没有空行）的情形：只认最后 160 字里的那个开头，
+    # 避免把正文中间一句正常的「总之」也切掉。
+    start = max(0, len(out) - 160)
+    last = out[start:]
+    hit = None
+    for opener in _SUMMARY_OPENERS:
+        idx = last.find(opener)
+        # 前面得有正文，且「总之」是另起一句（前面是句末标点 / 引用编号 / 空白）。
+        if idx >= 0 and (idx == 0 or last[:idx].strip()
+                         and last[:idx].rstrip()[-1] in "。！？\n]"):
+            hit = idx if hit is None else min(hit, idx)
+    if hit is not None:
+        out = out[: start + hit].rstrip()
+    return out or text
+
+
 class SiteAsk(BaseModel):
     question: str = Field(min_length=1, max_length=4000)
     session_id: str | None = None
@@ -60,6 +116,8 @@ class SiteAsk(BaseModel):
     # 高亮维语却在下面看到一整段中文，是最难解释的一种不一致——用户会以为
     # 翻译坏了，其实是我们把"用哪种语言回答"交给了模型对提问的语种猜测。
     ui_lang: str = ""
+    # 左侧板块：med = 维医问答，classic = 古籍问答。留空 = 整库检索。
+    corpus: str = ""
 
 
 class SiteFeedback(BaseModel):
@@ -261,6 +319,33 @@ def build_site(spec, state: Any) -> FastAPI:
         """
         return provider_for(role, spec=s or _cur(), kb_cfg=kb_cfg, cfg=state.cfg)
 
+    def _corpora(conn, s) -> dict[str, list[int]]:
+        """把库里的文档分成「维医」与「古籍」两拨，返回各自的 doc_id。
+
+        为什么要分：这个库里同时躺着《黄帝内经》《本草纲目》和维吾尔医诊疗
+        指南。混着检索时，"肚子疼"会命中《本草纲目》的"腹中虚冷"，模型再把它
+        当维医方案讲出来——用户看到的是一段有引用、有剂量、但根本不是维医的
+        答案。分板块之后，各自只在自己的语料里检索，这类串味从源头消失。
+
+        认法只有一条：标题里含 classic_keywords（默认「古籍」）。不看来源路径、
+        不看导入批次——那两样在换了电脑或重导一次之后就对不上了，而标题是
+        导入时人写的、也是用户在来源里看到的同一个字符串。
+        """
+        keys = [str(k) for k in (getattr(s, "classic_keywords", None) or []) if str(k)]
+        rows = conn.execute(
+            "SELECT id, title FROM document WHERE kb_id=? AND status='ready'",
+            (s.kb_id,),
+        ).fetchall()
+        out: dict[str, list[int]] = {"med": [], "classic": []}
+        for r in rows:
+            title = str(r["title"] or "")
+            if keys and any(k in title for k in keys):
+                out["classic"].append(int(r["id"]))
+            else:
+                out["med"].append(int(r["id"]))
+        return out
+
+
     @app.get("/")
     def index() -> FileResponse:
         return FileResponse(_static("index.html"))
@@ -288,6 +373,7 @@ def build_site(spec, state: Any) -> FastAPI:
             "SELECT COUNT(*) c FROM chunk c JOIN document d ON d.id=c.doc_id"
             " WHERE d.kb_id=? AND c.generation=d.active_gen", (s.kb_id,)
         ).fetchone()["c"]
+        corp = _corpora(conn, s)
         main_copy_raw = {
             "title": s.title, "subtitle": s.subtitle, "welcome": s.welcome,
             "samples": s.samples, "disclaimer": s.disclaimer,
@@ -334,6 +420,17 @@ def build_site(spec, state: Any) -> FastAPI:
             "kb_lang": kb_lang_,
             "answer_mode": getattr(s, "answer_mode", "direct"),
             "cross_lingual": main_lang != kb_lang_,
+            # 左侧那三个板块里，前两个是检索范围不同的同一套问答；预问诊是
+            # 另一个引擎（/previsit/ 已挂在同一个站点下）。docs 给界面显示
+            # "这个板块有多少资料"，也是"古籍版块为不为空"的唯一依据——
+            # 空板块的入口应该说明原因，而不是让用户点进去问一个永远没有
+            # 引用的答案。
+            "corpora": {
+                "med": {"docs": len(corp["med"]), "available": bool(corp["med"])},
+                "classic": {"docs": len(corp["classic"]),
+                            "available": bool(corp["classic"])},
+            },
+            "previsit": {"available": True, "mount": "previsit"},
             "roles": role_plan(
                 instance_roles=getattr(s, "roles", {}) or {},
                 global_roles=getattr(state.cfg.generation, "roles", {}) or {},
@@ -425,9 +522,26 @@ def build_site(spec, state: Any) -> FastAPI:
                                  "provider": tr_provider,
                                  "error": terr})
 
+            # 板块范围：维医问答 / 古籍问答 是同一套问答、不同的检索范围。
+            # 不传（或者传了不认识的值）= 整库检索，行为与 1.7.5 之前完全一致，
+            # 老前端、直接打 /api/ask 的脚本因此不会因为新增字段而变形。
+            scope = str(getattr(req, "corpus", "") or "").strip().lower()
+            doc_ids = None
+            if scope in ("med", "classic"):
+                doc_ids = _corpora(conn, s).get(scope) or []
+                if not doc_ids:
+                    # 空板块要说清楚是"这一栏还没有资料"，不能让它去整库检索——
+                    # 那样用户点"古籍问答"问一句，拿到的却是临床指南的引用，
+                    # 板块就形同虚设，而且错得很隐蔽。
+                    yield _sse("error", {"message": (
+                        "这个板块还没有资料，请先在后台导入。"
+                        if lang != "ug" else
+                        "بۇ بۆلەكتە تېخى ماتېرىيال يوق."), "trace_id": trace_id})
+                    return
+
             t0 = time.perf_counter()
             result = state.engine.search(
-                conn, query, kb_id=s.kb_id, cfg=kb_cfg,
+                conn, query, kb_id=s.kb_id, doc_ids=doc_ids, cfg=kb_cfg,
             )
             timings.update(result.timings)
 
@@ -488,6 +602,7 @@ def build_site(spec, state: Any) -> FastAPI:
                 "query_lang": q_lang, "answer_lang": answer_lang,
                 "answer_mode": getattr(s, "answer_mode", "direct"),
                 "two_stage": two_stage,
+                "corpus": scope,
                 "evidence": grade,
                 "evidence_top": top_score,
                 "evidence_min": kb_cfg.refusal.min_score,
@@ -523,7 +638,10 @@ def build_site(spec, state: Any) -> FastAPI:
                 for _try in range(2):
                     try:
                         draft = state.llm.complete(
-                            draft_msgs, provider=gen_provider, temperature=0.2
+                            # 0.2 太死：同一个问题连问三次措辞几乎逐字相同，
+                            # 而且容易只把资料里那一两句复述完就收笔。0.35 仍在
+                            # RAG 的稳妥区间，但愿意把上下文补完整。
+                            draft_msgs, provider=gen_provider, temperature=0.35
                         ).text or ""
                     except Exception as exc:
                         draft = ""
@@ -640,12 +758,16 @@ def build_site(spec, state: Any) -> FastAPI:
                             tr_failed = True
                             yield _sse("delta", {"text": draft})
             else:
-                messages = with_guide(bundle.messages(req.question, hist))
+                msgs = bundle.messages(req.question, hist)
                 if answer_lang:
                     tail = _LANG_TAIL.get(answer_lang, "")
-                    if tail and messages:
-                        messages[-1] = {**messages[-1],
-                                        "content": messages[-1]["content"] + tail}
+                    if tail and msgs:
+                        msgs[-1] = {**msgs[-1],
+                                    "content": msgs[-1]["content"] + tail}
+                # 语言尾巴加在**档位指令之前**：【编号】必须是模型张嘴前读到的
+                # 最后一行。以前反过来，最后一句是「回答必须用中文」，编号要求
+                # 被压到倒数第二，实测整篇一个 [n] 都不挂。
+                messages = with_guide(msgs)
                 try:
                     for i, piece in enumerate(
                             _stream_answer(messages, gen_provider, answer_lang)):
@@ -661,7 +783,7 @@ def build_site(spec, state: Any) -> FastAPI:
                     error = f"{type(exc).__name__}: {exc}"
             timings["gen_ms"] = int((time.perf_counter() - gen_started) * 1000)
 
-            answer = "".join(acc)
+            answer = tidy_answer("".join(acc))
             if error and not answer:
                 yield _sse("error", {"message": error, "trace_id": trace_id})
                 return

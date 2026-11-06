@@ -122,7 +122,8 @@ def build_context(
     system_prompt = load_system_prompt(prompt_version, answer_lang, provider)
     if answer_lang:
         system_prompt += answer_instruction(answer_lang)
-    # 证据不足时必须在系统提示里点名作废"禁止外部知识"那条，写在用户消息里不管用
+    # 证据不足时在**系统提示**里补一句"别硬往资料上靠"。老版本是点名作废
+    # "禁止外部知识"那条硬约束；现在的 qa_v1 已允许用自身知识补全，不需要作废。
     if evidence and evidence != "high":
         system_prompt += evidence_rule.override(evidence)
     # 地板值与 chatctx 共用 generation.min_context_chars：两边若各写一个数，
@@ -165,12 +166,14 @@ def build_context(
         )
 
     dropped = len(candidates) - len(used)
+    # 以前这里分两版：high 档催"请依据上述资料作答"，其余档催"按【本轮例外】
+    # 条款作答并标明通用知识"。两版都在把模型的注意力往"资料"上拽，于是答案
+    # 变成"资料中未找到……资料主要讨论了……"的检索报告。现在只留一句中性的：
+    # 把问题答完整，带编号的是资料、不带的是自己说的，不必在正文里声明来源。
     tail = (
-        "请依据上述资料作答，并按要求标注来源编号。"
-        if (not evidence or evidence == "high")
-        # 资料不够硬时不能再催它"依据资料"——那就等于逼它拿不沾边的资料硬凑
-        else "请按系统提示中的【本轮例外】条款作答：资料里有的带 [n] 编号，"
-             "资料里没有的用自身知识答完并标明。"
+        "请把这个问题完整答完：资料里确实对得上题的事实带 [n] 来源编号，"
+        "资料没覆盖到的部分用你自己的知识补足（不带编号即可）。"
+        "不要写「资料中未找到」「资料显示」「根据资料」这类检索报告式的句子。"
     )
     user_prompt = (
         "【资料】\n"
