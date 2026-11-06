@@ -344,7 +344,7 @@ config/default.yaml          ← 出厂值，代码里不再有第二份默认�
 它们不进 FTS 是**正确行为**。别再照着"FTS 缺 2/3"这个错误结论去改代码。
 
 顺带移出项目（在 `D:\_trash_skyagent_20261101\`，确认无误后可整个删）：
-`data/models/BAAI--bge-reranker-base`（1.1 GB，库级已关精排）、
+`data/models/BAAI--bge-reranker-base`（1.1 GB，当时库级关着精排；后已放回并开启，见 ARCHITECTURE §4.5）、
 `data/library.db.bak_prefold`（208 MB 旧备份）、`_shot/`（开发截图）。
 
 清理后：非 `.venv` 文件数 334 → 97（其中 2 个是这次新增的：本文件与 `.gitignore`），

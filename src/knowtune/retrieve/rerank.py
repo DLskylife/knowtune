@@ -78,6 +78,32 @@ class Reranker:
             self._models[model_name] = model
             return model
 
+    def warmup(self) -> str | None:
+        """提前把权重读进内存。返回错误信息，None 表示就绪。
+
+        1.1G 权重冷读要 5-7 秒，这 7 秒落在第一个提问的人头上就是"点了发送
+        干等"，而他并不知道这只发生一次。精排默认开着，这笔账迟早要付，
+        放到启动预热的线程里付最便宜。
+
+        失败也在这里落 last_error：不落的话，界面要等到有人提问才发现精排
+        一直没生效——和"标定没生效应"一样，是"看起来开着、实际没跑"。
+        """
+        name = self.cfg.retrieval.rerank.model
+        try:
+            self._get(name)
+            return None
+        except ImportError:
+            self._last_error = (
+                "未安装 sentence-transformers，精排不可用；"
+                '请执行 pip install -e ".[local]"'
+            )
+        except FileNotFoundError as exc:
+            self._last_error = str(exc)
+        except Exception as exc:
+            self._last_error = f"精排模型加载失败（{name}）：{type(exc).__name__}: {exc}"
+        self._failed.add(name)
+        return self._last_error
+
     def rerank(
         self,
         query: str,

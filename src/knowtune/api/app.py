@@ -276,6 +276,19 @@ def _warmup(state: "AppState") -> None:
         print(f"[warmup] 嵌入模型预热失败：{type(exc).__name__}: {exc}")
         logbus.note(f"嵌入模型预热失败：{exc}", level="ERROR", source="warmup")
 
+    # 精排放在嵌入模型之后：嵌入是每次提问都要用的，精排只影响排序质量，
+    # 两者抢 CPU 时不该让精排挡在前面。库级可能关了精排，但全局开着就先热着——
+    # 用户随时会切到开着精排的库，省下的是那一次 7 秒。
+    if state.cfg.retrieval.rerank.enabled:
+        t1 = time.perf_counter()
+        err = state.reranker.warmup()
+        if err:
+            print(f"[warmup] 精排预热失败：{err}")
+            logbus.note(err, level="WARNING", source="warmup")
+        else:
+            ms = int((time.perf_counter() - t1) * 1000)
+            print(f"[warmup] 精排模型就绪（{ms}ms）")
+
 
 def _sweep_orphan_imports() -> None:
     """收拾上次没跑完的导入。
@@ -672,8 +685,13 @@ def status(kb_id: int | None = None) -> dict:
         },
         "rerank": {
             "enabled": cfg.retrieval.rerank.enabled,
+            # 全局值也报一份：库参数是独立快照，"全局开着、本库关着"是常态，
+            # 只给本库值的话，界面说"已关闭"却查不到是在哪儿关的。
+            "global_enabled": state.cfg.retrieval.rerank.enabled,
             "default_model": cfg.retrieval.rerank.model,
             "last_error": state.reranker.last_error,
+            "max_length": cfg.retrieval.rerank.max_length,
+            "candidates": cfg.retrieval.fusion.top_k,
         },
         "refusal_calibrated": bool(cfg.refusal.calibrated_at),
         "refusal": {

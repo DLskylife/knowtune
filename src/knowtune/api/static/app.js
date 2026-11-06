@@ -783,8 +783,20 @@ function renderStatus() {
     stopWarmPoll();
   }
   const rr = $("statRerank");
+  // 只显示全局开关是不够的：库参数是独立的一份，"全局开着、本库关着"才是
+  // 实际最常见的状态。用户看到"已关闭"却想不起在哪儿关的，就会以为功能坏了。
   rr.textContent = s.rerank.enabled ? s.rerank.default_model.split("/").pop() : "已关闭";
-  rr.title = s.rerank.enabled ? s.rerank.default_model : "精排已关闭";
+  if (!s.rerank.enabled) {
+    rr.title = s.rerank.global_enabled
+      ? "本库参数里关了精排（全局是开着的）。到参数面板的「检索」分组里打开"
+      : "精排已关闭（全局参数）";
+  } else {
+    const bits = [s.rerank.default_model];
+    if (s.rerank.candidates) bits.push(`前 ${s.rerank.candidates} 条候选`);
+    if (s.rerank.max_length) bits.push(`每条截断 ${s.rerank.max_length} 字`);
+    if (s.rerank.last_error) bits.push(`⚠ ${s.rerank.last_error}`);
+    rr.title = bits.join(" · ");
+  }
   const pill = $("refusalPill");
   const pillText = $("refusalText");
   // 四种状态必须分开说，别再显示一个"看起来像个决定"的数字：
