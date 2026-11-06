@@ -302,6 +302,7 @@ docs/              架构文档、项目地图、WBS
 
 | 文件 | 内容 |
 |---|---|
+| [docs/USER_GUIDE.md](docs/USER_GUIDE.md) | **使用说明书**：跑起来、建库导入、怎么读引用与支撑度、参数含义、标定步骤、排障表、已知限制 |
 | [docs/PROJECT_MAP.md](docs/PROJECT_MAP.md) | 每个目录每个文件干什么，五层依赖怎么拼起来，两条主链路的时序 |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 数据模型、检索参数为什么这么定、拒答标定、实测数据、踩坑记录 |
 | [docs/TECH_STACK.md](docs/TECH_STACK.md) | 完整技术清单、分层架构、三处关键决策（无向量库 / Bi+Cross 两阶段 / 中文 BM25 预分词） |
