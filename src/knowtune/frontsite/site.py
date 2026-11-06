@@ -165,6 +165,24 @@ def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def provider_for(role: str, *, spec: Any, kb_cfg: Any, cfg: Any) -> str:
+    """这个站点在这个知识库上，某个角色实际会用哪个后端。
+
+    问答请求和启动自检**必须走同一条链**。自检以前直接拿 `spec.provider`
+    （多数站点是空串）去发请求，于是掉到全局默认；全局默认可以是空的，
+    结果就是：站点答得好好的，卡片上却写着"自检没跑通：未知 provider"。
+    那不是模型不会维吾尔语，是我们拿一个不存在的后端去问了它。
+    """
+    return role_resolve(
+        role,
+        instance_roles=getattr(spec, "roles", {}) or {},
+        global_roles=getattr(cfg.generation, "roles", {}) or {},
+        instance_provider=getattr(spec, "provider", "") or "",
+        default_provider=getattr(kb_cfg.generation, "provider", "") or "",
+        known=getattr(cfg.generation, "providers", {}) or {},
+    )
+
+
 def build_site(spec, state: Any) -> FastAPI:
     """spec: `instcfg.InstanceSpec`；state: 后台的 `AppState`。
 
@@ -241,15 +259,7 @@ def build_site(spec, state: Any) -> FastAPI:
         最坏情况是退化成"不分工"，绝不会让站点 500。
         `s` 是本次请求读到的配置：换了翻译模型不该等重启才生效。
         """
-        cur_ = s or _cur()
-        return role_resolve(
-            role,
-            instance_roles=getattr(cur_, "roles", {}) or {},
-            global_roles=getattr(state.cfg.generation, "roles", {}) or {},
-            instance_provider=cur_.provider or "",
-            default_provider=kb_cfg.generation.provider,
-            known=getattr(state.cfg.generation, "providers", {}) or {},
-        )
+        return provider_for(role, spec=s or _cur(), kb_cfg=kb_cfg, cfg=state.cfg)
 
     @app.get("/")
     def index() -> FileResponse:

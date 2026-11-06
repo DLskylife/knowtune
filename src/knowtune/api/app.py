@@ -3881,14 +3881,22 @@ def get_model_roles() -> dict:
     default = state.cfg.generation.provider
     items = []
     for spec in instcfg.load_all():
+        # 每个站点真正会用的"当前默认"是**它自己那个库**的有效配置，不是全局那个。
+        # 用全局值算，库级钉了 siliconflow 的站点会显示成"什么都没配"，
+        # 而站点问答其实一直是通的——卡片和事实对不上。
+        try:
+            kb_default = state.effective_cfg(spec.kb_id).generation.provider or default
+        except Exception:
+            kb_default = default
         resolved = roles_mod.plan(
             instance_roles=spec.roles or {},
             global_roles=state.cfg.generation.roles or {},
             instance_provider=spec.provider or "",
-            default_provider=default,
+            default_provider=kb_default,
             known=providers,
         )
-        items.append({"name": spec.name, "roles": spec.roles or {}, "resolved": resolved})
+        items.append({"name": spec.name, "roles": spec.roles or {},
+                      "kb_default": kb_default, "resolved": resolved})
     return {
         "roles": list(roles_mod.ROLES),
         "labels": roles_mod.ROLE_LABELS,

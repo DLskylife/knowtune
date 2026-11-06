@@ -392,36 +392,59 @@ class InstanceManager:
         qwen2.5-7b 这一档对维吾尔语的支持很弱：提示写得再硬，它也可能回中文、
         复读、或者把系统提示一起吐出来。不先测一次，用户只会看到"答案不对"，
         却分不清是检索错了、还是模型根本说不了维吾尔语。
+
+        测哪个模型不是随便挑的：答案最终由谁产出，就测谁。`direct` 模式是
+        generate 直接写维语，`translate` 模式是 translate 把中文稿译过去。
+        以前这里直接拿 `rt.spec.provider`（站点多半留空）去发，落到全局默认，
+        而全局默认可以是空的——于是站点一路答得好好的，卡片上却挂着
+        "自检没跑通：未知 provider"。那是自检问错了对象，不是模型不会维语。
         """
         from ..lang import detect, repeating
+        from .site import provider_for
 
         if rt.spec.lang != "ug":
             return
+        try:
+            kb_cfg = self.state.effective_cfg(rt.spec.kb_id)
+            role = "generate" if getattr(rt.spec, "answer_mode", "translate") == "direct" \
+                else "translate"
+            ref = provider_for(role, spec=rt.spec, kb_cfg=kb_cfg, cfg=self.state.cfg)
+        except Exception as exc:
+            rt.ug_note = f"自检没跑通（读不到这个库的模型配置）：{type(exc).__name__}: {exc}"
+            return
+        if not ref:
+            rt.ug_capable = None
+            rt.ug_note = ("这个知识库还没选生成后端，自检没法做。"
+                          "到「模型服务」页选一个，或在「模型与参数」里指定。")
+            return
+        who = ref.replace("::", " / ")
         try:
             out = self.state.llm.complete(
                 [{"role": "user", "content":
                   "把下面这句中文翻译成维吾尔语（用阿拉伯字母），只输出译文：\n"
                   "你好，今天天气很好。"}],
-                provider=rt.spec.provider or None,
+                provider=ref,
                 temperature=0.0, max_tokens=60,
             )
         except Exception as exc:
-            rt.ug_note = f"自检没跑通：{type(exc).__name__}: {exc}"
+            rt.ug_note = (f"自检没跑通（用 {who} 发了一次请求）："
+                          f"{type(exc).__name__}: {exc}")
             return
         text = (getattr(out, "text", "") or "").strip()
         rt.ug_sample = text[:80]
         if detect(text) != "ug":
             rt.ug_capable = False
-            rt.ug_note = ("这个模型没能把一句中文译成维吾尔语——维吾尔语站点大概率"
+            rt.ug_note = (f"用 {who} 试译，没能吐出维吾尔文字形——维吾尔语站点大概率"
                           "会回中文。换一个维吾尔语能力更强的模型再试。")
         elif repeating(text):
             rt.ug_capable = False
-            rt.ug_note = ("模型一开口就复读（维吾尔语输出最常见的失败模式）。"
-                          "答案会被截断成半句，建议换更大的模型。")
+            rt.ug_note = (f"用 {who} 试译，模型一开口就复读（维吾尔语输出最常见的"
+                          "失败模式）。答案会被截断成半句，建议换更大的模型。")
         else:
             rt.ug_capable = True
-            rt.ug_note = ("能输出维吾尔文字形。语义是否通顺要看实际答案——"
-                          "7B 级模型在这一步仍可能跑偏，答案下方保留了中文原稿可对。")
+            rt.ug_note = (f"用 {who} 试译，能输出维吾尔文字形。语义是否通顺要看"
+                          "实际答案——7B 级模型在这一步仍可能跑偏，答案下方保留了"
+                          "中文原稿可对。")
 
     def stop(self, name: str) -> dict[str, Any]:
         rt = self._rt(name)

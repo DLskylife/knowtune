@@ -315,6 +315,31 @@ def _read_state(name: str) -> dict[str, Any] | None:
         return None
 
 
+def _run_text(cmd: list[str], timeout: float = 8) -> str:
+    """跑个短命令拿文本输出，**自己解码**。
+
+    不能用 `text=True`：它按系统编码解，而中文 Windows 上 `tasklist` / `wmic`
+    输出的是 cp936 字节。若环境里 `PYTHONUTF8=1`（WorkBuddy、很多 CI 都开着），
+    解码就在 subprocess 的 reader 线程里炸，调用方拿到的是半个 stdout——
+    于是"活着的 llama-server"被判成死的，卡片上显示"未运行"，点启动又撞端口。
+    实测就撞到过：`UnicodeDecodeError: 'utf-8' codec can't decode byte 0xd0`。
+    """
+    kw: dict[str, Any] = {}
+    if os.name == "nt":
+        kw["creationflags"] = 0x08000000  # CREATE_NO_WINDOW
+    try:
+        r = subprocess.run(cmd, capture_output=True, timeout=timeout, **kw)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    raw = r.stdout or b""
+    for enc in ("utf-8", "mbcs") if os.name == "nt" else ("utf-8",):
+        try:
+            return raw.decode(enc)
+        except (UnicodeDecodeError, LookupError):
+            continue
+    return raw.decode("utf-8", "replace")
+
+
 def _pid_alive(pid: int) -> bool:
     if pid <= 0:
         return False
@@ -322,12 +347,9 @@ def _pid_alive(pid: int) -> bool:
         # tasklist 比 os.kill(pid, 0) 可靠：Windows 上后者对已退出进程也可能
         # 返回成功，导致"明明死了却显示运行中"。
         try:
-            r = subprocess.run(
-                ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
-                capture_output=True, text=True, timeout=8,
-                creationflags=0x08000000,  # CREATE_NO_WINDOW
-            )
-            return str(pid) in (r.stdout or "")
+            out = _run_text(["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+                            timeout=8)
+            return str(pid) in out
         except (OSError, subprocess.SubprocessError):
             return False
     try:
@@ -338,15 +360,32 @@ def _pid_alive(pid: int) -> bool:
 
 
 def _cmdline_of(pid: int) -> str:
-    """拿进程命令行，用来确认这个 pid 真的是我们的 llama-server。"""
+    """拿进程命令行，用来确认这个 pid 真的是我们的 llama-server。
+
+    首选 psutil：一次系统调用，比 `wmic` 快两个数量级。而 Windows 11 24H2
+    起 `wmic` 已被移除，命令直接 not found——拿不到命令行时调用方
+    （`_kill_if_ours`）会拒绝动手，安全，但等于"残留的 llama-server 永远
+    清不掉"。所以 psutil 拿不到就用 CIM 兜一层，慢半秒换一条活路。
+    """
     try:
-        if os.name == "nt":
-            r = subprocess.run(
-                ["wmic", "process", "where", f"ProcessId={pid}", "get", "CommandLine", "/value"],
-                capture_output=True, text=True, timeout=8,
-                creationflags=0x08000000,
-            )
-            return r.stdout or ""
+        import psutil
+
+        parts = psutil.Process(pid).cmdline()
+        if parts:
+            return " ".join(parts)
+    except Exception:
+        pass
+    if os.name == "nt":
+        out = _run_text(
+            ["wmic", "process", "where", f"ProcessId={pid}", "get", "CommandLine",
+             "/value"], timeout=8)
+        if "CommandLine=" in out and out.split("CommandLine=", 1)[1].strip():
+            return out
+        return _run_text(
+            ["powershell", "-NoProfile", "-Command",
+             f"(Get-CimInstance Win32_Process -Filter 'ProcessId={pid}').CommandLine"],
+            timeout=12)
+    try:
         return Path(f"/proc/{pid}/cmdline").read_text(errors="replace")
     except (OSError, subprocess.SubprocessError):
         return ""
@@ -640,11 +679,8 @@ def devices(server: str = "") -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     try:
         exe = find_server(server)
-        r = subprocess.run(
-            [exe, "--list-devices"], capture_output=True, text=True, timeout=15,
-            creationflags=0x08000000 if os.name == "nt" else 0,
-        )
-        for line in (r.stdout or "").splitlines():
+        text = _run_text([exe, "--list-devices"], timeout=15)
+        for line in text.splitlines():
             m = re.match(r"\s*([A-Za-z]+\d+):\s*(.+?)\s*\((\d+)\s*MiB,\s*(\d+)\s*MiB free\)", line)
             if m:
                 out.append({
