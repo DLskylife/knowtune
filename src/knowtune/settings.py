@@ -301,6 +301,12 @@ def coerce(p: Param, cfg: Config, value: Any) -> Any:
             # 的合法状态，不该逼用户"先去配个端点"才能改别的参数。
             if value == "" and not opts:
                 return ""
+            # 注册表为空时没法校验端点名。此时若库里还存着旧端点（比如端点是
+            # 后来被删掉的），整份配置重校验会把"改检索权重"这种无关操作一起
+            # 挡死，报出来还是句看不懂的"只能是 ，收到 'siliconflow'"。
+            # 放行并交给运行时判空降级：端点确实不存在时，生成那一步会自己报错。
+            if not opts and p.options_from == "providers":
+                return value
             raise ValueError(f"{p.label} 只能是 {' / '.join(opts)}，收到 {value!r}")
         return value
 
