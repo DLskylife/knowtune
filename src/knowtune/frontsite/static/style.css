@@ -46,7 +46,10 @@
   --shadow-lg: 0 2px 6px rgba(21, 33, 28, .06), 0 22px 48px -22px rgba(21, 33, 28, .3);
   --ug: "Microsoft Uighur", "UKIJ Tuz Tom", "ALKATIP Tor", "Noto Naskh Arabic",
         "Segoe UI", Tahoma, sans-serif;
-  --zh: -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+  /* 中文字体优先：Windows 上让雅黑承载数字和汉字，数字不会比汉字矮一截。
+     之前把 -apple-system / Segoe UI 放前面，数字命中西文字体、汉字命中雅黑，
+     混排时数字字号看着比汉字小一号。 */
+  --zh: "Microsoft YaHei", "PingFang SC", "Segoe UI", -apple-system, sans-serif;
   --ui: var(--ug);
   --col: 748px;          /* 正文与输入框的公共列宽 */
   --side-w: 262px;
@@ -92,7 +95,11 @@ html, body {
   font-size: 15.5px; line-height: 1.9;
   -webkit-font-smoothing: antialiased;
 }
-html[lang="zh"], html[lang="en"] { font-family: var(--zh); line-height: 1.72; }
+/* 为什么这里要显式命中 body：上面的 `html, body` 合写把 body 也钉死在 var(--ui)
+   （维吾尔语栈）上，光改 html 的 lang 覆盖不动 body——中文界面下数字会退回
+   维语字体的阿拉伯数字字形、汉字才 fallback 雅黑，混排字号参差。 */
+html[lang="zh"], html[lang="zh"] body,
+html[lang="en"], html[lang="en"] body { font-family: var(--zh); line-height: 1.72; }
 body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
 
 .sr-only {
@@ -161,7 +168,7 @@ body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
   width: 100%; height: 36px; padding: 0 10px;
   border: 1px solid transparent; border-radius: 10px;
   background: transparent; color: var(--ink-2);
-  font: inherit; font-size: 14px; font-weight: 600; line-height: 1;
+  font: inherit; font-size: 14px; font-weight: 600; line-height: 1.4;
   cursor: pointer; text-align: left;
   transition: background .14s, color .14s, border-color .14s, box-shadow .14s;
 }
