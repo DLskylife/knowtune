@@ -9,3 +9,10 @@ prompts:
     by_provider:
       siliconflow:
         system: 你是翻译器。用户输入一句话，如果是维吾尔语翻译为中文，如果是中文翻译成维吾尔语。
+  copy_zh:
+    default:
+      samples: '维医中的四种体液是什么？
+
+        气质有哪些分类？
+
+        维医如何治疗贫血？'

@@ -59,11 +59,40 @@ KEEP_HISTORY = 30
 ROLE_FIELDS: dict[str, tuple[str, ...]] = {
     "generate": ("system",),
     "translate": ("system", "user"),
+    # 界面文案（2026-11-06 从站点配置里搬过来）。以前这五句话写在
+    # config/instances.yaml 的 title/subtitle/welcome/samples/disclaimer 里，
+    # 代码里还各自带一份默认值——改一句话要开站点弹窗，改完没有留痕，
+    # 改坏了连"上一版写的什么"都说不出来。搬到这里之后，它们和提示词共用
+    # 同一套能力：内置默认、覆盖、保存前快照、整体回滚。
+    #
+    # 按语言拆成两个角色而不是一个角色十个字段：界面一次只显示一套语言的
+    # 五句话，两组挤在一起必然有一个是当前页面的"另一半"，编辑时容易串行。
+    # 站点按自己的语言取对应的那个角色。
+    "copy_ug": ("title", "subtitle", "welcome", "samples", "disclaimer"),
+    "copy_zh": ("title", "subtitle", "welcome", "samples", "disclaimer"),
 }
 
 ROLE_LABELS: dict[str, str] = {
     "generate": "生成 · 读检索资料组织答案",
     "translate": "翻译 · 跨语言检索与成稿回译",
+    "copy_ug": "界面文案 · 维吾尔语",
+    "copy_zh": "界面文案 · 中文",
+}
+
+# 只对 generate / translate 有意义的"按后端分"。界面文案跟模型无关：
+# 同一个站点换后端，标题不会跟着变。这类角色读写都强制走角色默认层，
+# 免得从某张模型卡片进来保存时被写进 by_provider，站点按默认层读不到，
+# 表现成"保存成功、页面不变"。
+PER_PROVIDER_ROLES = frozenset({"generate", "translate"})
+
+_COPY_ROLE_PREFIX = "copy_"
+
+_COPY_FIELD_META: dict[str, dict[str, Any]] = {
+    "title": {"label": "标题", "hint": "浏览器标签页与页面顶部的大标题。"},
+    "subtitle": {"label": "副标题", "hint": "标题下面那行说明，一句话讲清这个站点做什么。"},
+    "welcome": {"label": "欢迎语", "hint": "对话区空白时的第一句话。"},
+    "samples": {"label": "示例问题", "hint": "一行一个，最多 8 条；点一下就会提这个问题。"},
+    "disclaimer": {"label": "免责声明", "hint": "页面底部的固定说明，如医疗建议边界。"},
 }
 
 FIELD_META: dict[tuple[str, str], dict[str, Any]] = {
@@ -90,6 +119,12 @@ PLACEHOLDER_LABELS: dict[str, str] = {
     "dst": "目标语言名（如「中文」）",
     "question": "要翻译的原句",
 }
+
+# 两个文案角色的字段说明完全一样（都是标题/副标题/欢迎语/示例/免责），
+# 逐条复制十遍只会让以后加字段时漏掉一半。
+for _copy_role in ("copy_ug", "copy_zh"):
+    for _copy_field, _copy_meta in _COPY_FIELD_META.items():
+        FIELD_META[(_copy_role, _copy_field)] = _copy_meta
 
 # generate 的兜底。与 config/prompts/*.md 失败时的最后一层，和 REST 的默认值同源。
 SYSTEM_PROMPT_FALLBACK = """你是一个严格基于给定资料回答问题的助手。
@@ -247,6 +282,24 @@ def builtin_fields(role: str, *, version: str = "qa_v1",
         return {"system": _generate_default(version, answer_lang)}
     if role == "translate":
         return {"system": BUILTIN_TRANSLATE_SYSTEM, "user": BUILTIN_TRANSLATE_USER}
+    if role.startswith(_COPY_ROLE_PREFIX):
+        # 语言取自角色名（copy_ug / copy_zh）。默认文案仍放在 instcfg——那是
+        # 站点侧的出厂值，挪进这里只会多一份要同步的副本；此处只是**引用**它，
+        # 写成文本是为了跟其它角色的字段形态一致（samples 一行一个）。
+        lang = role[len(_COPY_ROLE_PREFIX):]
+        try:
+            from .frontsite.instcfg import default_copy
+
+            base = default_copy(lang)
+        except Exception:
+            base = {}
+        out: dict[str, str] = {}
+        for field in ROLE_FIELDS[role]:
+            val = base.get(field, "")
+            if isinstance(val, list):
+                val = "\n".join(str(x) for x in val)
+            out[field] = str(val or "")
+        return out
     return {}
 
 
@@ -261,6 +314,10 @@ def effective_fields(role: str, provider: str = "", *, version: str = "qa_v1",
     node = (data.get("prompts") or {}).get(role) if isinstance(data.get("prompts"), dict) else None
     node = node if isinstance(node, dict) else {}
     by = node.get("by_provider") if isinstance(node.get("by_provider"), dict) else {}
+    if role not in PER_PROVIDER_ROLES:
+        # 文案与模型无关：即使历史上有人从某张模型卡片保存过，也不该让
+        # "换个后端文案就变"发生。这一层直接不读。
+        by = {}
     prov_map = by.get(provider) if isinstance(by.get(provider), dict) else {}
     flat = node.get("default") if isinstance(node.get("default"), dict) else {}
 
@@ -298,6 +355,34 @@ def translate_messages(provider: str = "") -> tuple[str, str]:
     """translate 的 (system, user 模板)。user 模板里的占位符由 lang.py 填。"""
     got = effective_fields("translate", provider)
     return (got["system"]["text"], got["user"]["text"])
+
+
+def copy_texts(lang: str) -> dict[str, Any]:
+    """界面文案：该语言下**配过**的字段，samples 已切成列表。
+
+    只返回非空项。站点拿到之后按"提示词 > 站点实例 > 内置默认"的顺序合并：
+    没配的字段不该用空串把实例里已有的值盖掉，否则搬完配置的第一天，
+    站点上就会有一半文字突然变成出厂默认。
+    """
+    role = f"{_COPY_ROLE_PREFIX}{lang}"
+    if role not in ROLE_FIELDS:
+        return {}
+    out: dict[str, Any] = {}
+    for key, info in effective_fields(role).items():
+        # 只取真正被覆盖过的字段。内置默认不在这里返回：站点自己的实例配置
+        # 可能写过一句话，用出厂默认把它顶掉等于"搬配置搬丢了自定义内容"。
+        if info.get("source") == "builtin":
+            continue
+        text = str(info.get("text") or "").strip()
+        if not text:
+            continue
+        if key == "samples":
+            picked = [line.strip() for line in text.splitlines() if line.strip()][:8]
+            if picked:
+                out[key] = picked
+        else:
+            out[key] = text
+    return out
 
 
 def fill(template: str, **values: str) -> str:
@@ -409,6 +494,10 @@ def save(role: str, provider: str, fields: Mapping[str, str], *,
     if role not in ROLE_FIELDS:
         raise ValueError(f"未知角色：{role}")
     provider = (provider or "").strip()
+    if role not in PER_PROVIDER_ROLES:
+        # 文案只有"角色默认"这一层。不在这里清掉的话，从模型卡片进来保存
+        # 会写成 by_provider.<name>，而站点永远按默认层读——保存成功、页面不变。
+        provider = ""
     if provider and not re.match(r"^[a-z0-9][a-z0-9_-]{0,23}$", provider):
         raise ValueError("后端名不合法")
 
@@ -540,6 +629,7 @@ def overview(*, version: str = "qa_v1", answer_lang: str | None = None,
             ],
             "has_default_override": bool(node.get("default")),
             "overridden_providers": sorted(by.keys()),
+            "per_provider": role in PER_PROVIDER_ROLES,
         })
 
     provs = []

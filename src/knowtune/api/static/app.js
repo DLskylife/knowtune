@@ -4824,7 +4824,7 @@ function prRender() {
         <p class="pr-hint">${esc(f.hint || "")}</p>
         ${chips ? `<div class="pr-chips">${chips}</div>` : ""}
         <textarea data-role="${esc(r.role)}" data-field="${esc(f.key)}"
-          spellcheck="false" rows="8"
+          spellcheck="false" rows="${r.per_provider === false ? (f.key === "samples" ? 4 : 2) : 8}"
         >${esc(prState.drafts[r.role][f.key] || "")}</textarea>
         ${info.source !== "builtin"
           ? `<div class="pr-diff">内置原文 ${(info.builtin || "").length} 字，
@@ -4838,6 +4838,8 @@ function prRender() {
       <header>
         <h4>${esc(r.label)}</h4>
         <span class="hint">${esc(r.role)}</span>
+        ${r.per_provider === false
+          ? `<span class="hint">全站共用 · 与模型后端无关</span>` : ""}
       </header>
       ${fields}
     </section>`;
@@ -4950,6 +4952,9 @@ async function prReset() {
   if (!confirm("删掉" + where + "的覆盖，回到内置默认？内置文件不会被改动。")) return;
   try {
     for (const r of prState.roles) {
+      // 文案角色没有"后端"这一层。在某个后端的标签页上点恢复默认，
+      // 不该顺手把全站文案一起清掉。
+      if (prState.provider && r.per_provider === false) continue;
       await jsonSend("POST", "/api/prompts/" + r.role + "/reset",
         { provider: prState.provider });
     }
@@ -6347,8 +6352,14 @@ function siteGroups(i, meta, plan, defProv) {
       <span class="toggle-label">${esc(label)}</span></label>`;
   const text = (field, val, ph, dir) => `<input data-f="${field}" dir="${dir || "auto"}"
       value="${esc(val || "")}" placeholder="${esc(ph || "留空用默认")}">`;
-  const area = (field, val) => `<textarea data-f="${field}" dir="auto" rows="3"
-      placeholder="一行一个">${esc((val || []).join("\n"))}</textarea>`;
+
+  // 这五句话已经搬到「提示词配置」，这里只留一个入口。两边都能改的后果是
+  // 一定有一边改了不生效——用户看到"保存成功、页面没变"，却找不到原因。
+  const copyLinkRow = (lang) => `<div class="form-row">
+      <label>标题 / 副标题 / 欢迎语 / 示例 / 免责</label>
+      <span class="hint">这五句在提示词配置里统一管理，保存前自动留快照、可整体回滚。</span>
+      <button class="mini" type="button" data-open-copy="copy_${esc(lang || "ug")}"
+        >打开提示词配置</button></div>`;
 
   const resolved = (plan && plan.resolved) || {};
   const used = `实际：译 ${roleText(resolved.translate)} · 答 ${roleText(resolved.generate)}`;
@@ -6394,13 +6405,9 @@ function siteGroups(i, meta, plan, defProv) {
         ${opt("direct", "模型直接用维吾尔语作答（快，小模型容易跑偏）", i.answer_mode)}</select>`),
     ].join("")),
 
-    group("界面文案", "语言按内容自动判定，不用手选", [
+    group("界面文案", "文字在「提示词配置 · 界面文案」里统一改", [
       row("知识库显示名", text("kb_name", i.kb_name, "留空用库名")),
-      row("标题", text("title", i.title)),
-      row("副标题", text("subtitle", i.subtitle, "")),
-      row("欢迎语", text("welcome", i.welcome, "")),
-      row("示例问题", area("samples", i.samples), "一行一个", true),
-      row("免责声明", text("disclaimer", i.disclaimer, ""), "", true),
+      copyLinkRow(i.lang),
     ].join("")),
 
     group("另一语言", "右上角切换按钮那一套，留空自动补齐", [
@@ -6409,11 +6416,7 @@ function siteGroups(i, meta, plan, defProv) {
         ${opt("ug", "维吾尔语", a.lang)}
         ${opt("en", "English", a.lang)}</select>`),
       row("知识库显示名", text("alt_kb_name", a.kb_name, "留空用库名")),
-      row("标题", text("alt_title", a.title)),
-      row("副标题", text("alt_subtitle", a.subtitle, "")),
-      row("欢迎语", text("alt_welcome", a.welcome, "")),
-      row("示例问题", area("alt_samples", a.samples), "一行一个", true),
-      row("免责声明", text("alt_disclaimer", a.disclaimer, ""), "", true),
+      copyLinkRow(a.lang || "zh"),
     ].join("")),
   ].join("");
 }
@@ -6448,6 +6451,18 @@ function bindTrTest() {
   if (body.dataset.trBound) return;
   body.dataset.trBound = "1";
   body.addEventListener("click", async (e) => {
+    // 站点弹窗里的文案入口：关掉本弹窗、打开提示词抽屉，并滚到对应语言那一栏。
+    // 直接叠着开两个遮罩会出现"关掉上面那个、下面那个点不动"——先关再开。
+    const cp = e.target.closest("[data-open-copy]");
+    if (cp) {
+      const role = cp.dataset.openCopy || "";
+      $("modalCancel").click();
+      await openPromptDrawer("");
+      const sec = [...$("prBody").querySelectorAll(".pr-role")]
+        .find((s) => role && s.textContent.includes(role));
+      if (sec) sec.scrollIntoView({ block: "start" });
+      return;
+    }
     const tr = e.target.closest("[data-trtest]");
     if (!tr) return;
     const sel = body.querySelector('[data-f="role_translate"]');
@@ -6945,16 +6960,9 @@ async function openSiteEditor(cur) {
         <select id="sRoleTr">${roleOptions(cur, "translate", d.providers || [])}</select></div>
       <div class="form-row"><label>输出（作答）用哪个模型</label>
         <select id="sRoleGen">${roleOptions(cur, "generate", d.providers || [])}</select></div>
-      <div class="form-row"><label>站点标题</label>
-        <input id="sTitle" value="${esc(cur ? cur.title : copy.title || "")}"></div>
-      <div class="form-row"><label>副标题</label>
-        <input id="sSub" value="${esc(cur ? cur.subtitle : copy.subtitle || "")}"></div>
-      <div class="form-row"><label>欢迎语</label>
-        <input id="sWelcome" value="${esc(cur ? cur.welcome : copy.welcome || "")}"></div>
-      <div class="form-row"><label>示例问题（一行一个）</label>
-        <textarea id="sSamples" rows="3">${esc((cur ? cur.samples : copy.samples || []).join("\n"))}</textarea></div>
-      <div class="form-row"><label>免责声明</label>
-        <input id="sDisc" value="${esc(cur ? cur.disclaimer : copy.disclaimer || "")}"></div>
+      <div class="form-row"><label>界面文案</label>
+        <span class="hint">标题、副标题、欢迎语、示例问题、免责声明在「提示词配置 · 界面文案」
+          里统一改${copy && copy.title ? `；当前：${esc(String(copy.title).slice(0, 24))}` : ""}。</span></div>
       <div class="form-row"><label class="toggle">
         <input type="checkbox" id="sAuto" ${cur && cur.autostart ? "checked" : ""}>
         <span class="sw" aria-hidden="true"></span><span class="toggle-label">后台启动时自动拉起</span>
@@ -6981,11 +6989,6 @@ async function openSiteEditor(cur) {
           translate: $("sRoleTr").value,
           generate: $("sRoleGen").value,
         },
-        title: $("sTitle").value.trim(),
-        subtitle: $("sSub").value.trim(),
-        welcome: $("sWelcome").value.trim(),
-        samples: $("sSamples").value.split("\n").map((s) => s.trim()).filter(Boolean),
-        disclaimer: $("sDisc").value.trim(),
         autostart: $("sAuto").checked,
         public: $("sPublic").checked,
       };
@@ -6995,18 +6998,8 @@ async function openSiteEditor(cur) {
     },
     { okLabel: "保存", wide: true });
 
-  // 语言切换时补一套该语言的默认文案：维吾尔语站点留着中文欢迎语是最常见的错误
-  $("sLang").onchange = async () => {
-    const c = await api(`/api/instances/defaults?lang=${$("sLang").value}`).catch(() => ({}));
-    const fill = (id, val) => {
-      if (val && !$(id).value.trim()) $(id).value = val;
-    };
-    fill("sTitle", c.title);
-    fill("sSub", c.subtitle);
-    fill("sWelcome", c.welcome);
-    if (c.samples && !$("sSamples").value.trim()) $("sSamples").value = c.samples.join("\n");
-    if (c.disclaimer && !$("sDisc").value.trim()) $("sDisc").value = c.disclaimer;
-  };
+  // 语言换了之后文案由提示词配置按语言取，不再需要在这里预填——
+  // 那段 fill("sTitle", ...) 依赖的输入框已经随文案一起搬走了。
   $("sName").oninput = () => {
     const v = ($("sName").value || "").trim().toLowerCase();
     const tip = $("sNameTip");

@@ -2,37 +2,23 @@
 instances:
 - name: uyghur-med
   kb_id: 2
-  # 古籍问答单独一个库，5 篇中医古籍已从维医知识库移过去。
-  # 0 / 删掉这一行 = 退回在主库里按标题含「古籍」分板块。
-  classic_kb_id: 4
   port: 8800
   lang: ug
   kb_lang: zh
   answer_mode: translate
-  # 留空 = 跟随「模型服务」页当前的端点。以前这里钉死成
-  # translate: siliconflow / generate: lmstudio，云端配置一删，站点就指向空气。
-  # 要固定成某个本地模型，写成 `local::hy-mt2-1.8b` 这种形式。
   provider: ''
-  roles: {}
-  title: ئۇيغۇر تېبابىتى بىلىم سوئال-جاۋاب سىستېمىسى
-  subtitle: بىلىم ئامبىرىدىن ئىزدەپ، مەنبەسىنى كۆرسىتىپ جاۋاب بېرىدۇ
-  welcome: ئەسسالامۇ ئەلەيكۇم! ئۇيغۇر تېبابىتى بويىچە سوئالىڭىزنى يېزىڭ.
-  samples:
-  - ئۇيغۇر تېبابىتىدىكى تۆت خىل خىلىت قايسىلار؟
-  - مىزاجنىڭ قانداق تۈرلىرى بار؟
-  - قان ئازلىقنى ئۇيغۇر تېبابىتىدە قانداق داۋالايدۇ؟
-  disclaimer: بۇ سىستېما بىلىم ئامبىرىدىكى ماتېرىيالغا ئاساسەن جاۋاب بېرىدۇ، داۋالاش
-    ئۈچۈن دوختۇرغا كۆرۈنۈڭ.
+  roles:
+    translate: siliconflow::tencent/Hunyuan-MT-7B
+  title: ''
+  subtitle: ''
+  welcome: ''
+  samples: []
+  disclaimer: ''
   kb_name: ئۇيغۇر تېبابىتى بىلىم ئامبىرى
   autostart: true
   public: false
   alt:
     lang: zh
-    title: 维医知识问答
-    subtitle: 基于知识库检索，回答附来源
-    welcome: 你好！请输入关于维医的问题。
-    disclaimer: 本系统依据知识库内容作答，不构成医疗建议。
-    samples:
-    - 维医中的四种体液是什么？
-    - 气质有哪些分类？
-    - 维医如何治疗贫血？
+  classic_kb_id: 4
+  classic_keywords:
+  - 古籍

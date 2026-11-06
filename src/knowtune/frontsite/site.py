@@ -191,6 +191,22 @@ def _fill_copy(base: dict[str, Any], lang: str) -> dict[str, Any]:
     return out
 
 
+def _copy_overrides(lang: str) -> dict[str, Any]:
+    """从提示词配置里取这套语言的界面文案（只含被改过的字段）。
+
+    读失败一律当成"没配"：提示词文件被手写坏时，页面顶多显示实例里的旧文案，
+    绝不能因为一句标题读不出来就把整个站点打成 500。
+    """
+    try:
+        from .. import promptcfg
+
+        return promptcfg.copy_texts(lang)
+    except Exception as exc:  # noqa: BLE001 - 兜底必须吞掉任何读取失败
+        logbus.note(f"读取界面文案失败（{lang}），改用实例配置："
+                    f"{type(exc).__name__}: {exc}", level="ERROR", source="sites")
+        return {}
+
+
 def _split_for_translate(text: str, limit: int = 300) -> list[str]:
     """按段落/句末标点把草稿切成小段，给"整段翻不动"时的分段重试用。
 
@@ -434,11 +450,17 @@ def build_site(spec, state: Any) -> FastAPI:
             "samples": s.samples, "disclaimer": s.disclaimer,
         }
         alt_raw = {k: v for k, v in (s.alt or {}).items() if k != "lang"}
+        # 界面文案的主来源已搬到「提示词配置」（copy_ug / copy_zh）。这里把
+        # 提示词里**配过**的字段合进来，实例里的同名字段退为兼容层：老实例
+        # 没迁移完时照样能显示，迁移过（字段清空）之后完全由提示词决定。
+        main_copy_raw.update(_copy_overrides(str(getattr(s, "lang", "ug") or "ug")))
+        alt_raw.update(_copy_overrides(str((s.alt or {}).get("lang") or "zh")))
         # 语言标签由内容决定，不由配置里的 lang 决定。详见 _content_lang：
         # 配置和文案都靠人手填，一旦填反，界面上就会出现"高亮中文、正文维语"，
         # 而且点切换只换内容不换高亮——用户完全没有办法自己纠正。
         main_lang = _content_lang(
-            [s.title, s.welcome, s.subtitle], fallback=lang_)
+            [main_copy_raw.get("title"), main_copy_raw.get("welcome"),
+             main_copy_raw.get("subtitle")], fallback=lang_)
         alt_lang = _content_lang([alt_raw.get("title"), alt_raw.get("welcome")],
                                  fallback=str((s.alt or {}).get("lang") or "").lower())
         # 两套内容判成同一种语言 = 这颗切换按钮点下去什么都不会变。此时把

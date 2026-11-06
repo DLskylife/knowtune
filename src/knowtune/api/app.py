@@ -3937,8 +3937,16 @@ def list_instances() -> dict:
 
 @app.get("/api/instances/defaults")
 def instance_defaults(lang: str = "ug") -> dict:
-    """新建实例时按语言预填一套文案。维吾尔语那套是默认场景，不是占位符。"""
-    return instcfg.default_copy(lang if lang in instcfg.LANGS else "ug")
+    """新建实例时按语言预填一套文案。
+
+    文案的主来源已经是「提示词配置」里的 copy_ug / copy_zh，这里先取那套；
+    提示词没改过的字段才落回出厂默认——否则新建一个站点会拿到一份跟现有站点
+    不一样的旧文案，用户得再改一遍。
+    """
+    picked = lang if lang in instcfg.LANGS else "ug"
+    out = instcfg.default_copy(picked)
+    out.update(promptcfg.copy_texts(picked))
+    return out
 
 
 class RolesIn(BaseModel):
