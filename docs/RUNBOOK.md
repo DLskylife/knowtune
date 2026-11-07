@@ -202,11 +202,11 @@ knowtune serve --port 8013
 |---|---|---|
 | `med` 维医问答 | 主库 RAG | 显示名、开关、`translate` / `generate` 后端、专属提示词（`scope=med`） |
 | `classic` 古籍问答 | 独立库 RAG（或按标题分栏） | 同上，与 `med` 完全独立 |
-| `pv` 预问诊 | 独立预问诊引擎，不检索知识库 | 显示名、开关；「预问诊参数」面板改 `config/previsit.yaml` 等 |
+| `pv` 预问诊 | 独立预问诊引擎（只对预问诊知识库做轻量语义选域，不走主问答的检索 / 精排） | 显示名、开关；「预问诊参数」面板改 `config/previsit.yaml` 等 |
 
 - **模型按板块配**：`sections.<key>.roles.{translate,generate}`，留空跟随站点级 roles。解析链（`roles.py:81-111`）：**板块级 roles → 站点级 roles → 系统级 roles → 实例 `provider` → 默认 `provider`**，每级用已知后端名校验、不合法继续下退。当前 `sections.*.roles` 均未配置，`med` 与 `classic` 解析结果相同——能力已具备，配置为空。
 - **提示词按板块配**：解析链以 `promptcfg.py:337-344` 代码为准：**`by_provider`（后端）> `by_scope`（板块）> `default`（角色默认）> 内置（builtin）**。仅 `generate` / `translate` 支持 by_provider 与 by_scope；`copy_ug` / `copy_zh` 只读角色级。三处注释（`promptcfg.py` 头注释、`save()` docstring、`config/prompts.yaml` 头注释）曾与代码口径不一致，**本次重写已统一**；历史记录见 [ARCHITECTURE.md](ARCHITECTURE.md) §12。
-- **预问诊参数**：`config/previsit.yaml`（槽位、危险词、分诊规则、提示词）、`previsit.overrides.yaml`（运行时差异项）、`previsit_kb.yaml`（追问知识库），后台「前台站点 → 预问诊参数」写回。模型一律跟随 `/v1` 固定入口，**不在这些文件里钉后端 / 模型名**，也不写密钥。
+- **预问诊参数**：`config/previsit.yaml`（槽位、危险词、分诊规则、提示词）、`previsit.overrides.yaml`（运行时差异项）、`previsit_kb.yaml`（追问知识库），后台「前台站点 → 预问诊参数」写回。模型一律跟随 `/v1` 固定入口，**不在这些文件里钉后端 / 模型名**，也不写密钥。延迟敏感时两处可调：`ask_llm: kb_first`（追问槽位有 `previsit_kb.yaml` 现成问法就直接发、不调模型，每轮少等两三秒，重问仍走模型）与抽取提示词里的紧凑 JSON 约束（输出 token 减半）；`start` 对同一句主诉只抽一次（`engine.py` 的 `_chief_done` 去重），不是可关的开关。
 - **界面文案已可配**：欢迎语、免责声明、示例问题、库名等走可配提示词 `copy_ug` / `copy_zh`，不再硬编码。
 
 ---

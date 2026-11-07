@@ -295,6 +295,12 @@ class PrevisitEngine:
         # 语义召回按会话**只试一次**：域一直判不出来时（患者说"我不舒服"）
         # 不能每轮都去撞一次后端，那等于把患者的等待时间翻倍。
         self._sem_tried: set[str] = set()
+        # start() 里 _extract_chief 已对主诉抽过一次，_advance 会对同一句话
+        # 再抽一次——同一句话两次抽取结果必然相同，纯属浪费一次模型调用。
+        # 这里记下「会话 → 主诉抽取是否用上模型」，_advance 见到标记就跳过。
+        # 危险闸门提前返回的路径仍依赖 _extract_chief 的落库结果，所以是
+        # 跳过重复调用，不是删掉那次抽取。
+        self._chief_done: dict[str, bool] = {}
         self.kg: kgdb.KG | None = None
         self.retriever: Any = None
         self.apply_config(pv)
@@ -543,9 +549,10 @@ class PrevisitEngine:
         if not str(complaint or "").strip():
             return
         try:
-            got, _ = self._extract(complaint, slots, profile, complaint)
+            got, used_llm = self._extract(complaint, slots, profile, complaint)
         except Exception:
             return
+        self._chief_done[sid] = bool(used_llm)
         if not got:
             return
         sess = self.store.get(sid)
@@ -1096,9 +1103,15 @@ class PrevisitEngine:
             sess = self.store.get(sid)
             return self.view(sess, question=danger.get("message", ""), degraded=["danger_gate"])
 
-        # 2) 抽取 + 更新档案
-        got, used_llm = self._extract(text, slots, sess.get("profile") or {},
-                                      str(sess.get("chief") or ""))
+        # 2) 抽取 + 更新档案。start() 的 _extract_chief 刚对同一句主诉抽过
+        #    （_chief_done 里有标记）：结果必然相同，不重复调模型，患者少等
+        #    两三秒；degraded 标记沿用那次抽取的真实情况。
+        if sid in self._chief_done:
+            used_llm = self._chief_done.pop(sid)
+            got: dict[str, Any] = {}
+        else:
+            got, used_llm = self._extract(text, slots, sess.get("profile") or {},
+                                          str(sess.get("chief") or ""))
         if not used_llm:
             degraded.append("extract_rules")
         merged = self._merge(sess.get("slots") or {}, got, slots)
@@ -1446,6 +1459,14 @@ class PrevisitEngine:
         known = self._describe(merged, slots)
         tpl = (self.pv.get("prompts") or {}).get("ask", "")
         hint = str(focus.get("hint") or "").strip()
+        # kb_first：知识库里为这个症状这个槽位手写的现成问法直接发，不调模型。
+        # 一轮 reply 本来是「抽取 + 追问」两次串行模型调用，省掉追问那次，
+        # 患者每轮少等两三秒；现成问法可审计，也比模型即兴的更稳。
+        # 重问（tried>0）仍走模型——那正是需要"换个角度"即兴能力的场景。
+        if (tried == 0 and ask_hint
+                and str(self.pv.get("ask_llm") or "auto").strip().lower() == "kb_first"
+                and self._safe(ask_hint)):
+            return self._first_question(ask_hint), True
         # 已经问过一次还没答上来：不能再把同一句话发一遍。患者会觉得系统
         # 卡住了，而且第二遍的回答通常和第一遍一样——真正需要的是换个角度。
         if tried > 0:
