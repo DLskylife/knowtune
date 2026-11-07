@@ -132,6 +132,8 @@ knowtune serve [--port 8013]           # 启动 Web UI
 
 ## 界面与配置要点
 
+**站点配置弹窗分三页**（2026-11-07 重排）：`板块与知识库`（开关 / 显示名 / 绑定库）、`模型与提示词`（一张矩阵，行顺序即角色优先级）、`站点设置`（端口 / 语言 / 文案）。模型下拉不再散在板块行里：矩阵四行是站点默认、维医问答、古籍问答、预问诊，两列分别写明「翻译模型 / 推理模型」，留空即跟随上一级。分页只切 `hidden` 属性、不重建 DOM，所以停在任一页保存都会把三页字段一起提交。
+
 **三板块独立配模型与提示词。** 后台「站点」弹窗里，`med` / `classic` / `pv` 各自配显示名、开关、`translate` / `generate` 后端、专属提示词（`scope=med|classic`）。板块切换会换会话、换标题、换绑定库，不是只换皮肤。当前 `sections.*.roles` 均未配置，所以 `/api/info` 里 `section_roles.med` 与 `.classic` 解析结果相同——能力已具备，配置为空。当前解析结果：`translate = siliconflow::tencent/Hunyuan-MT-7B`，`generate = siliconflow`（默认模型 `Qwen/Qwen2.5-7B-Instruct`）。
 
 **两条优先级链，别混。**
@@ -211,7 +213,7 @@ src/knowtune/            主项目
   retrieve/              engine（双路召回、融合、拒答判定）/ rerank（精排 + MMR）
   generate/              prompt / llm / cite / evidence / support / think
   api/app.py             后台全部 HTTP 接口（约 4400 行）
-  api/static/            后台前端：index.html / app.js / style.css，构建号 0.9.55
+  api/static/            后台前端：index.html / app.js / style.css，构建号 0.9.56
   frontsite/             instcfg / runner / site + static（前台前端）
   previsit/app.py        主项目装配层（注入进程内检索器、LLM 适配器）
 src/previsit/            预问诊独立实现（v0.3.0），零 knowtune 依赖

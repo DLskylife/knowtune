@@ -4,12 +4,12 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>KnowTune · 本地知识库</title>
-  <link rel="stylesheet" href="/static/style.css?v=0.9.55">
+  <link rel="stylesheet" href="/static/style.css?v=0.9.56">
   <script>
     /* 同前台那份自检：页面是新的、app.js 被 WebView 留成旧的，就会出现
        "按钮在、点了没反应"（删库那次就这么来的）。编号对不上就强制换一次，
        只换一次，避免死循环。 */
-    window.ADMIN_REQ_BUILD = "0.9.55";
+    window.ADMIN_REQ_BUILD = "0.9.56";
     addEventListener("load", function () {
       if (window.ADMIN_BUILD === window.ADMIN_REQ_BUILD) return;
       if (sessionStorage.getItem("knowtune.admin.reloaded")) return;
@@ -395,6 +395,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=0.9.55"></script>
+  <script src="/static/app.js?v=0.9.56"></script>
 </body>
 </html>

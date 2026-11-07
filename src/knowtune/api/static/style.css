@@ -2334,12 +2334,6 @@ input[type=number].num::-webkit-outer-spin-button { -webkit-appearance: none; ma
 .fld-row .mini { flex: none; }
 .fld-note { font-style: normal; font-size: 11px; color: var(--text-3); flex: none; }
 
-/* 板块级模型/提示词子行：挂在板块行下方，翻译+推理两个下拉 + 提示词按钮。 */
-.sec-model { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
-.sec-model .hint { flex: none; font-size: 11px; color: var(--text-3); }
-.sec-model .fld-row { flex: 1 1 auto; }
-.sec-model .mini { flex: none; }
-
 /* 翻译测试输出：占满整行（.sbk-fields 是两列网格），译文 dir=auto 自适应 RTL */
 .tr-out { grid-column: 1 / -1; padding: 8px 10px; border: 1px dashed var(--line);
   border-radius: 8px; background: var(--surface-2); font-size: 12.5px; }
@@ -2672,3 +2666,204 @@ input[type=number].num::-webkit-outer-spin-button { -webkit-appearance: none; ma
 .card-head, .sbk-head { min-height: 42px; }
 /* 首页日志标题里嵌了一层 .card-head 放两个小按钮，别让它也撑到 42px。 */
 .card-head .card-head { min-height: 0; }
+
+/* ==========================================================================
+   站点配置弹窗 · 2026-11-07 重排
+   --------------------------------------------------------------------------
+   旧版在 640px 宽里平铺 6 组、8 个无列名的模型下拉，模型参数散在「板块」
+   和「模型角色」两处。现在弹窗加宽、分三页，模型收敛成矩阵：行顺序即优先级。
+   样式全部用 scfg- 前缀，不复用 .pv-group / .form-row，避免影响预问诊面板。
+   ========================================================================== */
+
+.modal-box.mdl-site { width: min(1020px, 94vw); }
+
+.scfg-summary {
+  padding: 10px 12px 11px; border: 1px solid var(--line-soft);
+  border-radius: var(--r); background: var(--surface-2);
+}
+.scfg-summary-line {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  font-size: 12px; color: var(--text-2);
+}
+.scfg-summary-line b { color: var(--text); font-weight: 600; }
+.scfg-summary-k {
+  font-size: 10.5px; letter-spacing: .6px; color: var(--text-3);
+  text-transform: uppercase;
+}
+.scfg-summary-side { margin-left: auto; font-variant-numeric: tabular-nums; }
+.scfg-save-note {
+  margin-top: 8px; font-size: 11px; line-height: 1.65; color: var(--text-3);
+}
+.scfg-save-note code, .scfg-lead code, .scfg-footnote code {
+  font-family: var(--mono); font-size: 11px; color: var(--text-2);
+  background: var(--surface-3); padding: 1px 5px; border-radius: 4px;
+}
+
+.scfg-tabs {
+  display: flex; gap: 6px; margin: 16px 0 14px;
+  border-bottom: 1px solid var(--line);
+}
+.scfg-tab {
+  display: flex; align-items: center; gap: 8px; min-height: 38px;
+  padding: 0 14px; border: 0; border-bottom: 2px solid transparent;
+  background: transparent; color: var(--text-3);
+  font: inherit; font-size: 12.5px; cursor: pointer;
+}
+.scfg-tab:hover { color: var(--text-2); }
+.scfg-tab.active {
+  color: var(--text); border-bottom-color: var(--accent); font-weight: 600;
+}
+.scfg-tab-n { font-family: var(--mono); font-size: 10.5px; color: var(--text-3); }
+.scfg-tab.active .scfg-tab-n { color: var(--accent); }
+.scfg-tab em {
+  font-style: normal; font-size: 11px; font-weight: 400; color: var(--text-3);
+}
+.scfg-panel { min-width: 0; }
+.scfg-panel[hidden] { display: none; }
+
+.scfg-lead { display: flex; flex-direction: column; gap: 4px; padding: 0 0 12px; }
+.scfg-lead b { font-size: 13px; font-weight: 600; }
+.scfg-lead span { font-size: 11.5px; line-height: 1.65; color: var(--text-3); }
+.scfg-lead.accent { padding-left: 11px; border-left: 2px solid var(--accent); }
+
+.scfg-cards {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
+  gap: 12px; align-items: stretch;
+}
+.scfg-card {
+  min-width: 0; padding: 12px 14px 14px;
+  border: 1px solid var(--line-soft); border-radius: var(--r);
+  background: var(--surface-2);
+}
+.scfg-card.is-off { opacity: .55; }
+.scfg-card-head {
+  display: flex; align-items: center; gap: 10px;
+  min-height: 32px; margin-bottom: 12px;
+}
+.scfg-card-title {
+  flex: 1 1 auto; min-width: 0;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.scfg-card-title b { font-size: 13px; font-weight: 600; }
+.scfg-card-title span { font-size: 11px; line-height: 1.55; color: var(--text-3); }
+.scfg-badge {
+  flex: none; padding: 2px 8px; border-radius: 20px;
+  border: 1px solid var(--line); font-size: 10.5px; color: var(--text-3);
+}
+.scfg-badge.on {
+  color: var(--ok); border-color: rgba(62, 207, 142, .35);
+  background: rgba(62, 207, 142, .09);
+}
+.scfg-card-body {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px;
+}
+.scfg-card-body .scfg-field.wide { grid-column: 1 / -1; }
+/* 板块卡：开关 / 标题 / 徽标挤一行会把标题压成窄条，改成两行网格——
+   第一行「标题 + 状态」，第二行单独放开关，三张卡高度就齐了。 */
+.scfg-card[data-sec-card] .scfg-card-head {
+  display: grid; grid-template-columns: 1fr auto; gap: 8px 10px;
+}
+.scfg-card[data-sec-card] .scfg-card-title { grid-column: 1; grid-row: 1; }
+.scfg-card[data-sec-card] .scfg-badge { grid-column: 2; grid-row: 1; }
+.scfg-card[data-sec-card] .scfg-card-head > .toggle {
+  grid-column: 1 / -1; grid-row: 2;
+  /* .toggle 本身带边框和选中态底色，拉满整行会变成一条蓝色横条；
+     只占内容宽度，它才像开关而不是分组标题。 */
+  justify-self: start;
+}
+/* 文案卡字段多，独占整行并摊成三列；否则它会把第三列撑高一倍，
+   另外两张卡底下留一大片空白。 */
+.scfg-card.span-all { grid-column: 1 / -1; }
+.scfg-card.span-all .scfg-card-body {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+.scfg-card.span-all .scfg-field.wide { grid-column: auto; }
+
+.scfg-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.scfg-field > label { font-size: 11.5px; color: var(--text-3); }
+.scfg-field small { font-size: 10.5px; line-height: 1.55; color: var(--text-3); }
+.scfg-field input:not([type="checkbox"]), .scfg-field select {
+  width: 100%; min-width: 0; height: var(--ctl); padding: 0 10px;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: var(--surface-3); color: var(--text);
+  font: inherit; font-size: 12.5px;
+}
+.scfg-field input:focus, .scfg-field select:focus {
+  outline: none; border-color: rgba(91, 140, 255, .6);
+  box-shadow: 0 0 0 3px rgba(91, 140, 255, .08);
+}
+.scfg-field input::placeholder { color: var(--text-3); }
+.scfg-field .mini { align-self: flex-start; }
+/* 开关在 flex column 里默认被拉满字段宽度，变成一条色块；收到内容宽度才像开关。 */
+.scfg-field > .toggle { align-self: flex-start; }
+
+/* 模型矩阵：列头把「哪个下拉管什么」写死，行顺序就是角色优先级。 */
+.scfg-matrix-wrap {
+  overflow-x: auto; border: 1px solid var(--line-soft); border-radius: var(--r);
+}
+.scfg-matrix {
+  width: 100%; min-width: 760px; border-collapse: collapse; table-layout: fixed;
+}
+.scfg-matrix th, .scfg-matrix td {
+  padding: 10px 12px; text-align: left; vertical-align: middle;
+  border-bottom: 1px solid var(--line-soft);
+}
+.scfg-matrix th {
+  font-size: 11px; font-weight: 600; letter-spacing: .3px;
+  color: var(--text-3); background: var(--surface-2);
+}
+.scfg-matrix th:nth-child(1) { width: 22%; }
+.scfg-matrix th:nth-child(2), .scfg-matrix th:nth-child(3) { width: 30%; }
+.scfg-matrix th:nth-child(4) { width: 18%; }
+.scfg-matrix tbody tr:hover { background: rgba(91, 140, 255, .035); }
+.scfg-matrix tbody tr:last-child td { border-bottom: 0; }
+.scfg-matrix .scfg-mrow-default td { background: rgba(91, 140, 255, .045); }
+.scfg-mrow-k b { display: block; font-size: 12.5px; font-weight: 600; }
+.scfg-mrow-k span {
+  display: block; margin-top: 3px;
+  font-size: 10.5px; line-height: 1.5; color: var(--text-3);
+}
+.scfg-matrix td select {
+  width: 100%; min-width: 0; height: var(--ctl); padding: 0 8px;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: var(--surface-3); color: var(--text);
+  font: inherit; font-size: 12px;
+}
+.scfg-cell-row { display: flex; align-items: center; gap: 6px; }
+.scfg-cell-row select { flex: 1 1 auto; min-width: 0; }
+.scfg-cell-row .mini { flex: none; }
+.scfg-matrix td > .mini { white-space: nowrap; }
+.scfg-mrow-soft .scfg-mrow-note {
+  font-size: 11.5px; line-height: 1.6; color: var(--text-3);
+}
+.scfg-tr-out { margin-top: 12px; }
+.scfg-footnote {
+  margin-top: 12px; padding: 10px 12px;
+  border: 1px dashed var(--line); border-radius: 8px;
+  font-size: 11.5px; line-height: 1.75; color: var(--text-3);
+}
+.scfg-footnote b { color: var(--text-2); }
+
+/* 站点卡事实区：四格定义列表取代八颗挤在一行的胶囊。 */
+.sbk-facts {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px;
+}
+.sbk-fact {
+  min-width: 0; display: flex; flex-direction: column; gap: 3px;
+  padding: 9px 11px; border: 1px solid var(--line-soft);
+  border-radius: 8px; background: var(--surface-2);
+}
+.sbk-fact > span { font-size: 10.5px; letter-spacing: .4px; color: var(--text-3); }
+.sbk-fact > b, .sbk-fact > i {
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.sbk-fact > b { font-size: 12px; font-weight: 600; color: var(--text); }
+.sbk-fact > i { font-style: normal; font-size: 11px; color: var(--text-3); }
+.sbk-fact > b.bad { color: var(--warn); }
+
+@media (max-width: 900px) {
+  .scfg-tabs { flex-wrap: wrap; }
+  .scfg-tab em { display: none; }
+  .scfg-summary-side { margin-left: 0; }
+}
+

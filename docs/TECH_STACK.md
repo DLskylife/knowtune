@@ -15,7 +15,7 @@
 
 | 层 | 职责 | 真实文件路径 |
 |---|---|---|
-| **前端层** | 后台管理台 + 前台问答站，纯原生 HTML/CSS/JS，零前端框架、零打包 | `src/knowtune/api/static/{index.html,app.js,style.css}`（后台，构建号 0.9.55）；`src/knowtune/frontsite/static/{index.html,app.js,style.css}`（前台） |
+| **前端层** | 后台管理台 + 前台问答站，纯原生 HTML/CSS/JS，零前端框架、零打包 | `src/knowtune/api/static/{index.html,app.js,style.css}`（后台，构建号 0.9.56）；`src/knowtune/frontsite/static/{index.html,app.js,style.css}`（前台） |
 | **服务层** | 启动装配、全部 HTTP 接口、站点线程、预问诊桥接、配置与角色/提示词解析 | `src/knowtune/cli.py`、`src/knowtune/api/app.py`（约 4400 行，唯一大文件）、`src/knowtune/frontsite/{instcfg,runner,site}.py`、`src/knowtune/{config,kbconfig,roles,promptcfg,modelcfg,settings,secrets}.py`、`src/knowtune/previsit/app.py`（桥接装配）、`src/previsit/`（预问诊实现真身，v0.3.0，零 knowtune 依赖） |
 | **能力层** | 导入 / 索引 / 检索 / 生成四类算法 | `src/knowtune/ingest/{loader,cleaner,chunker,pipeline}.py`、`src/knowtune/index/{embedder,vectors,sparse}.py`、`src/knowtune/retrieve/{engine,rerank}.py`、`src/knowtune/generate/{prompt,llm,cite,evidence,support,think}.py` |
 | **存储层** | 单文件库 + 密钥密文 + 运行资产（均不进版本库） | `data/library.db`（SQLite WAL，8 表 + 1 张 FTS5 虚表 + 5 张影子表）、`data/secrets.json`（Windows DPAPI）、`data/models/`、`data/calibration/`、`data/uploads/` |
@@ -83,8 +83,8 @@ FTS5 默认 `unicode61` 把整句中文当一个 token，2 字查询命中 0 条
 
 ## 6. 构建号与缓存失效
 
-- **后台统一 `0.9.55`**（`src/knowtune/api/static/`）。
-- **前台现行 `1.7.19`。** 2026-11-07 全量重写时曾统一为 `1.7.18`：当时核对到三处不一致（`index.html` 的 `style.css?v=1.7.18`、`app.js?v=1.7.7`、`index.html:18` 与 `app.js:25` 的 `1.7.17`）。同日补 `progress` 进度事件改了两个前端 JS，按下面规则升为 `1.7.19`；后台同步升 `0.9.55`。
+- **后台统一 `0.9.56`**（`src/knowtune/api/static/`）。
+- **前台现行 `1.7.19`。** 2026-11-07 全量重写时曾统一为 `1.7.18`：当时核对到三处不一致（`index.html` 的 `style.css?v=1.7.18`、`app.js?v=1.7.7`、`index.html:18` 与 `app.js:25` 的 `1.7.17`）。同日补 `progress` 进度事件改了两个前端 JS，按下面规则升为 `1.7.19`；后台同步升 `0.9.55`，同日站点配置弹窗重排再升为 `0.9.56`（现行）。
 - 为什么要这个号：HTML 是 no-store 的，但 WebView 可能把旧 JS 留在缓存里。三处要一致（`index.html` 的 `?v=`、`index.html` 的自检常量、`app.js` 的常量），编号对不上时页面会强制换一次，否则出现「新按钮在、点了没反应」。改前端静态资源必须同步升号。
 
 ## 与其他文档的分工

@@ -166,7 +166,7 @@ src/knowtune/            主项目
   retrieve/              engine（双路召回、融合、拒答判定）/ rerank（精排 + MMR）
   generate/              prompt / llm / cite / evidence / support / think
   api/app.py             后台全部 HTTP 接口（约 4400 行），唯一大文件
-  api/static/            后台前端：index.html / app.js / style.css，构建号 0.9.55
+  api/static/            后台前端：index.html / app.js / style.css，构建号 0.9.56
   frontsite/             instcfg / runner / site
     static/              前台前端：index.html / app.js / style.css
   previsit/app.py        主项目装配层（注入进程内检索器、LLM 适配器、建 FastAPI app）
@@ -655,7 +655,7 @@ effective_fields(): 逐字段
 **④ 前台静态资源构建号三值不一致**
 - 现象：`index.html` 的 `style.css?v=1.7.18` / `app.js?v=1.7.7`，与 `index.html:18`、`app.js:25` 的 `1.7.17` 不一致；后台统一 `0.9.54`。
 - 以什么为准：以前台统一构建号为准。
-- 影响：版本号漂移会让浏览器缓存判断错乱，界面显示与请求版本对不上。**已修正**（2026-11-07 全量重写时，前台 `index.html` 的 css / js 查询串、`SITE_REQ_BUILD`、`app.js` 的 `SITE_BUILD` 曾统一为 `1.7.18`、后台 `0.9.54`；同日补 `progress` 进度事件后，两端前端按规则同步升为前台 `1.7.19`、后台 `0.9.55`，这是现行值）。
+- 影响：版本号漂移会让浏览器缓存判断错乱，界面显示与请求版本对不上。**已修正**（2026-11-07 全量重写时，前台 `index.html` 的 css / js 查询串、`SITE_REQ_BUILD`、`app.js` 的 `SITE_BUILD` 曾统一为 `1.7.18`、后台 `0.9.54`；同日补 `progress` 进度事件后，两端前端按规则同步升为前台 `1.7.19`、后台 `0.9.55`；同日站点配置弹窗重排（三页签 + 模型矩阵）再把后台升为 `0.9.56`，**这是现行值**）。
 
 **⑤ `config/previsit.yaml:86` 的 `retrieval.url: http://127.0.0.1:8000`**
 - 现象：配置里写死 8000，而主服务默认/示例用 8013。

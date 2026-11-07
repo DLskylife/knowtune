@@ -1,6 +1,6 @@
 /* 构建号：与 index.html 里那份一致，不一致说明浏览器拿到的是旧 JS，
    页面加载完会强制换一次（见 index.html 的自检脚本）。 */
-window.ADMIN_BUILD = "0.9.55";
+window.ADMIN_BUILD = "0.9.56";
 
 const $ = (id) => document.getElementById(id);
 
@@ -1816,7 +1816,12 @@ function showModal(title, bodyHTML, onOk, opts = {}) {
 
   $("modalTitle").textContent = title;
   $("modalBody").innerHTML = bodyHTML;
-  modal.querySelector(".modal-box").classList.toggle("wide", Boolean(opts.wide));
+  const box = modal.querySelector(".modal-box");
+  box.classList.toggle("wide", Boolean(opts.wide));
+  // 自定义宽度/皮肤：每次开弹窗先清掉上一颗留下的，否则先开「站点配置」
+  // 再开「导入」会继承 1020px 的宽板。类名统一 mdl- 前缀便于清理。
+  [...box.classList].filter((c) => c.startsWith("mdl-")).forEach((c) => box.classList.remove(c));
+  if (opts.cls) box.classList.add(`mdl-${opts.cls}`);
   modal.hidden = false;
 
   // opts.ok === false 时这是一个纯选择型弹窗（比如"导入"让你挑方式），
@@ -6278,10 +6283,6 @@ function roleText(v) {
   return String(v || "-").replace("::", " / ");
 }
 
-function siteChip(k, val, warn) {
-  return `<span class="pv-chip${warn ? " warn" : ""}"><i>${esc(k)}</i>${esc(val)}</span>`;
-}
-
 const LANG_NAME = { ug: "维吾尔语（RTL）", zh: "中文", en: "English" };
 const KB_LANG_NAME = { zh: "中文语料", ug: "维吾尔语料", en: "英语语料" };
 
@@ -6301,6 +6302,9 @@ function siteBlock(i, meta, plan, defProv) {
     .filter(([k]) => secOn(k))
     .map(([k, def]) => String(sec(k).name || "").trim() || def)
     .join(" · ");
+  const secCount = [["med", "维医"], ["classic", "古籍"], ["pv", "预问诊"]]
+    .filter(([k]) => secOn(k)).length;
+  const classicKb = (d.kbs || []).find((k) => k.id === (i.classic_kb_id || 0));
   const shown = i.content_lang && i.content_lang !== i.lang
     ? `<span class="sbk-dim warn" title="页面语言按文案内容判定，下拉只在判不出时兜底"
         >实际显示：${esc(LANG_NAME[i.content_lang] || i.content_lang)}</span>`
@@ -6342,14 +6346,29 @@ function siteBlock(i, meta, plan, defProv) {
 
     <div class="sbk-sec">
       <div class="sbk-label">当前生效<span class="sbk-note">保存后立即生效；改端口或监听会重启</span></div>
-      <div class="pv-chips">
-        ${siteChip("知识库", i.kb_name || (kb && kb.name) || `#${i.kb_id}`)}
-        ${siteChip("板块", secNames || "全部关闭", !secNames)}
-        ${siteChip("模型", `译 ${roleText(resolved.translate)} · 答 ${roleText(resolved.generate)}`)}
-        ${siteChip("产出", mode)}
-        ${siteChip("语言", LANG_NAME[i.lang] || i.lang)}
-        ${siteChip("语料", KB_LANG_NAME[i.kb_lang] || i.kb_lang || "-")}
-        ${i.autostart ? siteChip("开机", "自动拉起") : ""}
+      <div class="sbk-facts">
+        <div class="sbk-fact">
+          <span>入口</span>
+          <b class="${secNames ? "" : "bad"}" title="${esc(secNames || "全部关闭")}"
+            >${esc(secNames || "全部关闭")}</b>
+          <i>${secCount} / 3 个板块已开启</i>
+        </div>
+        <div class="sbk-fact">
+          <span>知识库</span>
+          <b title="${esc(i.kb_name || (kb && kb.name) || `#${i.kb_id}`)}"
+            >${esc(i.kb_name || (kb && kb.name) || `#${i.kb_id}`)}</b>
+          <i>古籍：${esc(classicKb ? classicKb.name : "按标题分流")}</i>
+        </div>
+        <div class="sbk-fact">
+          <span>模型 · 译 / 答</span>
+          <b title="译 ${esc(roleText(resolved.translate))}">译 ${esc(roleText(resolved.translate))}</b>
+          <i title="答 ${esc(roleText(resolved.generate))}">答 ${esc(roleText(resolved.generate))}</i>
+        </div>
+        <div class="sbk-fact">
+          <span>语言 / 产出</span>
+          <b>${esc(LANG_NAME[i.lang] || i.lang)} · ${esc(mode)}</b>
+          <i>${esc(KB_LANG_NAME[i.kb_lang] || i.kb_lang || "-")}${i.autostart ? " · 开机自启" : ""}</i>
+        </div>
       </div>
     </div>
 
@@ -6361,11 +6380,17 @@ function siteBlock(i, meta, plan, defProv) {
   </section>`;
 }
 
-/* 站点参数弹窗的内容。
+/* 站点参数弹窗的内容（2026-11-07 重排）。
  *
- * 字段和原来平铺在卡上的完全一样，只是换了容器。保存从"改一个发一次"变成
- * "改完一起发"：PUT 的语义本来就是"这份配置长这样"，一次提交也少了一串
- * 半秒钟的往返，更不会留下改到一半的中间态。
+ * 旧的形态是 640px 宽里平铺 6 个分组：三个板块各带两个无列名的模型下拉，
+ * 再加一组「模型角色」两个下拉，八个下拉分散在两处，谁覆盖谁只能靠读提示
+ * 文字猜。现在按「板块 / 模型 / 站点设置」分三页，模型收敛成一张矩阵：
+ * 表的行顺序就是角色的生效顺序（板块 → 站点 → 系统 → 实例 → 默认），
+ * 列名写清每个下拉是干什么的，留空代表跟随上一级。
+ *
+ * 关键约束：**所有 data-f 字段名一个都不改**。readSiteBlock() 遍历
+ * #modalBody [data-f] 组 payload，隐藏页签里的控件仍在 DOM 里（用 hidden
+ * 属性切换，不重建 DOM），所以分不分页对保存完全透明，后端零改动。
  */
 function siteGroups(i, meta, plan, defProv) {
   const d = state.sites || {};
@@ -6381,141 +6406,187 @@ function siteGroups(i, meta, plan, defProv) {
   const lo = d.port_range ? d.port_range[0] : 8800;
   const hi = d.port_range ? d.port_range[1] : 8899;
 
-  const row = (label, control, hint, full) => `<div class="form-row${full ? " full" : ""}">
-      <label>${esc(label)}</label>${control}${hint ? `<span class="hint">${esc(hint)}</span>` : ""}
-    </div>`;
-  const group = (label, hint, body) => `<div class="pv-group">
-      <div class="pv-group-head"><b>${esc(label)}</b>${hint ? `<span class="hint">${esc(hint)}</span>` : ""}</div>
-      <div class="form-grid">${body}</div>
-    </div>`;
   const toggle = (field, on, label) => `<label class="toggle">
       <input type="checkbox" data-f="${field}"${on ? " checked" : ""}>
       <span class="sw" aria-hidden="true"></span>
       <span class="toggle-label">${esc(label)}</span></label>`;
   const text = (field, val, ph, dir) => `<input data-f="${field}" dir="${dir || "auto"}"
       value="${esc(val || "")}" placeholder="${esc(ph || "留空用默认")}">`;
-
-  // 这五句话已经搬到「提示词配置」，这里只留一个入口。两边都能改的后果是
-  // 一定有一边改了不生效——用户看到"保存成功、页面没变"，却找不到原因。
-  const copyLinkRow = (lang) => `<div class="form-row">
-      <label>标题 / 副标题 / 欢迎语 / 示例 / 免责</label>
-      <span class="hint">这五句在提示词配置里统一管理，保存前自动留快照、可整体回滚。</span>
-      <button class="mini" type="button" data-open-copy="copy_${esc(lang || "ug")}"
-        >打开提示词配置</button></div>`;
-
-  const resolved = (plan && plan.resolved) || {};
-  const used = `实际：译 ${roleText(resolved.translate)} · 答 ${roleText(resolved.generate)}`;
-
-  /* 板块行：开关 + 显示名 + （可选的）知识库下拉，一行说清"这个入口是什么"。
-   *
-   * 以前这三个入口是写死的：名字来自 i18n、开关没有、预问诊永远在。可"这个
-   * 站点要不要开预问诊"是每个站点自己的事——给医生看古籍的站点，多一个预问诊
-   * 入口只会让人点错。名字也一样，维语站点想叫别的声音，得能改。
-   */
   const sec = (key) => (i.sections && i.sections[key]) || {};
-  const secRoles = (key) => (sec(key).roles || {});
-  const secRow = (key, label, defName, extra, hint, modelRow) => `<div class="form-row full">
-      <label>${esc(label)}</label>
-      <span class="fld-row">
-        <label class="toggle" title="关掉之后这个入口在站点上真的消失（连地址一起）">
-          <input type="checkbox" data-f="sec_${key}_enabled"
-            ${sec(key).enabled !== false ? "checked" : ""}>
+  const secOn = (key) => sec(key).enabled !== false;
+  const sel = (field, role, cur, title) =>
+    `<select data-f="${field}" title="${esc(title)}">${provSelect(role, cur, d.providers, meta, defProv)}</select>`;
+
+  // 一行字段：标签在左、控件在右，说明放在控件下方，不再往控件行里塞小字。
+  const field = (label, control, note, cls = "") => `<div class="scfg-field ${cls}">
+      <label>${esc(label)}</label>${control}${note ? `<small>${esc(note)}</small>` : ""}
+    </div>`;
+  const card = (title, desc, body, extraClass = "") => `<section class="scfg-card ${extraClass}">
+      <div class="scfg-card-head">
+        <div class="scfg-card-title"><b>${esc(title)}</b><span>${esc(desc)}</span></div>
+      </div>
+      <div class="scfg-card-body">${body}</div>
+    </section>`;
+
+  /* ---------- 页 1：板块与知识库 ---------- */
+  const secCard = (key, label, defName, extra, hint) => {
+    const on = secOn(key);
+    return `<article class="scfg-card${on ? "" : " is-off"}" data-sec-card="${key}">
+      <div class="scfg-card-head">
+        <label class="toggle" title="关掉后这个入口在站点上真的消失（连地址一起）">
+          <input type="checkbox" data-f="sec_${key}_enabled" ${on ? "checked" : ""}>
           <span class="sw" aria-hidden="true"></span>
           <span class="toggle-label">显示</span></label>
-        <input class="sec-name" data-f="sec_${key}_name" dir="auto"
-          value="${esc(sec(key).name || "")}"
-          placeholder="显示名：留空用「${esc(defName)}」" maxlength="24">
-        ${extra || ""}
-      </span>
-      <span class="hint">${esc(hint)}</span>
-      ${modelRow || ""}
-    </div>`;
-
-  /* 检索型板块（med/classic）的模型 + 提示词子行。板块可以钉一个与站点不同的
-   * 后端，也可以单独配一套提示词——古籍守原文、维医接临床，同一后端两套话术。 */
-  const sectionModelRow = (key) => {
-    const r = secRoles(key);
-    return `<div class="sec-model">
-      <span class="hint">模型（留空跟随站点）</span>
-      <span class="fld-row">
-        <select data-f="sec_${key}_role_translate"
-          title="这个板块的翻译模型"
-          >${provSelect("translate", r.translate || "", d.providers, meta, defProv)}</select>
-        <select data-f="sec_${key}_role_generate"
-          title="这个板块的推理模型"
-          >${provSelect("generate", r.generate || "", d.providers, meta, defProv)}</select>
-      </span>
-      <button class="mini" type="button" data-open-prompt="${key}"
-        >提示词</button>
-    </div>`;
+        <div class="scfg-card-title"><b>${esc(label)}</b><span>${esc(hint)}</span></div>
+        <span class="scfg-badge${on ? " on" : ""}">${on ? "已显示" : "已隐藏"}</span>
+      </div>
+      <div class="scfg-card-body">
+        ${field("显示名", `<input data-f="sec_${key}_name" dir="auto"
+          value="${esc(sec(key).name || "")}" placeholder="留空用「${esc(defName)}」" maxlength="24">`)}
+        ${extra}
+      </div>
+    </article>`;
   };
 
-  return [
-    group("板块", "三个入口各自独立：改名、开关、检索库、模型、提示词都能单独配", [
-      secRow("med", "维医问答", "维医问答",
-        `<select data-f="kb_id" title="维医问答检索哪个库">${kbOpts}</select>`,
-        "检索主知识库", sectionModelRow("med")),
-      secRow("classic", "古籍问答", "古籍问答",
-        `<select data-f="classic_kb_id" title="古籍问答检索哪个库">${classicOpts}</select>`,
-        "只在这个库里检索；选「不单独分库」则按主库文档标题含「古籍」来分",
-        sectionModelRow("classic")),
-      secRow("pv", "预问诊", "预问诊",
-        `<button class="mini" type="button" data-open-pvcfg>模型与提示词</button>`,
-        "不检索知识库，走预问诊那套引擎；模型、轮次、提示词点右上「模型与提示词」配置"),
-    ].join("")),
+  const secPanel = `
+    <div class="scfg-lead"><b>三个入口，各自独立</b>
+      <span>开关、显示名、绑定的知识库在这一页；模型与提示词统一到下一页，不再混在板块里。</span></div>
+    <div class="scfg-cards">
+      ${secCard("med", "维医问答", "维医问答",
+        field("检索知识库", `<select data-f="kb_id">${kbOpts}</select>`),
+        "站点的主入口，默认绑定主知识库")}
+      ${secCard("classic", "古籍问答", "古籍问答",
+        field("检索知识库", `<select data-f="classic_kb_id">${classicOpts}</select>`,
+          "选「不单独分库」时按文档标题含「古籍」来分流"),
+        "只在这个库里检索，与维医问答互不干扰")}
+      ${secCard("pv", "预问诊", "预问诊",
+        field("参数", `<button class="mini" type="button" data-open-pvcfg>模型与提示词</button>`,
+          "模型、轮次、追问与提示词在预问诊自己的参数面板里"),
+        "不检索知识库，走独立的多轮问诊引擎")}
+    </div>`;
 
-    group("绑定", "占一个端口、一套语言", [
-      row("端口", `<input data-f="port" type="number" min="${lo}" max="${hi}" value="${i.port}">`,
-        "改这里会重启站点"),
-      row("界面与回答语言", `<select data-f="lang">
-        ${opt("ug", "维吾尔语（从右往左）", i.lang)}
-        ${opt("zh", "中文", i.lang)}
-        ${opt("en", "English", i.lang)}</select>`),
-      row("知识库内容的语言", `<select data-f="kb_lang">
-        ${opt("zh", "中文语料（维语提问先译成中文）", i.kb_lang || "zh")}
-        ${opt("ug", "维吾尔语语料（直接检索）", i.kb_lang)}
-        ${opt("en", "英语语料", i.kb_lang)}</select>`),
-      `<div class="form-row"><label>监听</label>${toggle("public", i.public, "局域网可访问")}
-        <span class="hint">改了会重启</span></div>`,
-      `<div class="form-row"><label>开机</label>${toggle("autostart", i.autostart, "后台启动时自动拉起")}</div>`,
-    ].join("")),
+  /* ---------- 页 2：模型与提示词（矩阵） ---------- */
+  const resolved = (plan && plan.resolved) || {};
+  const mrow = (label, sub, tr, gen, prompt, cls = "") => `<tr class="${cls}">
+      <td class="scfg-mrow-k"><b>${esc(label)}</b><span>${esc(sub)}</span></td>
+      <td>${tr}</td><td>${gen}</td><td>${prompt}</td></tr>`;
+  const promptBtn = (attrs, label) =>
+    `<button class="mini" type="button" ${attrs}>${esc(label)}</button>`;
 
-    group("模型角色", used.replace(/^实际：/, "现在实际用："), [
-      row("翻译模型", `<span class="fld-row">
-          <select data-f="role_translate"
-            title="先把维吾尔语提问译成中文去检索，再把中文答案译回去"
-            >${provSelect("translate", roles.translate || "", d.providers, meta, defProv)}</select>
-          <button class="mini" type="button" data-trtest
-            title="发一句真实翻译，单独验证这个模型通不通、译得对不对">测试</button>
-        </span>`, "留空跟随系统；可选到具体模型"),
-      `<div class="tr-out" data-trout hidden></div>`,
-      row("推理模型", `<select data-f="role_generate"
-          title="读检索到的资料组织答案"
-          >${provSelect("generate", roles.generate || "", d.providers, meta, defProv)}</select>`,
-        "留空 = 跟随系统；可选到具体模型"),
-    ].join("")),
+  const modelPanel = `
+    <div class="scfg-lead accent"><b>一张表看清谁覆盖谁</b>
+      <span>留空 = 跟随上一级。角色生效顺序
+        <code>板块 → 站点 → 系统 → 实例 → 默认</code>，越靠上的行越优先。</span></div>
+    <div class="scfg-matrix-wrap">
+      <table class="scfg-matrix">
+        <thead><tr>
+          <th>入口 / 层级</th><th>翻译模型</th><th>推理模型</th><th>提示词</th>
+        </tr></thead>
+        <tbody>
+          ${mrow("站点默认", "所有板块的兜底值",
+            `<div class="scfg-cell-row">${sel("role_translate", "translate", roles.translate,
+              "先把维吾尔语提问译成中文去检索，再把中文答案译回去")}
+              <button class="mini" type="button" data-trtest
+                title="发一句真实翻译，验证这个模型通不通、译得对不对">测试</button></div>`,
+            sel("role_generate", "generate", roles.generate, "读检索到的资料组织答案"),
+            promptBtn("data-open-global-prompt", "角色提示词"),
+            "scfg-mrow-default")}
+          ${mrow(String(sec("med").name || "").trim() || "维医问答", "板块级覆盖 · 只影响本入口",
+            sel("sec_med_role_translate", "translate", (sec("med").roles || {}).translate,
+              "维医问答的翻译模型；留空跟随站点默认"),
+            sel("sec_med_role_generate", "generate", (sec("med").roles || {}).generate,
+              "维医问答的推理模型；留空跟随站点默认"),
+            promptBtn('data-open-prompt="med"', "板块提示词"))}
+          ${mrow(String(sec("classic").name || "").trim() || "古籍问答", "板块级覆盖 · 只影响本入口",
+            sel("sec_classic_role_translate", "translate", (sec("classic").roles || {}).translate,
+              "古籍问答的翻译模型；留空跟随站点默认"),
+            sel("sec_classic_role_generate", "generate", (sec("classic").roles || {}).generate,
+              "古籍问答的推理模型；留空跟随站点默认"),
+            promptBtn('data-open-prompt="classic"', "板块提示词"))}
+          <tr class="scfg-mrow-soft">
+            <td class="scfg-mrow-k"><b>预问诊</b><span>独立引擎 · 不走知识库检索</span></td>
+            <td colspan="2" class="scfg-mrow-note">模型、轮次与提示词在预问诊参数面板里单独配置，不随上表继承。</td>
+            <td>${promptBtn("data-open-pvcfg", "模型与提示词")}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="tr-out scfg-tr-out" data-trout hidden></div>
+    <div class="scfg-footnote">
+      <b>提示词顺序与模型不同</b>：<code>by_provider（后端） &gt; by_scope（板块） &gt; default（角色默认） &gt; 内置</code>。
+      同名字段两层都配时，后端级会盖过板块级 —— 别把两套顺序记混。
+      当前实际生效：译 <b>${esc(roleText(resolved.translate))}</b> · 答 <b>${esc(roleText(resolved.generate))}</b>。
+    </div>`;
 
-    group("答案", "同一份资料，两种产出路径", [
-      row("产出方式", `<select data-f="answer_mode">
-        ${opt("translate", "先用中文组织答案，再整段译成维吾尔语（稳，慢一倍）", i.answer_mode || "translate")}
-        ${opt("direct", "模型直接用维吾尔语作答（快，小模型容易跑偏）", i.answer_mode)}</select>`),
-    ].join("")),
+  /* ---------- 页 3：站点设置 ---------- */
+  const copyField = (lang, label) => field(label,
+    `<button class="mini" type="button" data-open-copy="copy_${esc(lang || "ug")}"
+      >打开提示词配置</button>`,
+    "标题、副标题、欢迎语、示例、免责统一在提示词配置里，保存前自动留快照、可整体回滚");
 
-    group("界面文案", "标题、副标题、欢迎语在「提示词配置 · 界面文案」；这里只改左侧那块的名字", [
-      row("侧栏库名", text("kb_name", i.kb_name, "留空用知识库名"), "前台左侧顶部的标题"),
-      copyLinkRow(i.lang),
-    ].join("")),
+  const sitePanel = `
+    <div class="scfg-lead"><b>不常改，但改了要清楚后果</b>
+      <span>端口与「局域网可访问」动到 socket，保存后会重启这个站点；其余立即生效。</span></div>
+    <div class="scfg-cards">
+      ${card("运行", "占哪个端口、谁能连、要不要开机拉起", `
+        ${field("端口", `<input data-f="port" type="number" min="${lo}" max="${hi}" value="${i.port}">`,
+          "改这里会重启站点")}
+        ${field("监听", toggle("public", i.public, "局域网可访问"), "只监听回环时外部访问不到")}
+        ${field("开机", toggle("autostart", i.autostart, "后台启动时自动拉起"))}
+      `)}
+      ${card("语言与答案", "界面、语料、答案先走哪条路", `
+        ${field("界面与回答语言", `<select data-f="lang">
+          ${opt("ug", "维吾尔语（从右往左）", i.lang)}
+          ${opt("zh", "中文", i.lang)}
+          ${opt("en", "English", i.lang)}</select>`)}
+        ${field("知识库内容的语言", `<select data-f="kb_lang">
+          ${opt("zh", "中文语料（维语提问先译成中文）", i.kb_lang || "zh")}
+          ${opt("ug", "维吾尔语语料（直接检索）", i.kb_lang)}
+          ${opt("en", "英语语料", i.kb_lang)}</select>`)}
+        ${field("产出方式", `<select data-f="answer_mode">
+          ${opt("translate", "先用中文组织答案，再整段译成维吾尔语（稳，慢一倍）", i.answer_mode || "translate")}
+          ${opt("direct", "模型直接用维吾尔语作答（快，小模型容易跑偏）", i.answer_mode)}</select>`,
+          "同一份资料，两种产出路径", "wide")}
+      `)}
+      ${card("界面文案", "这五句话在提示词配置里统一管理，这里只改左侧那块名字", `
+        ${field("侧栏库名", text("kb_name", i.kb_name, "留空用知识库名"),
+          "主语言界面左侧顶部的标题")}
+        ${copyField(i.lang, "主语言文案")}
+        ${field("另一语言", `<select data-f="alt_lang">
+          ${opt("zh", "中文", a.lang)}
+          ${opt("ug", "维吾尔语", a.lang)}
+          ${opt("en", "English", a.lang)}</select>`, "右上角切换用的那套")}
+        ${field("另一语言侧栏库名", text("alt_kb_name", a.kb_name, "留空用知识库名"))}
+        ${copyField(a.lang || "zh", "另一语言文案")}
+      `, "span-all")}
+    </div>`;
 
-    group("另一语言", "右上角那套切换用的文案，留空自动补齐", [
-      row("语言", `<select data-f="alt_lang">
-        ${opt("zh", "中文", a.lang)}
-        ${opt("ug", "维吾尔语", a.lang)}
-        ${opt("en", "English", a.lang)}</select>`),
-      row("侧栏库名", text("alt_kb_name", a.kb_name, "留空用知识库名"),
-        "这一语言界面左侧顶部的标题"),
-      copyLinkRow(a.lang || "zh"),
-    ].join("")),
-  ].join("");
+  const tab = (key, num, label, meta2, active) => `<button type="button" role="tab"
+      class="scfg-tab${active ? " active" : ""}" data-scfg-tab="${key}"
+      aria-selected="${active ? "true" : "false"}">
+      <span class="scfg-tab-n">${num}</span>
+      <span class="scfg-tab-t">${esc(label)}</span>
+      <em>${esc(meta2)}</em></button>`;
+
+  return `
+    <div class="scfg-summary">
+      <div class="scfg-summary-line">
+        <span class="scfg-summary-k">当前生效</span>
+        <span>译 <b>${esc(roleText(resolved.translate))}</b></span>
+        <span>答 <b>${esc(roleText(resolved.generate))}</b></span>
+        <span class="scfg-summary-side">端口 <b>${i.port}</b> · ${esc(LANG_NAME[i.lang] || i.lang)}</span>
+      </div>
+      <p class="scfg-save-note">保存即写入 <code>config/instances.yaml</code>：模型、语言、文案立即生效；
+        <b>端口</b>和<b>局域网可访问</b>动到 socket，保存后会重启这个站点。</p>
+    </div>
+    <div class="scfg-tabs" role="tablist" aria-label="站点配置分区">
+      ${tab("sections", "01", "板块与知识库", "3 个入口", false)}
+      ${tab("models", "02", "模型与提示词", "6 个模型位", true)}
+      ${tab("site", "03", "站点设置", "端口 · 语言 · 文案", false)}
+    </div>
+    <div class="scfg-panel" data-scfg-panel="sections" hidden>${secPanel}</div>
+    <div class="scfg-panel" data-scfg-panel="models">${modelPanel}</div>
+    <div class="scfg-panel" data-scfg-panel="site" hidden>${sitePanel}</div>`;
 }
 
 async function openSiteConfig(name) {
@@ -6525,18 +6596,13 @@ async function openSiteConfig(name) {
   const plan = plans.find((p) => p.name === name) || null;
   const defProv = (state.rolePlan && state.rolePlan.default_provider) || "";
 
-  showModal(`站点 · ${name}`, `
-    <p class="hint u-mb12-0">
-      保存即写入 <code>config/instances.yaml</code>。模型、语言、文案立即生效；
-      <b>端口</b>和<b>局域网可访问</b>动到 socket，保存后会重启这个站点。
-    </p>
-    <div class="pv-groups">${siteGroups(i, state.modelMeta || [], plan, defProv)}</div>`,
+  showModal(`站点 · ${name}`, siteGroups(i, state.modelMeta || [], plan, defProv),
     async () => {
       const payload = readSiteBlock($("modalBody"));
       const r = await jsonSend("PUT", `/api/instances/${encodeURIComponent(name)}`, payload);
       await renderSites();
       toast(r.restarted ? `${name} 已保存并重启` : `${name} 已保存 · 立即生效`);
-    }, { okLabel: "保存并生效", wide: true });
+    }, { okLabel: "保存并生效", wide: true, cls: "site" });
 
   bindTrTest();
 }
@@ -6548,6 +6614,29 @@ function bindTrTest() {
   if (body.dataset.trBound) return;
   body.dataset.trBound = "1";
   body.addEventListener("click", async (e) => {
+    // 站点配置三页签：隐藏页用 hidden 属性，控件始终留在 DOM 里。
+    // readSiteBlock() 遍历的是全部 [data-f]，所以停在任一页直接保存都不会
+    // 漏掉另外两页的字段——这一点是分栏方案能安全落地的前提。
+    const tab = e.target.closest("[data-scfg-tab]");
+    if (tab) {
+      const key = tab.dataset.scfgTab;
+      body.querySelectorAll("[data-scfg-tab]").forEach((b) => {
+        const on = b === tab;
+        b.classList.toggle("active", on);
+        b.setAttribute("aria-selected", on ? "true" : "false");
+      });
+      body.querySelectorAll("[data-scfg-panel]").forEach((pane) => {
+        pane.hidden = pane.dataset.scfgPanel !== key;
+      });
+      return;
+    }
+    // 站点默认行的提示词：不带板块维度，打开角色级配置。
+    const gp = e.target.closest("[data-open-global-prompt]");
+    if (gp) {
+      $("modalCancel").click();
+      await openPromptDrawer("");
+      return;
+    }
     // 站点弹窗里的文案入口：关掉本弹窗、打开提示词抽屉，并滚到对应语言那一栏。
     // 直接叠着开两个遮罩会出现"关掉上面那个、下面那个点不动"——先关再开。
     const cp = e.target.closest("[data-open-copy]");
@@ -6609,6 +6698,21 @@ function bindTrTest() {
       out.innerHTML = `<span class="warn">${esc(err.message)}</span>`;
     } finally {
       tr.disabled = false;
+    }
+  });
+  // 板块开关不只是改一个 checkbox：卡片的灰化与右侧徽标要跟着变，
+  // 否则「关掉了但看起来还开着」比没有开关更误导。
+  body.addEventListener("change", (e) => {
+    const m = /^sec_(med|classic|pv)_enabled$/.exec(e.target.dataset.f || "");
+    if (!m) return;
+    const card = body.querySelector(`[data-sec-card="${m[1]}"]`);
+    if (!card) return;
+    const on = Boolean(e.target.checked);
+    card.classList.toggle("is-off", !on);
+    const badge = card.querySelector(".scfg-badge");
+    if (badge) {
+      badge.classList.toggle("on", on);
+      badge.textContent = on ? "已显示" : "已隐藏";
     }
   });
 }
