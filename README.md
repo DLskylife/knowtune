@@ -31,7 +31,7 @@
 
 | 能力 | 现行实现 |
 |---|---|
-| 三板块 | `section`（板块）分 `med`（维医问答）、`classic`（古籍问答）、`pv`（预问诊）。当前 `config/instances.yaml` 只有一个实例 `uyghur-med`，三个板块开关全开；`med` 绑 kb 2（26 篇 / 322 块），`classic` 绑 kb 4（5 篇 / 1120 块），`pv` 走预问诊引擎、不检索知识库 |
+| 三板块 | `section`（板块）分 `med`（维医问答）、`classic`（古籍问答）、`pv`（预问诊）。当前 `config/instances.yaml` 只有一个实例 `uyghur-med`，三个板块开关全开；`med` 绑 kb 2（26 篇 / 322 块），`classic` 绑 kb 4（5 篇 / 1120 块），`pv` 是纯对话（提示词 + 模型）、不检索知识库 |
 | 双路召回 | dense 用本地 `BAAI/bge-small-zh-v1.5`（512 维），sparse 用 jieba 预分词写进 FTS5。两路各取 top 50，`weighted` 融合（w_dense 0.35 / w_sparse 0.50），前 10 条送精排 |
 | 精排 | `rerank`（精排）用 `BAAI/bge-reranker-base` CrossEncoder。三个库的 `retrieval.rerank.enabled` 均为 `true`，`/api/status` 报 `rerank.enabled=true, last_error=null`，**精排实际在跑**；打分有 4096 条进程内 LRU 缓存，键为（模型, 问题摘要, 片段摘要），换问法不命中、重启即空 |
 | 引用 | 答案强制挂引用编号，`cite.verify` 剥掉越界编号，给引用覆盖率。默认取前 5 条（`rerank.top_k` 可配），不按精排分数设下限 |
@@ -125,7 +125,7 @@ knowtune serve [--port 8013]           # 启动 Web UI
 | 后台管理台 | 主服务 FastAPI：建库、导入、调参、看日志、全部 HTTP 接口（`api/app.py`，约 4400 行，唯一大文件） | `http://127.0.0.1:8013/`，`knowtune serve` |
 | 前台问答站 | 面向终端用户的问答站，主服务进程内 daemon 线程，不另起进程；`instances.yaml` 的 `port` + `autostart: true` | `http://127.0.0.1:8800/`，`src/knowtune/frontsite/` |
 | OpenAI 兼容网关 | `/v1` 纯转发到选中的 OpenAI 兼容后端，**不经过 RAG 链路**；RAG 入口只有后台 `/api/ask` 与前台 `/api/ask` | `http://127.0.0.1:8013/v1` |
-| 预问诊 | 挂在前台 `/previsit`，对外全路径 `/previsit/api/previsit/*`，**没有独立站点、没有独立端口**；`section` 开关 `pv` 关闭时按 404 拦截 | 实现真身 `src/previsit/`（v0.3.0，零 knowtune 依赖），`src/knowtune/previsit/` 是桥接再导出 + 装配层 |
+| 预问诊 | 挂在前台 `/previsit`，对外全路径 `/previsit/api/previsit/*`，**没有独立站点、没有独立端口**；`section` 开关 `pv` 关闭时按 404 拦截；**推理固定走本机模型**（`previsit.overrides.yaml` 钉 `provider: local`），不把患者原话发给云端。**只有一层壳：一段系统提示词 + 模型本身**——没有槽位、分诊规则、病历或结论卡，问什么、问几轮、何时收尾都由模型决定 | 实现真身 `src/previsit/`（v0.4.0，零 knowtune 依赖），`src/knowtune/previsit/` 是桥接再导出 + 装配层 |
 | 数据库 | SQLite（WAL），8 张表 + 1 张 FTS5 虚表，另有 FTS5 的 5 张影子表 | `data/library.db` |
 
 两套 `previsit` 不是重复实现：运行时用的是 `src/previsit/`，由 `frontsite/site.py` 挂到 `/previsit` 并注入进程内检索器。
@@ -172,6 +172,7 @@ knowtune serve [--port 8013]           # 启动 Web UI
 2. **单机单用户**：SQLite + 进程内模型，无并发控制；多人同时提问互相排队。本地 7B 一次完整回答实测 222 秒（CPU 推理），嵌入编码约 21 chunk/s。SSE 流式已有，检索阶段补了 `progress`（进度）事件后首字前不再全静默（见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §5.5），但生成侧首 token 仍受模型本身速度限制。
 3. **后台无入站鉴权，默认只监听 `127.0.0.1`。** 要开局域网须显式 `knowtune serve --host 0.0.0.0`。这是既定取舍，不是漏做：只监听回环时外部暴露面本就不存在；要上公网必须先补鉴权层。
 4. **GitHub git 端点在此网络环境返回 502**（2026-11-07 实测），推送走 `api.github.com` 的 Git Data API。与代码无关，换网络即消失。
+5. **预问诊固定本机 7B，每轮一次模型调用。** `Qwen2.5-7B-Instruct-Q4_K_M`（4.4GB）常驻约 4.5GB 显存，后台启动后约 20 秒才能回答；这二十秒内模型还没就绪，预问诊会直接报「服务暂时不可用」，不会拿规则拼一句话糊过去。2026-11-07 实测（RTX 3060 6G，全量 offload）：开场 1.8 s、每轮 2.3 s。要更快只能换更小模型（3B 档实测不可用：量化到 Q4 后 77 tok/s，但会把「脐周」写成「全腹」）或换更大的卡。本机系统代理原本会再吃掉 3–4 秒，`knowtune serve` 已把回环并进 `NO_PROXY`。
 
 #### 两组延迟数字为什么不一样
 
@@ -215,10 +216,10 @@ src/knowtune/            主项目
   api/app.py             后台全部 HTTP 接口（约 4400 行）
   api/static/            后台前端：index.html / app.js / style.css，构建号 0.9.56
   frontsite/             instcfg / runner / site + static（前台前端）
-  previsit/app.py        主项目装配层（注入进程内检索器、LLM 适配器）
-src/previsit/            预问诊独立实现（v0.3.0），零 knowtune 依赖
+  previsit/app.py        主项目装配层（LLM 适配器 + 参数面板）
+src/previsit/            预问诊独立实现（v0.4.0：提示词 + 模型的纯对话壳），零 knowtune 依赖
 config/                   default / local / models / instances / prompts(.yaml) / prompts/*.md
-                          previsit.yaml / previsit.overrides.yaml / previsit_kb.yaml
+                          previsit.yaml / previsit.overrides.yaml
 data/                    不进版本库：library.db、uploads/、models/、calibration/、secrets.json
 docs/                    7 份文档（见下表）
 scripts/                  fake_llm.py / get_llama.py / shot_models.py

@@ -9,6 +9,7 @@ instances:
   provider: ''
   roles:
     translate: siliconflow::tencent/Hunyuan-MT-7B
+    generate: siliconflow::Qwen/Qwen2.5-7B-Instruct
   title: ''
   subtitle: ''
   welcome: ''
@@ -26,10 +27,14 @@ instances:
   sections:
     med:
       enabled: true
-      name: ''
+      name: 维医知识问答
+      roles:
+        translate: siliconflow::tencent/Hunyuan-MT-7B
     classic:
       enabled: true
-      name: ''
+      name: 古籍知识问答
+      roles:
+        translate: siliconflow::tencent/Hunyuan-MT-7B
     pv:
       enabled: true
-      name: ''
+      name: 预问诊

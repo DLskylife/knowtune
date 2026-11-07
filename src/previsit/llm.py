@@ -31,6 +31,24 @@ DEFAULT_TIMEOUT_S = 20.0
 DEFAULT_GATEWAY = "http://127.0.0.1:8000/v1"
 _GATEWAY_ENVS = ("PREVISIT_LLM_GATEWAY", "KNOWTUNE_GATEWAY")
 
+_LOOPBACK = ("127.0.0.1", "localhost", "::1", "[::1]")
+
+
+def _proxy_kw(url: str) -> dict[str, Any]:
+    """回环地址不要走系统代理。
+
+    机器上开了代理（Clash 之类）时 httpx 默认读 HTTP_PROXY，连
+    `http://127.0.0.1:8097` 也会被送进代理绕一圈。实测一次 300 token 的
+    调用 5.6s → 2.0s：一轮问诊两次调用，白等三秒半，而且看起来像"本地模型
+    就是慢"。云端后端该走代理照走，这里只针对本机。
+    """
+    host = ""
+    try:
+        host = (httpx.URL(url).host or "").strip().lower()
+    except Exception:                      # 地址解析不了就按默认行为来
+        return {}
+    return {"trust_env": False} if host in _LOOPBACK else {}
+
 
 class LLMError(Exception):
     """模型调用失败。引擎捕获后熔断降级，不会把问诊卡死。"""
@@ -125,7 +143,7 @@ class OpenAICompatLLM:
         try:
             resp = httpx.post(f"{self.base_url}/chat/completions",
                               json=payload, headers=headers,
-                              timeout=self.timeout_s)
+                              timeout=self.timeout_s, **_proxy_kw(self.base_url))
         except httpx.HTTPError as exc:
             raise LLMError(f"请求失败：{type(exc).__name__}: {exc}") from exc
         if resp.status_code >= 400:
@@ -239,7 +257,8 @@ class GatewayLLM:
             return cached
         try:
             r = httpx.get(self.base_url + "/models",
-                          timeout=min(2.0, self.timeout_s))
+                          timeout=min(2.0, self.timeout_s),
+                          **_proxy_kw(self.base_url))
             ids = [str(m.get("id")) for m in (r.json().get("data") or [])
                    if isinstance(m, dict) and m.get("id")]
             if ids:
@@ -269,7 +288,8 @@ class GatewayLLM:
             try:
                 resp = httpx.post(self.base_url + "/chat/completions",
                                   json=payload, headers=headers,
-                                  timeout=self.timeout_s)
+                                  timeout=self.timeout_s,
+                                  **_proxy_kw(self.base_url))
                 if (resp.status_code == 400 and self._provider
                         and "X-KnowTune-Provider" in headers):
                     # 参数面板里还钉着一个已经删掉的端点名。别让整场问诊为
@@ -279,7 +299,8 @@ class GatewayLLM:
                     self._provider = ""
                     resp = httpx.post(self.base_url + "/chat/completions",
                                       json=payload, headers=headers,
-                                      timeout=self.timeout_s)
+                                      timeout=self.timeout_s,
+                                      **_proxy_kw(self.base_url))
                 if resp.status_code >= 400:
                     raise LLMError(f"网关返回 {resp.status_code}：{resp.text[:180]}")
                 text = str(resp.json()["choices"][0]["message"]["content"] or "").strip()
@@ -294,6 +315,55 @@ class GatewayLLM:
             return self.fallback.complete(msgs, temperature=temperature,
                                           max_tokens=max_tokens)
         raise LLMError(f"网关不可用：{self.last_error or '没有可用的备用模型'}")
+
+
+class TranslatorChain:
+    """维语翻译的客户端链。
+
+    为什么不是"一个客户端 + 重试"：翻译失败的常见形态不是连接断了，而是模型
+    这次换了脾气——回中文、半翻、加解释。同一个模型原地重试两次多半还是那副
+    样子，换一个模型/换一条路由才有用。所以这里按顺序摆几个客户端，谁先给出
+    合格译文就用谁。
+
+    客户端由 `previsit.app.build_translator()` 装配（显式模型 + 网关默认模型）。
+    """
+
+    def __init__(self, clients: list[Any]) -> None:
+        self.clients = [c for c in clients if c is not None]
+
+    def __bool__(self) -> bool:
+        return bool(self.clients)
+
+    @property
+    def base_url(self) -> str:
+        return getattr(self.clients[0], "base_url", "") if self.clients else ""
+
+    @property
+    def model(self) -> str:
+        return (getattr(self.clients[0], "_model", "") or "") if self.clients else ""
+
+    def models(self) -> list[str]:
+        out = []
+        for c in self.clients:
+            m = getattr(c, "_model", "") or "(网关默认)"
+            out.append(str(m))
+        return out
+
+    def complete(self, msgs: list[dict[str, str]], *, temperature: float = 0.2,
+                 max_tokens: int = 320, **_: Any) -> str:
+        last: Exception | None = None
+        for client in self.clients:
+            try:
+                out = client.complete(msgs, temperature=temperature,
+                                      max_tokens=max_tokens)
+            except Exception as exc:          # 一条路不通，换下一条
+                last = exc
+                continue
+            if (out or "").strip():
+                return out
+        if last is not None:
+            raise last
+        raise LLMError("翻译链上没有一个客户端给出内容")
 
 
 def build_llm(pv: dict[str, Any] | None, fallback: Any = None) -> Any:

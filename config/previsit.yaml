@@ -1,20 +1,26 @@
-# 预问诊配置（2026-11-03）
+# 预问诊配置（2026-11-07）
 #
-# 预问诊是维医问答站点里的第三个板块，没有独立站点、没有独立端口：入口在
-# 站点左侧导航，页脚那颗「预问诊参数」改的就是这份文件里的键。
-# 槽位、危险词、分诊规则、追问知识库、合规词表、提示词全在这里。
+# 预问诊是维医问答站点里的第三个板块，没有独立站点、没有独立端口。
 #
-# 设计红线（写死在代码里，不开放给配置）：
-#   1. 分诊科室由本地规则算，绝不交给大模型；
-#   2. 生成的话术一定过合规扫描，命中违规词就退化成安全模板；
-#   3. 任意一步失败都要降级继续，不能因为 LLM 报错把用户卡在半路。
+# 它现在**只是一层壳**：一段系统提示词 + 模型本身。
+# 槽位、危险闸门、分诊规则、追问知识库、知识图谱、病历/摘要生成已全部删除——
+# 问什么、问几轮、何时收尾都由模型自己决定。理由：那套规则决定了"怎么问诊"，
+# 模型换了、场景换了，规则却还停在原地，越加越像填表。
+#
+# 设计红线：
+#   1. 问诊推理只用本地模型（站点层面固定 provider: local），患者对话不出本机；
+#   2. 唯一的例外是维语会话的翻译（见下面 translator_model）：只在边界上把
+#      一句话来回翻译，判断仍由本地模型做；把这一项改回本地模型就直接报错
+#      （本地 7B 写不出维语），**不会**把中文推给维语患者；
+#   3. 模型接不上就如实报错，不拿规则拼一句话糊过去；
+#   4. 不落病历、不给结构化结论，患者看到的只有对话。
 
 enabled: true
 
 # 界面文案
-title: "智能预问诊"
-subtitle: "结构化采集症状，给出就诊科室建议 · 不构成诊断"
-welcome: "您好，我帮您把症状整理成一份就诊摘要。先说说您哪里不舒服？"
+title: "预问诊"
+subtitle: "和医生助手聊聊哪里不舒服 · 不构成诊断"
+welcome: "您好，先说说哪里不舒服？"
 disclaimer: "本系统仅用于就诊前信息整理，不构成任何诊断或治疗建议。如有剧烈或持续加重的症状，请立即就医或拨打 120。"
 placeholder: "描述一下哪里不舒服，例如：肚子疼"
 
@@ -24,589 +30,128 @@ placeholder: "描述一下哪里不舒服，例如：肚子疼"
 provider: null
 model: null
 
+# 维吾尔语会话的翻译模型（只 ug 用；中英文会话一次都不碰它）。
+#
+# 为什么单独一条链路：预问诊推理钉在本地 7B 上，那台机器写不出通顺维语
+# （实测把整段维语提示喂进去，它退回中文元叙述；勉强逼出来也是阿拉伯/拉丁/
+# 西里尔混排）。所以做法是"7B 全程用中文推理，只在边界翻译"：患者的维语先
+# 译成中文进上下文，模型的中文答案再译回维语给患者看。翻译必须用能真写维语
+# 的模型，默认走网关的 DeepSeek-V4.1-Flash。
+#
+# 这一项在后台「站点 → 模型与提示词 → 预问诊」那两个下拉里改，不用手改文件。
+# 留空 = 用 PREVISIT_TRANSLATOR_MODEL 环境变量；再没有就用内置默认值。
+translator_provider: null
+translator_model: "deepseek-ai/DeepSeek-V4.1-Flash"
+
 # 模型请求走哪条路。默认（null）= 主服务的固定入口 /v1 —— 模型页换端点、
-# 换模型、加密钥，预问诊立刻跟着变，不用再单独配一遍。网关不通时自动
-# 降级到直连（挂在主服务里就是内部 LLMClient），不会把问诊卡死。
+# 换模型、加密钥，预问诊立刻跟着变。网关不通时自动降级到直连。
 #   null / "http://127.0.0.1:8010/v1" = 走网关（后者指定别的端口）
 #   false / "direct"                  = 完全不走网关，只用自己的地址
-# 环境变量 PREVISIT_LLM_GATEWAY / KNOWTUNE_GATEWAY 优先级更高，
-# `knowtune serve` 启动时会自动写入实际端口。
 llm_gateway: null
-temperature: 0.2
-# 追问只要一句话、抽取只要一个短 JSON，1024 是浪费——本地 7B 生成 1024 个
-# token 要几十秒，患者等不起。320 够用，且让"模型能用"和"模型太慢"这两个
-# 状态之间的差距小得多。
+temperature: 0.3
+# 一句话追问 320 足够；本地 7B 生成 1024 个 token 要几十秒，患者等不起。
 max_tokens: 320
-# 单次模型调用的硬上限（秒）。超了就当这轮没有模型，直接用规则/模板继续，
-# 并且 30 秒内不再试探——交互式场景里，宁可问得朴素，也不能转圈一分钟。
+# 单次模型调用的硬上限（秒）。超时如实报错——交互式场景里，宁可说"服务
+# 不可用"，也不能转圈一分钟。
 timeout_s: 20
-# 追问话术走不走模型。一轮 reply 有两次模型调用（抽取 + 追问生成），串行的，
-# 各花一两秒。追问槽位在 previsit_kb.yaml 里都有医生写好的现成问法（ask），
-# 模型那一调基本只是把现成句子再润一遍——这笔时间花得值不值，交给配置：
-#   auto     （默认）每次都调模型润色，口语化程度最高；
-#   kb_first 有现成问法就直接发，不调模型（重问 tried>0 时仍走模型换角度）。
-# 现成问法本来就可审计（见上「语义召回」节），kb_first 快且稳；想要更"像人"
-# 的口吻就留 auto。改这里即时生效，不用重启。
-ask_llm: auto
-# 最多问几轮就收网（防止患者说不清时无限追问）。域槽位 5 个 + 过敏史/既往史
-# 2 个 + 图谱追问 3 条，问满要 10 轮——上限给到 14，别让最后两项病史被轮次
-# 挤掉。否定快答生效后实际轮数会明显少于这个数。
-max_turns: 14
-
-# ------------------------------------------------------------ 知识图谱追问
-# 数据来自中文医疗知识图谱（build_previsit_kg.py 清洗后落 kg.db）。
-# 用法是"共现"：在含某症状的疾病集合里，统计还出现了哪些症状，按覆盖率
-# 排序 → 得到该问的伴随症状。这是系统回顾（ROS），不是诊断。
-kg:
-  # 关掉就退回纯槽位追问，引擎其余部分不受影响
-  enabled: true
-  db: "data/previsit/kg.db"
-  # 槽位问齐之后，最多再追几条共现问题。3 条是经验值：再多问诊就变长，
-  # 患者中途跑掉；再少则抓不住"咯血/盗汗"这类真正区分轻重的信息。
-  ros_max: 3
-  # 覆盖率下限。低于它的伴随症状（在含主症的疾病里不足 5%）不值得占一轮
-  min_ratio: 0.12
-  # 分诊：手写 triage_rules 全没命中时用图谱科室投票兜底
-  dept_fallback: true
-  # 词表缺口的人工补充。数据里根本没有"出汗"这个词（只有"周身出汗""盗汗"
-  # "冷汗"），患者说"胸口疼还出汗"时一条都归不上，症状池就空了。这类缺口
-  # 只能人工补，补的每一条都得是医生认可的同义，别在这里塞近义词。
-  synonyms:
-    出汗: 周身出汗
-    心慌: 心悸
-    胃疼: 胃痛
-    胸口疼: 胸痛
-    胸口痛: 胸痛
-    肚子痛: 腹痛
-    拉肚子: 腹泻
-
-# ------------------------------------------------------------ 语义召回（选病症）
-# 患者不会照着词表说话："胃里翻江倒海还拉稀"里没有"腹痛"两个字，关键词
-# 一个都命中不了。这一步走后端知识库的向量检索：拿患者原话去召回命中的
-# 追问条目，从标题解析出「症状域 + 槽位」，决定接下来问什么。
-#
-# 只负责**选病症**——问法原文仍取 previsit_kb.yaml，不拿召回的一段话直接
-# 发给患者（那不可控、也不可审计）。后端不可用（独立部署、服务没起、库被删）
-# 时自动退回关键词选域，问诊流程完全不变。
-retrieval:
-  enabled: true
-  # 后端知识库服务地址。主服务挂载时就是它自己；独立部署访问不到，会自动降级
-  url: "http://127.0.0.1:8000"
-  # 按**名字**找库，不写死 id：id 会随建库/删库漂移
-  kb: "预问诊知识库"
-  # 8 而不是 6：同域去重会消耗候选（`预问诊 · 头晕` 一篇 3 块，去重后只留 2 块），
-  # 位置少了病种文档挤不进来。多要两条不花钱，召回本身只花 12 毫秒。
-  top_k: 8
-  # 同一个文档最多贡献几条。不限的话问"头晕"时前三条全是「预问诊 · 头晕」的
-  # 不同槽位，top_k 被一个域吃干，域投票和 MedRAG 病种都没位置了。
-  max_per_doc: 2
-  timeout_s: 1.5
-  # 低于这个分的召回不要（0 = 不分，全部接受，靠名次加权）
-  min_score: 0.0
-  # 精排在这套库上不划算：59 个分块，CrossEncoder 要 3.7 秒，而预问诊是
-  # 交互式场景——宁可要"大致对"的域（10 毫秒出结果），也不要患者干等。
-  rerank: false
-
-# ---------------------------------------------------------------- 基本信息表单
-# 问诊开始**之前**填一次，作为整场问诊的上下文：既不重复问已知信息，
-# 也直接写进最终病历的抬头与既往史。
-#
-# type: text / number / textarea / select
-# required: 必填（前端拦一次，后端再兜一次，免得绕过前端提交空值）
-# show_if: 只在某字段等于某个值时显示（例：只有"女"才问是否怀孕）
-profile_fields:
-  - key: name
-    label: 姓名
-    type: text
-    placeholder: 选填，用于病历抬头
-  - key: gender
-    label: 性别
-    type: select
-    options: ["男", "女", "不便告知"]
-    required: true
-  - key: age
-    label: 年龄
-    type: number
-    min: 0
-    max: 120
-    unit: 岁
-    required: true
-    placeholder: "例如：42"
-  - key: pregnant
-    label: 孕育状态
-    type: select
-    options: ["不适用", "怀孕中", "哺乳期"]
-    show_if: {field: gender, value: 女}
-  - key: history
-    label: 既往病史
-    type: textarea
-    placeholder: 如高血压、糖尿病、做过什么手术；没有可留空
-  - key: allergy
-    label: 过敏史
-    type: text
-    placeholder: 如青霉素过敏；没有填"无"
-  - key: meds
-    label: 长期用药
-    type: textarea
-    placeholder: 如每天服用降压药，药名不清楚也可以写"降压药"
-
-# ---------------------------------------------------------------- 槽位池
-# 这里只定义「槽位长什么样」（key / 显示名 / 默认提示 / 是否多值）。
-# **问哪些槽位、按什么顺序问、每个槽位怎么问，由症状域决定**——
-# 见 config/previsit_kb.yaml 里每个域的 slots 与 slot_hints。
-#
-# 例：腹痛域问 min(部位→性质→持续→伴随→转移)，咳嗽域问(持续→性质→诱因→伴随→病史)，
-# 咳嗽的人不会被问"疼痛有没有转移到右下腹"。
-slots:
-  - key: site
-    label: 部位
-    hint: "具体是哪个位置"
-    multi: false
-  - key: nature
-    label: 性质
-    hint: "是什么样的感觉"
-    multi: false
-  - key: companions
-    label: 伴随症状
-    hint: "有没有其他不舒服"
-    multi: true
-  - key: duration
-    label: 持续时间
-    hint: "大概持续了多久"
-    multi: false
-  - key: migration
-    label: 转移性疼痛
-    hint: "疼痛是否从别处转移过来"
-    multi: false
-  - key: temperature
-    label: 体温
-    hint: "最高烧到多少度"
-    multi: false
-  - key: trigger
-    label: 诱因
-    hint: "什么情况下加重或缓解"
-    multi: false
-  - key: pattern
-    label: 规律
-    hint: "发作频次或时间规律"
-    multi: false
-  - key: history
-    label: 相关病史
-    hint: "既往史、用药、接触史"
-    multi: false
-  # 全域必问槽位：不管哪里不舒服都要问。`always: true` 让引擎把它们自动
-  # 追加到每个症状域的槽位队列末尾——域只管主诉该问什么，这两项是底线。
-  - key: allergy
-    label: 过敏史
-    hint: "对药物、食物或其它东西过敏吗"
-    multi: false
-    always: true
-  - key: past_history
-    label: 既往病史
-    hint: "有没有高血压、糖尿病等慢性病，或做过手术"
-    multi: false
-    always: true
-
-# ---------------------------------------------------------------- 危险词（安检门）
-# 任意一条在用户说过的任何一句话里出现，立刻转急诊，不再继续问诊。
-# 这些是「命中即急症」的词，宁可多报不可漏报。
-#
-# 收录标准：**特异性高的红旗征**。像"胸痛""头痛"这种常见主诉本身不进这里——
-# 它们由分诊规则按性质/伴随症状分级，否则所有胸痛都会被一刀切成急诊。
-danger_rules:
-  - name: 消化道出血
-    triggers: ["吐血", "呕血", "黑便", "柏油便", "便血", "血便", "大便带血", "拉血"]
-    message: "您描述的情况可能提示消化道出血，属于急症。请立即前往急诊科就诊，或拨打 120。"
-  - name: 急腹症
-    triggers: ["肚子硬", "板状腹", "硬如木板", "剧痛难忍", "疼得打滚", "腹痛剧烈", "肚子按不得"]
-    message: "您描述的情况可能提示急腹症（如穿孔、梗阻等），请立即前往急诊科就诊。"
-  - name: 意识/循环异常
-    triggers: ["晕厥", "昏倒", "晕倒", "意识模糊", "叫不醒", "休克", "面色苍白出冷汗", "人事不省"]
-    message: "您描述的情况可能伴随意识或循环异常，请立即拨打 120 或前往急诊。"
-  - name: 急性脑血管事件
-    triggers: ["口角歪斜", "嘴歪", "说话不清", "言语不清", "吐字不清", "半身不遂",
-               "一侧无力", "半边身子", "突然看不见", "突然失明", "走路不稳"]
-    message: "您描述的情况可能是急性脑血管事件的表现，请立即拨打 120，不要自行前往医院。"
-  - name: 剧烈头痛
-    triggers: ["炸裂样头痛", "雷击样头痛", "头痛欲裂", "这辈子最痛的头痛", "突然剧烈头痛"]
-    message: "突发的剧烈头痛需要排除颅内出血等急症，请立即前往急诊科或拨打 120。"
-  - name: 撕裂样胸背痛
-    triggers: ["撕裂样", "撕着疼", "胸背撕裂", "前胸后背一起疼"]
-    message: "撕裂样的胸背痛需要立即排除主动脉夹层等急症，请马上拨打 120。"
-  - name: 咯血
-    triggers: ["咯血", "咳血", "咳出血", "痰里带血", "痰中带血"]
-    message: "出现咯血需要尽快明确出血来源，请前往急诊或呼吸内科急诊就诊。"
-  - name: 严重过敏反应
-    triggers: ["喉咙发紧", "嗓子发紧", "喉头水肿", "喘不上气说不出话", "嘴唇肿得厉害", "全身起疹子喘"]
-    message: "这可能是严重过敏反应的表现，请立即拨打 120；如备有肾上腺素笔请按医嘱使用。"
-  - name: 妇科急症大出血
-    triggers: ["大出血", "血崩", "阴道大量出血", "出血不止", "卫生巾一小时就透"]
-    message: "大量阴道出血可能危及生命，请立即前往急诊妇科就诊或拨打 120。"
-  - name: 儿童危重信号
-    triggers: ["抽搐", "惊厥", "翻白眼", "口吐白沫", "囟门凸", "叫不醒", "抽过去了", "抽风"]
-    message: "孩子出现抽搐或意识改变属于急症，请立即前往儿科急诊或拨打 120。"
-  - name: 马尾综合征
-    triggers: ["大小便失禁", "小便失禁", "尿失禁", "大便控制不住", "会阴麻木", "鞍区麻木"]
-    message: "腰痛伴随大小便失禁或会阴麻木，需要立即排除马尾综合征，请马上到急诊就诊。"
-  - name: 发热伴出血点
-    triggers: ["出血点", "紫癜", "压不褪色", "皮下出血"]
-    message: "发热伴皮下出血点需要排除严重感染或血液系统急症，请立即前往急诊。"
-  - name: 自伤风险
-    triggers: ["自杀", "想死", "不想活", "活着没意思", "轻生", "自残", "伤害自己"]
-    message: "谢谢您愿意说出来。这类痛苦需要马上有人陪您一起面对，请立即联系心理援助热线 400-161-9995（24 小时），或前往就近医院精神心理科/急诊。如果此刻有危险，请拨打 120。"
-
-# ---------------------------------------------------------------- 分诊规则（本地算）
-# 自上而下匹配，第一条满足的生效；都不满足用该症状域的默认科室，再不行用 default。
-# 条件算子：eq / in / contains / truthy / gte / any
-#
-# `domain:` 限定这条规则只对哪些症状域生效——胸痛的红旗征跟皮疹没有关系，
-# 不限定的话"伴出汗"会把皮疹患者送去心内科。不写 domain 就是全局规则。
-triage_rules:
-  # ---------- 跨域红旗 ----------
-  - when:
-      - {slot: companions, op: contains, value: 晕厥}
-    dept: "急诊科"
-    urgency: "立即就医"
-
-  # ---------- 腹痛 ----------
-  - domain: [abd]
-    when:
-      - {slot: site, op: eq, value: 右下腹}
-      - {slot: migration, op: truthy}
-    dept: "普外科 / 急诊科"
-    urgency: "尽快就诊（警惕阑尾炎）"
-  - domain: [abd]
-    when:
-      - {slot: site, op: eq, value: 全腹}
-    dept: "普外科 / 急诊科"
-    urgency: "尽快就诊（警惕弥漫性腹膜炎或梗阻）"
-  - domain: [abd]
-    when:
-      - {slot: site, op: eq, value: 右下腹}
-    dept: "普外科"
-    urgency: "门诊就诊（警惕阑尾炎）"
-  - domain: [abd]
-    when:
-      - {slot: companions, op: contains, value: 呕吐}
-      - {slot: companions, op: contains, value: 发热}
-    dept: "消化内科 / 急诊科"
-    urgency: "尽快就诊"
-  - domain: [abd]
-    when:
-      - {slot: site, op: eq, value: 上腹}
-    dept: "消化内科"
-    urgency: "门诊就诊"
-  - domain: [abd]
-    when:
-      - {slot: companions, op: contains, value: 腹泻}
-    dept: "消化内科"
-    urgency: "门诊就诊"
-
-  # ---------- 胸痛 ----------
-  - domain: [chest]
-    when:
-      - {slot: nature, op: in, value: ["压榨", "闷痛", "紧箍"]}
-    dept: "心内科 / 急诊科"
-    urgency: "尽快就诊（警惕急性冠脉综合征）"
-  - domain: [chest]
-    when:
-      - {slot: companions, op: contains, value: 出汗}
-    dept: "心内科 / 急诊科"
-    urgency: "尽快就诊（警惕急性冠脉综合征）"
-  - domain: [chest]
-    when:
-      - {slot: companions, op: contains, value: 气短}
-    dept: "心内科 / 呼吸内科"
-    urgency: "尽快就诊"
-  - domain: [chest]
-    when:
-      - {slot: trigger, op: contains, value: 呼吸}
-    dept: "呼吸内科"
-    urgency: "门诊就诊（警惕胸膜炎或气胸）"
-
-  # ---------- 头痛 ----------
-  - domain: [head]
-    when:
-      - {slot: nature, op: in, value: ["电击", "爆炸", "针刺"]}
-    dept: "神经内科 / 急诊科"
-    urgency: "尽快就诊"
-  - domain: [head]
-    when:
-      - {slot: companions, op: contains, value: 呕吐}
-    dept: "神经内科"
-    urgency: "尽快就诊（警惕颅内压增高）"
-  - domain: [head]
-    when:
-      - {slot: nature, op: in, value: ["搏动", "跳痛"]}
-    dept: "神经内科"
-    urgency: "门诊就诊（偏头痛可能）"
-
-  # ---------- 发热 ----------
-  - domain: [fever]
-    when:
-      - {slot: temperature, op: gte, value: 39}
-    dept: "发热门诊"
-    urgency: "尽快就诊"
-  - domain: [fever]
-    when:
-      - {slot: companions, op: contains, value: 咳嗽}
-    dept: "呼吸内科 / 发热门诊"
-    urgency: "门诊就诊"
-  - domain: [fever]
-    when:
-      - {slot: companions, op: contains, value: 尿频}
-    dept: "泌尿外科 / 发热门诊"
-    urgency: "门诊就诊"
-  - domain: [fever]
-    when:
-      - {slot: companions, op: contains, value: 皮疹}
-    dept: "感染科 / 皮肤科"
-    urgency: "尽快就诊"
-
-  # ---------- 咳嗽 ----------
-  - domain: [cough]
-    when:
-      - {slot: companions, op: contains, value: 气短}
-    dept: "呼吸内科"
-    urgency: "尽快就诊"
-  - domain: [cough]
-    when:
-      - {slot: trigger, op: contains, value: 夜间}
-    dept: "呼吸内科"
-    urgency: "门诊就诊（警惕咳嗽变异性哮喘）"
-  - domain: [cough]
-    when:
-      - {slot: companions, op: contains, value: 反酸}
-    dept: "消化内科 / 呼吸内科"
-    urgency: "门诊就诊（反流性咳嗽可能）"
-
-  # ---------- 气短 ----------
-  - domain: [dyspnea]
-    when:
-      - {slot: companions, op: contains, value: 腿肿}
-    dept: "心内科 / 急诊科"
-    urgency: "尽快就诊（警惕心功能不全或血栓）"
-  - domain: [dyspnea]
-    when:
-      - {slot: trigger, op: contains, value: 躺}
-    dept: "心内科"
-    urgency: "尽快就诊（端坐呼吸提示心功能不全）"
-
-  # ---------- 头晕 ----------
-  - domain: [dizzy]
-    when:
-      - {slot: companions, op: contains, value: 耳鸣}
-    dept: "耳鼻喉科"
-    urgency: "门诊就诊（耳源性眩晕可能）"
-  - domain: [dizzy]
-    when:
-      - {slot: trigger, op: contains, value: 起床}
-    dept: "耳鼻喉科"
-    urgency: "门诊就诊（耳石症可能）"
-  - domain: [dizzy]
-    when:
-      - {slot: trigger, op: contains, value: 翻身}
-    dept: "耳鼻喉科"
-    urgency: "门诊就诊（耳石症可能）"
-  - domain: [dizzy]
-    when:
-      - {slot: companions, op: contains, value: 说话}
-    dept: "神经内科 / 急诊科"
-    urgency: "尽快就诊（警惕后循环缺血）"
-
-  # ---------- 心悸 ----------
-  - domain: [palp]
-    when:
-      - {slot: companions, op: contains, value: 手抖}
-    dept: "内分泌科"
-    urgency: "门诊就诊（警惕甲状腺功能亢进）"
-  - domain: [palp]
-    when:
-      - {slot: companions, op: contains, value: 晕}
-    dept: "心内科 / 急诊科"
-    urgency: "尽快就诊"
-
-  # ---------- 腹泻 ----------
-  - domain: [diarrhea]
-    when:
-      - {slot: nature, op: contains, value: 血}
-    dept: "消化内科 / 急诊科"
-    urgency: "尽快就诊（警惕感染性痢疾或炎症性肠病）"
-  - domain: [diarrhea]
-    when:
-      - {slot: companions, op: contains, value: 发热}
-    dept: "感染科 / 消化内科"
-    urgency: "门诊就诊"
-  - domain: [diarrhea]
-    when:
-      - {slot: duration, op: contains, value: 周}
-    dept: "消化内科"
-    urgency: "门诊就诊（慢性腹泻需系统排查）"
-
-  # ---------- 呕吐 ----------
-  - domain: [vomit]
-    when:
-      - {slot: nature, op: contains, value: 血}
-    dept: "急诊科 / 消化内科"
-    urgency: "立即就医"
-  - domain: [vomit]
-    when:
-      - {slot: nature, op: contains, value: 咖啡}
-    dept: "急诊科 / 消化内科"
-    urgency: "立即就医（警惕上消化道出血）"
-  - domain: [vomit]
-    when:
-      - {slot: companions, op: contains, value: 头痛}
-    dept: "神经内科 / 急诊科"
-    urgency: "尽快就诊"
-
-  # ---------- 腰痛 ----------
-  - domain: [back]
-    when:
-      - {slot: companions, op: contains, value: 血尿}
-    dept: "泌尿外科"
-    urgency: "门诊就诊（泌尿系结石可能）"
-  - domain: [back]
-    when:
-      - {slot: companions, op: contains, value: 发热}
-    dept: "泌尿外科 / 急诊科"
-    urgency: "尽快就诊（警惕肾盂肾炎）"
-
-  # ---------- 关节痛 ----------
-  - domain: [joint]
-    when:
-      - {slot: site, op: contains, value: 趾}
-    dept: "风湿免疫科"
-    urgency: "门诊就诊（警惕痛风）"
-  - domain: [joint]
-    when:
-      - {slot: nature, op: contains, value: 僵硬}
-    dept: "风湿免疫科"
-    urgency: "门诊就诊（晨僵需排查类风湿）"
-
-  # ---------- 皮疹 ----------
-  - domain: [rash]
-    when:
-      - {slot: companions, op: contains, value: 发热}
-    dept: "感染科 / 急诊科"
-    urgency: "尽快就诊（警惕出疹性传染病）"
-
-  # ---------- 泌尿 ----------
-  - domain: [urinary]
-    when:
-      - {slot: companions, op: contains, value: 寒战}
-    dept: "泌尿外科 / 急诊科"
-    urgency: "尽快就诊（警惕急性肾盂肾炎）"
-  - domain: [urinary]
-    when:
-      - {slot: companions, op: contains, value: 腰痛}
-    dept: "泌尿外科"
-    urgency: "门诊就诊（结石可能）"
-
-  # ---------- 儿童发热 ----------
-  - domain: [child_fever]
-    when:
-      - {slot: companions, op: contains, value: 精神}
-    dept: "儿科急诊"
-    urgency: "立即就医（精神反应差是危险信号）"
-  - domain: [child_fever]
-    when:
-      - {slot: temperature, op: gte, value: 39}
-    dept: "儿科"
-    urgency: "尽快就诊"
-
-  # ---------- 乏力 ----------
-  - domain: [fatigue]
-    when:
-      - {slot: companions, op: contains, value: 体重下降}
-    dept: "全科医学科 / 内科"
-    urgency: "尽快就诊（需系统排查消瘦原因）"
-
-  # ---------- 妇科 ----------
-  - domain: [gyn]
-    when:
-      - {slot: history, op: contains, value: 停经}
-    dept: "妇产科 / 急诊科"
-    urgency: "尽快就诊（必须排除异位妊娠）"
-  - domain: [gyn]
-    when:
-      - {slot: companions, op: contains, value: 晕}
-    dept: "妇产科 / 急诊科"
-    urgency: "立即就医（警惕腹腔内出血）"
-
-  # 孕期/哺乳期是跨域条件：怀孕的人不管什么症状都要更谨慎
-  - when:
-      - {slot: "profile.pregnant", op: in, value: ["怀孕中", "哺乳期"]}
-    dept: "妇产科 / 相应专科"
-    urgency: "尽快就诊（孕期/哺乳期需专科评估）"
-
-default:
-  dept: "全科医学科"
-  urgency: "门诊就诊"
-
-# ---------------------------------------------------------------- 合规词表（正则）
-# 生成的话术命中任意一条，就被判定违规，退化成安全模板。
-forbidden:
-  - "确诊"
-  - "诊断为"
-  - "您得的是"
-  - "可以吃.{0,6}药"
-  - "建议服用"
-  - "阿莫西林"
-  - "头孢"
-  - "抗生素"
-  - "处方"
-  - "不用去医院"
-  - "没事的"
-  - "保证"
-
-# ---------------------------------------------------------------- 追问知识库
-# 知识库不在这里 —— 见 config/previsit_kb.yaml。
-#
-# 那份文件按「症状域 × 槽位」组织：每个域声明要问哪些槽位，每个槽位配
-# 「知识点（喂给模型的小抄）+ 现成问法（模型不可用时直接用）」。
-# 加一个症状域、改一句问法，都只动那个文件，不用碰这里，更不用改代码。
 
 # ---------------------------------------------------------------- 提示词
-# 占位符用单花括号，缺字段时原样保留，不会报错。
+# 整场问诊只有这一段。没有占位符、不做拼装：模型看得到完整的对话历史，
+# 怎么问、问几轮、什么时候收尾，全在这里说清楚。
 prompts:
-  extract: |
-    你是医疗预问诊的信息抽取器。请从患者这句话里抽取症状信息，只输出一个 JSON 对象，不要任何解释、不要 markdown 代码块。
-    输出必须紧凑：单行、键值之间不要空格和换行（每个字段短，紧凑输出比带缩进的体积小一半以上，患者等待时间明显更短）。
-    需要抽取的字段：{fields}。
-    - 患者没提到的字段填 null；多值字段（{multi_fields}）没提到填 []。
-    - 只抽取患者明确说过的内容，不要推测、不要补充。
-  ask: |
-    你是预问诊助手。已知患者信息：{known}。基本情况：{profile}。
-    这一步需要了解的是「{label}」（{hint}）。
-    参考要点：{tips}
-    推荐问法：{ask}
-    {retry}
-    请用一句温柔、口语化的中文，向患者提一个问题来了解「{label}」。要求：
-    - 只输出这一句话，不要解释、不要列点；
-    - 推荐问法如果已经合适，可以基本照用，只做口语化微调；
-    - 绝对不能下诊断、不能判断病情轻重、不能推荐任何药物；
-    - 可以给一两个选项帮患者理解，但只问一个问题。
-  report: |
-    你是预问诊助手。请根据下面的结构化信息，写一段通顺的中文就诊摘要，不超过 120 字：
-    {known}
-    建议就诊科室：{dept}，{urgency}。
-    要求：
-    - 只做信息整理和复述，绝对不能下诊断、不能开药、不能判断病情；
-    - 最后一句必须是「以上信息由 AI 辅助整理，请以医生面诊为准」；
-    - 只输出这段文字，不要标题、不要列表。
-# ---------------------------------------------------------------- 病历
-# 问诊收网后生成的结构化病历。分区顺序即展示顺序。
-# key 对应代码里算好的分区（basic/chief/present/past/triage/summary），
-# 想少显示一区就从这里删掉；想改叫法就改 label。
-record:
-  title: "预问诊病历"
-  sections:
-    - {key: basic,   label: "基本信息"}
-    - {key: chief,   label: "主诉"}
-    - {key: present, label: "现病史"}
-    - {key: past,    label: "既往史 / 过敏 / 用药"}
-    - {key: triage,  label: "分诊建议"}
-    - {key: summary, label: "就诊摘要"}
-  # 病历末尾的固定提示，不经过大模型
-  note: "本简历由 AI 辅助整理，仅用于就诊前信息汇总，不构成诊断或治疗建议；最终以医生面诊为准。"
+  chat: |
+    你是门诊的预问诊助手，替医生在患者到诊前先了解情况。态度要礼貌、温和、
+    有耐心：用"您"称呼患者，语气像一位和善的分诊护士，而不是审讯。
+
+    怎么问：
+    - 界面上已经有一句固定的开场问候（"您好，我是预问诊助手，哪里不舒服呢？"）；
+      **不要再自我介绍、不要重复问候**，直接接患者这句话往下问；
+    - 每轮先简短接住患者刚说的话（"了解了""辛苦您再描述一下"），
+      再问下一个问题，不要劈头就问；
+    - 每次只问一个问题，问当前最关键的那一个（部位、性质、持续多久、
+      伴随症状、既往病史、过敏史、正在吃什么药）；
+    - 口语化、两句话以内；不要列清单、不要写标题、不要编号；
+    - 患者已经说过的不要再问；患者说"不知道"，就换个角度问或者跳过。
+
+    边界：
+    - 不下诊断、不判断病情轻重、不推荐任何药物；
+    - 遇到剧烈胸痛、呼吸困难、大出血、意识不清这类情况，直接让他立即就医或打 120；
+    - 不编造患者没说过的事。
+
+    收尾：
+    - 信息够了就先感谢患者配合，再用两三句话复述你了解到的情况，
+      并建议去哪个科室、要不要尽快就医；
+    - 复述只写患者说过的事，然后停下，不要再追问。
+
+  # 作答语言跟随界面语言走（维吾尔语 / 英语界面时整段提示换对应语言，
+  # 而不是只在末尾加一句"用维语答"——模型对整段维文指令的服从度远高于
+  # 一句孤零零的指令；这是维医问答那边验证过的做法）。中文界面仍用上面的 chat。
+  chat_ug: |
+    سىز بىر كلىنىكا ئالدى سوراش ياردەمچىسى بولۇپ، دوختۇر كېلىشتىن بۇرۇن
+    بىمارنىڭ ئەھۋالىنى ئايدىڭلاشتۇرۇپ بېرىسىز. سىز ئەدەبلىك، مېھرىبان ۋە
+    چىداپچان بولۇڭ: بىمارغا «سىز» دەپ مۇراجىئەت قىلىڭ، خۇددى بىر ئىلتىپاتلىق
+    ئايرىش سېستراسىدەك، سوراق قىلغۇچى ئەمەس.
+
+    قانداق سوراش كېرەك:
+    - كۆرۈنمە يۈزىدە ئاللىقاچان مۇقىم بىر سالاملىشىش بار («ياخشىمۇسىز، مەن
+      ئالدىن سوراش ياردەمچىسى»)؛ **ئۆزىڭىزنى تونۇشتۇرماڭ، قايتا سالاملاشماڭ**،
+      بىۋاسىتە بىمارنىڭ گېپىدىن داۋاملاشتۇرۇڭ؛
+    - ھەر بىر جۆرەتتە بىمارنىڭ ئەگەر دېگەن گېپىنى قىسقىچە قوبۇل قىلىڭ
+      (مەسىلەن: «چۈشەندىم»، «قىينىپ بولسىڭىز يەنە سۆزلەپ بېرىڭ»)، ئاندىن
+      كېيىنكى سوئالنى سوراڭ، باشتىلا سورىۋەتمەڭ؛
+    - ھەر قېتىمدا پەقەت بىرلا سوئال سوراڭ، ھازىرقى ئەڭ مۇھىم بىرىنى سوراڭ
+      (ئورنى، خاراكتېرى، قانچىلىك داۋاملاشقانلىقى، قوشۇمچە ئالامەتلىرى،
+      ئىلگىرىكى كېسەللىك تارىخى، ئاللېرگىيە تارىخى، نۆۋەتتە ئىستېمال
+      قىلىۋاتقان دورىلىرى)؛
+    - سۆزلىشىش تىلىدا، ئىككى جۈملە ئىچىدە؛ تىزىملىك تۈزمەڭ، تېما يېزىپ
+      قويماڭ، نومۇر بەرمەڭ؛
+    - بىمار ئاللىقاچان دېگەن نەرسىلەرنى قايتا سورىماڭ؛ بىمار «بىلمەيمەن»
+      دېسە، باشقا بىر نۇقتىدىن سوراڭ ياكى ئاتلاپ ئۆتۈڭ.
+
+    چېگرا:
+    - دىئاگنوز قويماڭ، كېسەللىك ئېغىر-يېنىكلىكىنى ھۆكۈم قىلماڭ، ھېچقانداق
+      دورا تەۋسىيە قىلماڭ؛
+    - كۈچلۈك كۆكس ئاغرىقى، نەپەس قىيىنلىشىش، كۆپ قان چىقىش، ھوشىدىن
+      كېتىشتەك ئەھۋالغا يولۇققاندا، بىۋاسىتە دەرھال دوختۇرغا كۆرۈنۈشنى
+      ياكى 120 نى چاقىرىشنى ئېيتىڭ؛
+    - بىمار دېمىگەن ئىشلارنى ئۆز بېشىمچىلىق بىلەن قوشماڭ.
+
+    ئاخىرلاشتۇرۇش:
+    - ئۇچۇر يېتەرلىك بولسا، ئالدى بىلەن بىمارنىڭ ھەمكارلىقىغا رەھمەت
+      ئېيتىڭ، ئاندىن ئىككى-ئۈچ جۈملە بىلەن چۈشەنگەن ئەھۋالىڭىزنى قايتا
+      بايان قىلىپ، قايسى بۆلۈمگە كۆرۈنۈشنى، دەرھال كۆرۈنۈش كېرەكمۇ-يوق
+      ئىكەنلىكىنى تەۋسىيە قىلىڭ؛
+    - قايتا باياندا پەقەت بىمار دېگەن ئىشلارنى يېزىڭ، ئاندىن توختاڭ،
+      ئارتۇق سورىماڭ.
+
+  chat_en: |
+    You are a clinic pre-visit assistant. Before the patient sees the doctor, you
+    help clarify their situation. Be polite, gentle, and patient: address the
+    patient formally, with the tone of a kind triage nurse rather than an
+    interrogator.
+
+    How to ask:
+    - The interface has already shown the greeting ("Hello, I'm the pre-visit
+      assistant")—do not introduce yourself or greet again; pick up from what the
+      patient just said;
+    - Each turn, first acknowledge what the patient just said (e.g. "I see",
+      "take your time"), then ask the next question—don't fire it right away;
+    - Ask only one question per turn, the single most important one right now
+      (location, nature, how long it has lasted, accompanying symptoms, past
+      medical history, allergies, current medications);
+    - Keep it conversational and within two sentences; no checklists, no headings,
+      no numbering;
+    - Don't repeat what the patient has already told you; if they say "I don't
+      know", ask from another angle or skip it.
+
+    Boundaries:
+    - Do not diagnose, judge severity, or recommend any medication;
+    - If you encounter severe chest pain, difficulty breathing, heavy bleeding, or
+      loss of consciousness, tell them to seek care immediately or call 120;
+    - Do not invent anything the patient hasn't said.
+
+    Closing:
+    - When you have enough information, first thank the patient, then recap in two
+      or three sentences what you've learned and suggest which department to
+      visit and whether they should come soon;
+    - In the recap, only write what the patient said, then stop—don't keep asking.

@@ -1,23 +1,24 @@
-"""previsit —— 独立的预问诊模块。
+"""previsit —— 预问诊（外壳版）。
 
-**刻意与 knowtune 主项目零依赖**：这个包不 import 主项目的任何东西
-（config / secrets / LLMClient / 检索链都不碰），它的数据面只有三样：
+2026-11-07 起这个包只剩一层壳：一段提示词 + 模型本身。
 
-1. `config/previsit.yaml` —— 槽位、危险词、分诊规则、提示词；
-2. `config/previsit_kb.yaml` —— 分域追问知识库；
-3. `data/previsit/kg.db` —— 清洗后的医疗知识图谱（可选，缺了自动降级）。
+- `config/previsit.yaml` 只有界面文案、模型参数和**一段** `prompts.chat`；
+  不再有槽位、危险词、分诊规则、追问知识库、图谱库；
+- 模型是**必需**的：没有模型就没有预问诊（以前那套"纯规则跑完全程"已经删了，
+  规则拼出来的问句听起来像医生，其实没有理解患者说了什么）；
+- 会话流水落自己的 SQLite（`data/previsit.db`），不碰主库。
 
-大模型是**可选项**：设了 `PREVISIT_LLM_BASE_URL`（可选配
-`PREVISIT_LLM_API_KEY` / `PREVISIT_LLM_MODEL`）就走一个 OpenAI 兼容的
-最小客户端；不设就纯规则 + 知识库跑完全程。会话数据落自己的 SQLite
-（`data/previsit.db`），不碰主库。
-
-主项目（knowtune）挂载本包的方式见 knowtune/previsit/__init__.py 的桥接。
+**刻意与 knowtune 主项目零依赖**：这个包不 import 主项目的任何东西，能单独
+部署。主项目挂载方式见 knowtune/previsit/。
 """
 
-from .engine import PrevisitEngine
+from .chat import ChatError, ChatEngine
 from .llm import LLMError, OpenAICompatLLM
 from .store import Store
 
-__all__ = ["PrevisitEngine", "OpenAICompatLLM", "LLMError", "Store"]
-__version__ = "0.3.0"
+# 老名字：壳子版本仍叫 PrevisitEngine，调用方不用改 import。
+PrevisitEngine = ChatEngine
+
+__all__ = ["ChatEngine", "PrevisitEngine", "ChatError",
+           "OpenAICompatLLM", "LLMError", "Store"]
+__version__ = "0.4.0"

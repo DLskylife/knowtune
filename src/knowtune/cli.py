@@ -223,6 +223,27 @@ def cmd_debug(args) -> int:
     return 0
 
 
+def _bypass_proxy_for_loopback() -> None:
+    """把 127.0.0.1 / localhost 加进 NO_PROXY。
+
+    机器上开了系统代理（Clash / 公司代理 / httpx 读的 HTTP_PROXY）时，回环
+    请求也会被送进代理：问预问诊的一句话，先绕到代理再回到本机的 llama-server。
+    实测（2026-11-07，本机代理 :62091）一次 300 token 的调用从 5.6s 降到 2.0s，
+    一轮问诊两次调用白等三秒半。
+
+    改环境变量而不是逐个调用点传 trust_env=False：走本机的路径不止
+    预问诊客户端，还有模型探测、检索、网关转发，漏一个就漏一份延迟。
+    只影响回环地址，云端后端该走代理照走。
+    """
+    import os
+
+    want = ["127.0.0.1", "localhost", "::1"]
+    for key in ("NO_PROXY", "no_proxy"):
+        cur = [x.strip() for x in (os.environ.get(key) or "").split(",") if x.strip()]
+        merged = cur + [w for w in want if w not in cur]
+        os.environ[key] = ",".join(merged)
+
+
 def cmd_serve(args) -> int:
     import uvicorn
 
@@ -232,6 +253,7 @@ def cmd_serve(args) -> int:
     import os
 
     os.environ["KNOWTUNE_GATEWAY"] = f"http://{host}:{args.port}/v1"
+    _bypass_proxy_for_loopback()
     print(f"Web UI: http://{host}:{args.port}")
     # 本地模型实例的端口会变，这个不会——外部程序一律写死它。
     print(f"API:    http://{host}:{args.port}/v1  (OpenAI 兼容 /v1/chat/completions)")

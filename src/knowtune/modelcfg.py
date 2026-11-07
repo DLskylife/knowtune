@@ -87,6 +87,10 @@ def persist(cfg: Config) -> dict[str, Any]:
 
 def _spec_of(p: ProviderCfg) -> dict[str, Any]:
     spec: dict[str, Any] = {"base_url": p.base_url, "model": p.model, "kind": p.kind}
+    # 只在打开时写，别把每个端点都灌一个 autostart: false 进去——那会让
+    # 「和 default.yaml 是否有差异」的判断全变成"有差异"，每次启动都重写文件。
+    if p.autostart:
+        spec["autostart"] = True
     if p.model_list:
         spec["models"] = [m.model_dump(exclude_none=True) for m in p.model_list]
     if p.api_key_env:
@@ -124,6 +128,7 @@ def _persist(cfg: Config) -> dict[str, Any]:
         "# providers:\n"
         "#   <名字>:                     小写字母数字，2-24 字符\n"
         "#     kind: local | openai      local 表示模型带 .gguf、本机能起\n"
+        "#     autostart: true           可选；后台启动时自动拉起默认模型\n"
         "#     base_url: http://...      OpenAI 兼容地址，末尾到 /v1\n"
         "#     model: <默认模型 id>\n"
         "#     api_key_env: <变量名>      可选；密钥也可以只放界面里\n"
@@ -246,6 +251,9 @@ def upsert(
     cfg.generation.providers[name] = ProviderCfg(
         base_url=clean_url, model=model, kind=kind, model_list=entries,
         api_key_env=prev.api_key_env if prev else None,
+        # 界面上改个地址/模型不能把「开机自启」顺手关掉：那不是表单字段，
+        # 而是这份端点"怎么跑"的约定，只有手改 models.yaml 才能改。
+        autostart=prev.autostart if prev else False,
     )
     if cfg.generation.provider not in cfg.generation.providers:
         cfg.generation.provider = name

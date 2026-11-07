@@ -22,7 +22,7 @@
 
 /* 构建号：和 index.html 里那份必须一致，不一致说明浏览器拿的是旧 JS，
    页面加载完会强制换一次（见 index.html 里的自检脚本）。 */
-window.SITE_BUILD = "1.7.19";
+window.SITE_BUILD = "1.7.37";
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
@@ -100,13 +100,14 @@ const T = {
     pvSub: "ئالامەتلەرنى تەرتىپكە سېلىپ، قايسى بۆلۈمگە كۆرۈنۈشنى ئېيتىدۇ",
     pvDisc: "بۇ ئالدىن سوراش پەقەت ئۇچۇر تەرتىپلەش ئۈچۈن، دىئاگنوز ئەمەس. ئېغىر ياكى داۋاملىق ئېغىرلىشىۋاتقان ئالامەت بولسا دەرھال دوختۇرغا كۆرۈنۈڭ.",
     pvPh: "نېمە يېرىڭىز ئاغرىيدۇ؟ مەسىلەن: قورساق ئاغرىقى",
+    // 开场白和另外两个板块的欢迎语同一个来源：界面文案，写死在这里。
+    // 让模型去说第一句，等于患者点进来先等一次生成 + 一次翻译，页面空着。
+    pvHello: "ياخشىمۇسىز، مەن ئالدىن سوراش ياردەمچىسى. نېمە يېرىڭىز ئاغرىيدۇ؟",
     classicPh: "قەدىمكى كىتابلاردا قانداق يېزىلغان؟ مەسىلەن: قورساق سوغۇق",
     pvRestart: "قايتا باشلاش",
-    pvCopy: "خاتىرىنى كۆچۈرۈش",
     pvThinking: "تەييارلىنىۋاتىدۇ…",
     pvFailed: "ئالدىن سوراش مۇلازىمىتى جاۋاب بەرمىدى، سەل تۇرۇپ قايتا سىناڭ.",
     pvEmpty: "بۇ بۆلەكتە تېخى ماتېرىيال يوق.",
-    pvEnded: "بۇ قېتىملىق سوراش ئاخىرلاشتى.",
     // 资料语言 · 作答语言。不能写死"维语作答"：答案语言现在跟着右上角走，
     // 高亮中文时那句"维语作答"就是当着用户的面撒谎。
     chip: (src, dst) =>
@@ -175,13 +176,12 @@ const T = {
     pvSub: "先整理症状，再给出就诊科室建议",
     pvDisc: "预问诊只做信息整理，不构成诊断。出现剧烈或持续加重的症状，请立即就医或拨打 120。",
     pvPh: "描述一下哪里不舒服，例如：肚子疼",
+    pvHello: "您好，我是预问诊助手，哪里不舒服呢？",
     classicPh: "问古籍里怎么讲，例如：腹中虚冷",
     pvRestart: "重新开始",
-    pvCopy: "复制病历",
     pvThinking: "正在整理…",
     pvFailed: "预问诊服务没有响应，稍后再试。",
     pvEmpty: "这一栏还没有资料，请先在后台导入文档。",
-    pvEnded: "本次问诊已结束。",
     chip: (src, dst) =>
       `${LANG_LABEL.zh[src] || src}资料 · ${LANG_LABEL.zh[dst] || dst}作答`,
     stamp: (lang) => `${LANG_LABEL.zh[lang] || lang}作答`,
@@ -222,11 +222,11 @@ const T = {
     pvDisc: "Pre-visit only organizes information; it is not a diagnosis. "
       + "For severe or worsening symptoms, seek care or call emergency services now.",
     pvPh: "Where does it hurt? e.g. stomach ache",
+    pvHello: "Hello, I'm the pre-visit assistant. What's bothering you?",
+    pvRestart: "Start over", pvThinking: "Preparing…",
     classicPh: "What do the classics say? e.g. cold in the abdomen",
-    pvRestart: "Start over", pvCopy: "Copy record", pvThinking: "Preparing…",
     pvFailed: "The pre-visit service is not responding. Please retry.",
     pvEmpty: "No documents in this section yet.",
-    pvEnded: "This pre-visit session has ended.",
     chip: (src, dst) =>
       `${LANG_LABEL.en[src] || src} sources · answer in ${LANG_LABEL.en[dst] || dst}`,
     stamp: (lang) => `answered in ${LANG_LABEL.en[lang] || lang}`,
@@ -256,11 +256,17 @@ let activeAnswer = null;          // 正在流式的那个 .answer，停止时�
 const VIEW_KEY = "knowtune.site.view";
 let view = localStorage.getItem(VIEW_KEY) || "med";
 if (!["med", "classic", "pv"].includes(view)) view = "med";
+// 板块标记挂在 body 上，给样式和排障一个"现在在哪一栏"的抓手（配色全站统一绿）。
+document.body.dataset.view = view;
 
-/* 预问诊的会话状态。sid 为空 = 还没开诊。
-   done 之后输入框不再往后端发（引擎那边会回"本次问诊已结束"），改由卡片上的
-   「重新开始」接管。 */
-let pv = { sid: null, busy: false, done: false, record: null, turns: [] };
+/* 预问诊的会话状态。sid 为空 = 还没开工。
+   没有"已结束"这个状态：壳子里就是一场对话，模型说到哪儿算哪儿，
+   想重开就点侧栏那颗「+」。
+   这里**没有语言字段**：作答语言每次都取当前 uiLang（和 /api/ask 一样），
+   会话只记每句话自己的语言。预问诊不再维护第二套语言状态。 */
+/* pv.gen 是"这一场问诊的代号"。开诊/「+」重开都会 ++，谁回来的响应代号对不上
+   就丢掉——否则被顶掉的那次开场白会在几秒后落地，画进刚重开的新会话里。 */
+let pv = { sid: null, busy: false, turns: [], gen: 0 };
 
 const LANG_NAME = { ug: "ئۇيغۇرچە", zh: "中文", en: "English" };
 
@@ -443,9 +449,15 @@ function sessRow(c) {
 function renderSessions() {
   const box = $("sideScroll");
   if (!info) return;
+  // 预问诊没有可列的对话历史：它的会话在后端 SQLite 里，界面只知道当前这场。
+  // 列「还没有对话」更糟——那不是"没有"，是"这里本来就不列"。
+  if (view === "pv") {
+    box.innerHTML = "";
+    return;
+  }
   // 列表只列**当前这一栏**的对话：维医问答里出现一条"《本草纲目》说……"的
   // 古籍对话，点进去会把人带到另一个检索范围里，而侧栏上看不出区别。
-  const mine = chats.filter((c) => (c.c || "med") === (view === "pv" ? "med" : view));
+  const mine = chats.filter((c) => (c.c || "med") === view);
   if (!mine.length) {
     box.innerHTML = `<p class="side-empty">${esc(t.noChats)}</p>`;
     return;
@@ -533,21 +545,78 @@ function renderChat() {
 
 /* ------------------------------------------------------------ 启动 */
 
+/* 界面语言：用户上次手动选的 > 浏览器语言 > 站点主语言。
+   站点主语言配的是 ug（维医馆的设备大多给维族患者用），但中文电脑第一次
+   打开就是满屏维吾尔语——连"哪里能点"都看不出来，这不是本地化，是把人
+   挡在门外。中文浏览器第一次进来给中文，之后按用户自己选的那套记住。 */
+const LANG_KEY = "knowtune.uiLang";
+
+function pickLang(info) {
+  const valid = [info.lang, info.alt && info.alt.lang].filter(Boolean);
+  const saved = localStorage.getItem(LANG_KEY);
+  if (saved && valid.includes(saved)) return saved;
+  const nav = String(navigator.language || "").toLowerCase();
+  const want = nav.startsWith("zh") ? "zh" : (nav.startsWith("en") ? "en" : "");
+  return valid.includes(want) ? want : info.lang;
+}
+
+/* 服务刚起来那 40–50 秒在预热嵌入模型，这期间 /api/info 连不上。
+   以前这里直接摊一个"服务未就绪"的双语错误页、然后停在那儿不动——用户看到
+   的就是"根本用不了"。现在自己等着：先重试，再自动刷新，直到服务就绪。 */
+async function fetchInfo(tries = 8, gap = 2500) {
+  let last = null;
+  for (let i = 0; i < tries; i++) {
+    try {
+      const r = await fetch("/api/info", { cache: "no-store" });
+      if (r.ok) return await r.json();
+      last = new Error("HTTP " + r.status);
+    } catch (err) {
+      last = err;
+    }
+    if (i < tries - 1) await new Promise((ok) => setTimeout(ok, gap));
+  }
+  throw last || new Error("unknown");
+}
+
+function bootFail(err) {
+  const zh = String(navigator.language || "").toLowerCase().startsWith("zh");
+  const n = Number(sessionStorage.getItem("knowtune.boot.tries") || "0") + 1;
+  sessionStorage.setItem("knowtune.boot.tries", String(n));
+  document.body.innerHTML = '<div class="fatal">'
+    + (zh ? "<p>服务正在启动，请稍候…</p>"
+          : "<p>مۇلازىمەت تەييارلىنىۋاتىدۇ، ساقلاپ تۇرۇڭ…</p>")
+    + '<p class="sub">' + (zh ? "第 " + n + " 次重试" : "قايتا سىناش " + n)
+    + " · " + esc(err && err.message ? err.message : err) + "</p></div>";
+  if (n <= 10) setTimeout(() => location.replace(location.pathname), 4000);
+}
+
+/* 首屏等待遮罩。服务刚启动时 /api/info 要重试几轮，这期间不能让用户
+   对着一张白屏——白屏和"坏了"在他眼里是同一件事。 */
+function showBootMask() {
+  const zh = String(navigator.language || "").toLowerCase().startsWith("zh");
+  const el = document.createElement("div");
+  el.className = "bootmask";
+  el.textContent = zh ? "正在连接服务…" : "مۇلازىمەت بىلەن ئۇلىنىۋاتىدۇ…";
+  document.body.appendChild(el);
+  return el;
+}
+
 (async function boot() {
+  const mask = showBootMask();
   try {
-    const r = await fetch("/api/info", { cache: "no-store" });
-    if (!r.ok) throw new Error("HTTP " + r.status);
-    info = await r.json();
+    info = await fetchInfo();
   } catch (err) {
-    document.body.innerHTML = '<div class="fatal">بىلىم ئامبىرىغا ئۇلىنالمىدى<br>'
-      + "服务未就绪：" + esc(err.message) + "</div>";
+    bootFail(err);
     return;
   }
-  uiLang = info.lang;
+  sessionStorage.removeItem("knowtune.boot.tries");
+  uiLang = pickLang(info);
+  altMode = uiLang !== info.lang;
   t = T[uiLang] || T.ug;
   // 页面骨架恒为 LTR：切换语言只换文本方向，不换任何元素的位置。
   document.documentElement.dir = "ltr";
   applyChrome();
+  if (mask) mask.remove();
 
   // 切换按钮绑在容器上：内部按钮每次重画都会被换掉，绑在按钮上就得每次重绑。
   $("langSwitch").onclick = (e) => {
@@ -585,18 +654,7 @@ function renderChat() {
     switchView(b.dataset.view);
   };
 
-  // 病历卡上的两颗按钮：卡片是每次渲染重建的，所以绑在容器上做事件委托。
-  $("pvMsgs").onclick = (e) => {
-    if (e.target.closest("[data-pv-restart]")) { pvStart(""); return; }
-    const cp = e.target.closest("[data-pv-copy]");
-    if (!cp || !pv.record) return;
-    copyText(pv.record.text || "").then((ok) => {
-      if (!ok) return;
-      const old = cp.textContent;
-      cp.textContent = t.copied;
-      setTimeout(() => { cp.textContent = old; }, 1600);
-    });
-  };
+  // 结论卡已经随判断层一起删了：预问诊现在就一条对话流水，没有可点的按钮。
 
   $("btnSide").onclick = () => openSide(true);
   $("scrim").onclick = () => closeSide();
@@ -604,6 +662,7 @@ function renderChat() {
   // 上次停在的板块可能已经被站点关掉（或名字改了）：落到第一个开着的板块，
   // 否则首屏是一片空白，而用户并不知道是自己上次点过的那个入口没了。
   if (!navOn(view)) view = firstNavKey();
+  document.body.dataset.view = view;
   // 首屏也要按栏目绑会话：否则刷新后落在古籍栏，正文还是维医那段。
   bindSession(view);
   // 首屏按上次所在的板块进入。直接调 switchView 会走一遍"切板块"的收尾动作
@@ -663,7 +722,7 @@ $("q").addEventListener("input", () => { autosize(); syncSend(); });
 $("q").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
 });
-$("btnNewChat").onclick = () => newSession();
+$("btnNewChat").onclick = () => (view === "pv" ? pvReset() : newSession());
 $("btnSend").onclick = () => (busy ? stop() : send());
 
 /* Esc：先生成中则停止；否则收起侧栏抽屉 */
@@ -987,6 +1046,9 @@ function registerDraft(bot, el) {
 function decorateBot(bot, el, rec) {
   bot._rec = rec;                       // 切语言时按它把徽标/来源/耗时重新上字
   bot.dataset.main = rec.a || "";
+  // 头像改造后 bot 是 [avatar, bot-main] 两列，徽标/来源/脚注都归入 bot-main，
+  // 不再直接挂在 bot 上——否则它们会被 flex 排到头像旁边。
+  const host = el.parentElement || bot;
   if (rec.d) bot.dataset.draft = rec.d;
   if (rec.ev) bot.dataset.ev = rec.ev;
 
@@ -1001,18 +1063,18 @@ function decorateBot(bot, el, rec) {
     const badge = document.createElement("div");
     badge.className = "ev-badge " + rec.ev;
     badge.textContent = (t.ev && t.ev[rec.ev]) || rec.ev;
-    bot.insertBefore(badge, el);
+    host.insertBefore(badge, el);
   }
   paintAnswer(bot, el);
 
   const srcs = sourcesBar(rec.cit || []);
-  if (srcs) bot.appendChild(srcs);
+  if (srcs) host.appendChild(srcs);
 
   if (rec.loop) {
     const w = document.createElement("div");
     w.className = "loop-warn";
     w.textContent = t.loopCut;
-    bot.appendChild(w);
+    host.appendChild(w);
   }
 
   // 翻译没成要有痕迹。没有这一行，"答案是一段看不懂的中文"和"模型就这样答"
@@ -1022,7 +1084,7 @@ function decorateBot(bot, el, rec) {
     const w = document.createElement("div");
     w.className = "loop-warn tr-warn";
     w.textContent = trWarn;
-    bot.appendChild(w);
+    host.appendChild(w);
   }
 
   // 底部一行：耗时在左、复制在右。耗时短于 1 秒的不显示——"0.4 秒"
@@ -1049,7 +1111,7 @@ function decorateBot(bot, el, rec) {
     + `<span class="spacer"></span>`
     + fb
     + `<button type="button" class="copy">${esc(t.copy)}</button>`;
-  bot.appendChild(foot);
+  host.appendChild(foot);
 
   if (rec.mid) {
     foot.querySelectorAll("[data-fb]").forEach((btn) => {
@@ -1081,13 +1143,39 @@ function decorateBot(bot, el, rec) {
   if (rec.d) registerDraft(bot, el);
 }
 
-function botCard(rec) {
+/* 助手头像：小圆徽，图标随板块走（维医=药草、古籍=书、预问诊=对话+十字），
+   颜色走 --acc（也是用户气泡、导航选中态那一套），同一板块里视觉同源。 */
+const BOT_ICONS = {
+  med: '<svg viewBox="0 0 24 24"><path d="M4 20C4 11 9 6 20 4c-1 11-6 16-16 16z"/><path d="M4 20c4-6 8-10 14-14"/></svg>',
+  classic: '<svg viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5v14z"/><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/></svg>',
+  pv: '<svg viewBox="0 0 24 24"><path d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5c-1.6 0-3.2-.4-4.5-1.2L3 20l1.2-5A8.5 8.5 0 1 1 21 11.5z"/><path d="M12 8.5v6M9 11.5h6"/></svg>',
+};
+function botAvatar() {
+  const a = document.createElement("div");
+  a.className = "avatar";
+  a.setAttribute("aria-hidden", "true");
+  a.innerHTML = BOT_ICONS[view] || BOT_ICONS.med;
+  return a;
+}
+
+/* 助手消息的两列骨架：左头像、右内容列。流式、成品、预问诊三条路共用，
+   保证同一条回答在"正在出字"和"出完了"两个状态下左缘不跳。 */
+function botRow() {
   const bot = document.createElement("div");
   bot.className = "msg bot";
+  bot.appendChild(botAvatar());
+  const main = document.createElement("div");
+  main.className = "bot-main";
+  bot.appendChild(main);
+  return { bot, main };
+}
+
+function botCard(rec) {
+  const { bot, main } = botRow();
   const el = document.createElement("div");
   el.className = "answer";
   el.dir = "auto";
-  bot.appendChild(el);
+  main.appendChild(el);
   decorateBot(bot, el, rec);
   return bot;
 }
@@ -1253,12 +1341,18 @@ function firstNavKey() {
   return NAV_ORDER.find(navOn) || "med";
 }
 
-function navLabel(key) {
+/* 站点给板块起的名字。名字是界面文字：后台存的名字只有中文一份，维语界面
+   里挂几个汉字比没配还扎眼——所以带汉字的名字只在中文界面认，别的界面退回
+   内置译名。站点真配了维语名字时照旧优先。 */
+function sectionName(key) {
   const name = String(navSection(key).name || "").trim();
-  // 站点自己起的名字优先（维语站点叫 قەدىمكى كىتاب 就显示它），没起名才用
-  // 界面语言的内置名字。
-  if (name) return name;
-  return key === "classic" ? t.navClassic : key === "pv" ? t.navPv : t.navMed;
+  if (name && !(uiLang !== "zh" && /[\u3400-\u9fff]/.test(name))) return name;
+  return "";
+}
+
+function navLabel(key) {
+  return sectionName(key)
+    || (key === "classic" ? t.navClassic : key === "pv" ? t.navPv : t.navMed);
 }
 
 function renderNav() {
@@ -1299,7 +1393,9 @@ function renderSideHead() {
   if (!name || !meta || !info) return;
   name.dir = "auto";
   if (view === "pv") {
-    name.textContent = c.kb_name || info.kb_name || "";
+    // 名字跟着板块走，不能还挂库名：副标题换成了「症状采集」、标题仍是
+    // 「维医知识问答」，用户只会以为切换没生效。
+    name.textContent = navLabel("pv");
     meta.textContent = t.pvMeta || "";
     return;
   }
@@ -1310,7 +1406,7 @@ function renderSideHead() {
   const kbName = view === "med"
     ? (c.kb_name || cur.kb_name || info.kb_name || "")
     : (cur.kb_name || c.kb_name || info.kb_name || "");
-  const secName = String(navSection(view).name || "").trim();
+  const secName = sectionName(view);
   name.textContent = secName || ((view === "classic" && uiLang !== "zh"
     && /[\u3400-\u9fff]/.test(kbName))
     ? (t.classicName || kbName) : kbName);
@@ -1333,7 +1429,7 @@ function applyViewCopy() {
   // 顶栏大标题也按板块换：副标题换了、标题还挂「维医知识问答」，等于在古籍
   // 问答页上写着这是维医——用户扫一眼标题就以为没切过去。维医栏仍用站点
   // 自己在提示词配置里写的那句。
-  const title = pvOn ? (t.pvTitle || t.navPv)
+  const title = pvOn ? (sectionName("pv") || t.pvTitle || t.navPv)
     : view === "classic" ? (t.classicTitle || t.navClassic)
     : (c.title || info.kb_name || "");
   $("siteTitle").textContent = title;
@@ -1352,7 +1448,11 @@ function applyViewCopy() {
   }
   // "中文资料 · 维语作答"讲的是知识库检索那条链路，预问诊不沾边，藏掉。
   $("toolChip").style.visibility = pvOn ? "hidden" : "";
-  $("sideHist").hidden = pvOn;
+  // 预问诊不列历史（它的会话不在本地存档里），但侧栏不能空着：
+  // 那一行标题改成「重新开始」，旁边的 + 就是开一场新对话。
+  $("sideHist").hidden = false;
+  $("histTitle").textContent = pvOn ? (t.pvRestart || "") : t.histTitle;
+  $("btnNewChat").title = pvOn ? (t.pvRestart || "") : t.newChat;
   $("pvMsgs").hidden = !pvOn;
   $("msgs").hidden = pvOn;
 }
@@ -1363,6 +1463,7 @@ function switchView(key) {
   const changed = key !== view;
   if (busy) stop();
   view = key;
+  document.body.dataset.view = key;
   localStorage.setItem(VIEW_KEY, key);
   // 换栏就换会话：每个板块记住自己上次那段对话，切过来接上，而不是继续
   // 显示另一栏的正文（这是"切了但内容没变"的真正原因）。
@@ -1385,9 +1486,9 @@ function switchView(key) {
 
 /* ------------------------------------------------------------ 预问诊
 
-   数据和后端在 /previsit 那套里（引擎、槽位、分诊规则一行没动），这里只是
-   换了一层皮：把"系统问一句、患者答一句"画成和知识库问答完全一样的气泡，
-   回答完的落点是最后一张病历卡。
+   后端就一层壳：一段系统提示词 + 模型本身（/previsit/api/start|reply）。
+   前端也只是把它画成和知识库问答一样的气泡——没有槽位进度、没有分诊结论、
+   没有病历卡。患者说什么，模型接什么；想重开就点侧栏那颗「+」。
 
    为什么不是 iframe：iframe 里那套页面有自己的配色、字体、按钮圆角，塞进
    来一眼就能看出是"另一个系统"。用户要的是合在一起，那就只能在这边重画。 */
@@ -1404,34 +1505,95 @@ async function pvPost(path, body) {
   return r.json();
 }
 
-function enterPv() {
-  // 已经有会话（切走又切回来）就保持原样，不重开——重开等于把刚说过的
-  // 症状全丢了，而用户只是想回来看一眼。
-  if (pv.sid || pv.busy) { scrollToBottom(); return; }
-  pvStart("");
+/* 开一场新的预问诊：清掉流水，画上那句固定问候。
+
+   这一步**不碰网络**。问候语是界面文案（t.pvHello），和另外两个板块的欢迎语
+   一样写在 T 里，点开就有、切语言立刻跟着变。以前是进页面就 POST /start、
+   让模型现说第一句，再翻译一遍——患者看到的是一个空白页加"正在准备…"，
+   而那句话本来就是固定的。 */
+function pvReset() {
+  pv.gen++;                      // 这一场的代号：在途的旧响应一律作废
+  pv.sid = null;
+  pv.busy = false;
+  pv.turns = [];
+  $("pvMsgs").innerHTML = "";
+  $("pvMsgs").appendChild(pvGreetEl());
+  $("status").hidden = true;
+  busy = false;
+  syncSend();
+  scrollToBottom();
 }
 
+function enterPv() {
+  // 已经有会话（切走又切回来）就保持原样，不重开——重开等于把刚说过的
+  // 症状全丢了，而用户只是想回来看一眼。语言不参与这个判断了：切语言只是
+  // 重画气泡（和另外两个板块一致），会话本身不动。
+  if ($("pvMsgs").children.length) { pvLocalize(); scrollToBottom(); return; }
+  pvReset();
+}
+
+/* 患者的这一句先上屏：等后端那几秒里输入框已经清空，不给回显的话
+   用户会以为这句没发出去，接着再打一遍。 */
+function pvUserEl(text) {
+  const u = document.createElement("div");
+  u.className = "msg user";
+  u.dir = "auto";
+  u.dataset.main = text;
+  u.dataset.int = "";
+  u.textContent = text;
+  return u;
+}
+
+/* 固定问候气泡。内容和机器人回复长得一样，只是文本来自界面文案，
+   换语言时由 pvRepaint 重新取一次 t.pvHello。 */
+function pvGreetEl() {
+  const el = document.createElement("div");
+  el.className = "msg bot pv-greet";
+  el.appendChild(botAvatar());
+  const main = document.createElement("div");
+  main.className = "bot-main";
+  const a = document.createElement("div");
+  a.className = "answer";
+  a.dir = "auto";
+  main.appendChild(a);
+  el.appendChild(main);
+  pvRepaint(el);
+  return el;
+}
+
+/* 患者说出第一句时才真正开诊：这句话本身就是主诉，/start 一次到位
+   （建会话 → 记下主诉 → 让模型接着问），不用先空开一场。 */
 async function pvStart(complaint) {
+  const gen = ++pv.gen;          // 这一场的代号；被「+」顶掉的那次响应不许上屏
   pv.busy = true;
   pv.sid = null;
-  pv.done = false;
-  pv.record = null;
-  $("pvMsgs").innerHTML = "";
+  const box = $("pvMsgs");
+  box.innerHTML = "";
+  box.appendChild(pvGreetEl());  // 问候始终在第一条，不随后端流水走
+  if (complaint) box.appendChild(pvUserEl(complaint));
+  // 首句也要把输入框清掉：这句已经上屏了，留着会让患者以为没发出去又按一次。
+  $("q").value = "";
+  autosize();
+  scrollToBottom();
   busy = true;
   syncSend();
   $("status").hidden = false;
   $("status").textContent = t.pvThinking;
   try {
-    const d = await pvPost("/api/previsit/start", { complaint: complaint || "" });
-    pvApply(d);
+    // 作答语言 = 当前界面语言，每次请求现取。和 /api/ask 完全一样：
+    // 那边也是每次请求算一个 answer_lang，不把语言存进会话。
+    const d = await pvPost("/api/previsit/start", { complaint: complaint || "", ui_lang: uiLang });
+    if (gen === pv.gen) pvApply(d);
   } catch (err) {
-    pvFail(err);
+    if (gen === pv.gen) pvFail(err);
   } finally {
-    pv.busy = false;
-    busy = false;
-    $("status").hidden = true;
-    syncSend();
-    focusInput();
+    if (gen === pv.gen) {
+      pv.busy = false;
+      busy = false;
+      $("status").hidden = true;
+      syncSend();
+      focusInput();
+    }
   }
 }
 
@@ -1440,111 +1602,175 @@ async function pvSend(text) {
   // 还没开诊（首屏 start 还没回来、或者失败了）：这句话本身就是主诉。
   if (!pv.sid) return pvStart(text);
 
+  const gen = pv.gen;
   pv.busy = true;
   busy = true;
   syncSend();
   $("q").value = "";
   autosize();
-  // 先把自己的话画上去：等后端这两三秒里，输入框已经清空，不给回显的话
-  // 用户会以为这句没发出去，接着再打一遍。
-  const u = document.createElement("div");
-  u.className = "msg user";
-  u.dir = "auto";
-  u.textContent = text;
-  $("pvMsgs").appendChild(u);
+  $("pvMsgs").appendChild(pvUserEl(text));
   $("status").hidden = false;
   $("status").textContent = t.pvThinking;
   scrollToBottom();
 
   try {
-    const d = await pvPost("/api/previsit/reply", { session_id: pv.sid, message: text });
-    pvApply(d);
+    const d = await pvPost("/api/previsit/reply", { session_id: pv.sid, message: text, ui_lang: uiLang });
+    if (gen === pv.gen) pvApply(d);
   } catch (err) {
-    pvFail(err);
+    if (gen === pv.gen) pvFail(err);
   } finally {
-    pv.busy = false;
-    busy = false;
-    $("status").hidden = true;
-    syncSend();
+    if (gen === pv.gen) {
+      pv.busy = false;
+      busy = false;
+      $("status").hidden = true;
+      syncSend();
+    }
   }
 }
 
 function pvApply(d) {
   if (!d) return;
   if (d.session_id) pv.sid = d.session_id;
-  pv.done = d.state === "done" || d.state === "emergency";
-  pv.record = d.record || null;
   pv.turns = d.turns || [];
   pvRender(d);
+}
+
+/* 切到维语时，把还缺维语版本的那几条交给后端翻译（翻一次就写库，下次切换
+   直接读）。这就是"参照维医问答的方式做翻译"落在预问诊里的那一步：
+   同一句话译过去，而不是换个语言让模型重新回答一遍——那样每次内容都不一样。
+   期间照常显示中文原文 + 语言标记，不拦输入、不转圈。 */
+async function pvLocalize() {
+  if (!pv.sid || uiLang !== "ug" || pv.busy) return;
+  const need = [...$("pvMsgs").querySelectorAll(".msg.bot")].some((el) =>
+    !el.classList.contains("pv-greet") && !el.dataset.ug);
+  if (!need) return;
+  const gen = pv.gen;
+  // 翻译要一会儿，明确告诉用户"正在译"，而不是让他盯着一句中文发呆。
+  $("status").hidden = false;
+  $("status").textContent = t.translating;
+  try {
+    const d = await pvPost("/api/previsit/localize",
+      { session_id: pv.sid, ui_lang: uiLang });
+    if (gen === pv.gen) pvApply(d);
+  } catch (err) {
+    console.warn("[previsit] localize", err);   // 翻不出来就维持原文 + 标记
+  } finally {
+    $("status").hidden = true;
+  }
+}
+
+/* 预问诊气泡和问答板块（paintAnswer）用同一套：每条存两份文本，
+     dataset.main —— 后端给的正文（当次生成时的语言）
+     dataset.int  —— 中文原稿（后端 content_int，永远有）
+     dataset.ug   —— 维吾尔语版本（后端 content_ug，可能还没有）
+   渲染时按当前界面语言挑一份，切语言只重画、不重开会话。
+   缺目标语言版本时先显示原文 + 语言标记，同时 pvLocalize() 让后端翻译补齐。 */
+function pvText(el) {
+  const main = el.dataset.main || "";
+  // 患者自己说的话、以及那句固定问候：本来就跟界面语言一致，不做挑选。
+  if (el.classList.contains("user") || el.classList.contains("pv-greet")) return main;
+  if (uiLang === "ug") return el.dataset.ug || main;
+  return el.dataset.int || main;
+}
+
+/* 这行字是什么语言。按脚本判，不依赖后端字段：旧库里没有 lang 列，
+   而"这行字我认不认得"看字本身最准。 */
+function textLang(s) {
+  if (/[\u0600-\u06ff]/.test(s || "")) return "ug";
+  if (/[\u4e00-\u9fff]/.test(s || "")) return "zh";
+  return "";
+}
+
+function pvRepaint(el) {
+  // 固定问候不是后端流水里的一条，正文每次从界面文案现取——切语言就跟着换，
+  // 也不会被挂"另一种语言"的徽标（它和当前界面语言永远一致）。
+  if (el.classList.contains("pv-greet")) {
+    el.dataset.main = t.pvHello || "";
+    el.dataset.int = "";
+    el.dataset.translated = "1";
+  }
+  const text = pvText(el);
+  const a = el.querySelector(".answer");
+  if (a) a.innerHTML = renderRich(text); else el.textContent = text;
+  const host = el.querySelector(".bot-main") || el;
+  // 有目标语言版本就不打标记；没有才按正文实际语言标出来。
+  // 患者自己说的话不打标记——那是他自己写的。
+  const has = el.classList.contains("user") || el.classList.contains("pv-greet")
+    || (uiLang === "ug" ? !!el.dataset.ug : !!el.dataset.int);
+  const lv = has ? "" : textLang(text);
+  let tag = host.querySelector(".alang");
+  if (lv && lv !== uiLang) {
+    if (!tag) {
+      tag = document.createElement("span");
+      tag.className = "alang";
+      host.appendChild(tag);
+    }
+    tag.textContent = t.stamp(lv);
+  } else if (tag) {
+    tag.remove();
+  }
+  // 翻译没完成时正文是原文，得让用户知道为什么，而不是自己猜"为什么看不懂"。
+  let warn = host.querySelector(".pv-warn");
+  if (el.dataset.translated === "0") {
+    if (!warn) {
+      warn = document.createElement("div");
+      warn.className = "loop-warn tr-warn pv-warn";
+      host.appendChild(warn);
+    }
+    warn.textContent = t.rawFallback;
+  } else if (warn) {
+    warn.remove();
+  }
 }
 
 function pvRender(d) {
   const box = $("pvMsgs");
   box.innerHTML = "";
+  // 固定问候永远是第一条，但它不在后端流水里（后端只记患者真说过的话
+  // 和模型对此的回答），所以每次重画都要补回来。
+  box.appendChild(pvGreetEl());
   (d.turns || []).forEach((turn) => {
     const el = document.createElement("div");
+    el.dataset.main = turn.content || "";
+    el.dataset.int = turn.content_int || "";
+    el.dataset.ug = turn.content_ug || (turn.lang === "ug" ? (turn.content || "") : "");
+    el.dataset.translated = turn.translated === false ? "0" : "1";
     if (turn.role === "user") {
       el.className = "msg user";
       el.dir = "auto";
-      el.textContent = turn.content || "";
     } else {
       el.className = "msg bot";
+      el.appendChild(botAvatar());
+      const main = document.createElement("div");
+      main.className = "bot-main";
       const a = document.createElement("div");
       a.className = "answer";
       a.dir = "auto";
-      // 复用答案渲染：分点、加粗都按同一套规则走，不然同一页里两种排版。
-      a.innerHTML = renderRich(turn.content || "");
-      el.appendChild(a);
+      main.appendChild(a);
+      el.appendChild(main);
     }
+    pvRepaint(el);      // 复用答案渲染：分点、加粗都按同一套规则走
     box.appendChild(el);
   });
-  if (pv.done && d.record) box.appendChild(pvCard(d));
   follow = true;
   scrollToBottom();
-}
-
-/* 病历卡。分诊结论放在最上面：患者翻完十行摘要，最后要知道的还是"去哪个科、
-   急不急"。急诊/红旗征单独配色，跟普通"尽快就诊"不是一个量级。 */
-function pvCard(d) {
-  const rec = d.record || {};
-  const wrap = document.createElement("div");
-  wrap.className = "msg bot";
-
-  const urgent = d.state === "emergency" || !!d.danger
-    || /立即|急诊|拨打|emergency/i.test(`${rec.urgency || ""}${d.urgency || ""}`);
-  const dept = rec.dept || d.dept || "";
-  const urg = rec.urgency || d.urgency || "";
-
-  const triage = (dept || urg)
-    ? `<div class="pv-triage${urgent ? " is-urgent" : ""}">`
-      + (dept ? `<span class="dept">${esc(dept)}</span>` : "")
-      + (urg ? `<span class="urg" dir="auto">${esc(urg)}</span>` : "")
-      + `</div>` : "";
-
-  const secs = (rec.sections || []).map((s) =>
-    `<div class="pv-sec"><h4>${esc(s.label || "")}</h4>`
-    + `<p dir="auto">${esc(s.text || "")}</p></div>`).join("");
-
-  wrap.innerHTML = `<div class="pv-card">
-      <h3 dir="auto">${esc(rec.title || "")}</h3>
-      ${triage}${secs}
-      <div class="pv-acts">
-        <button class="pv-btn primary" type="button" data-pv-copy>${esc(t.pvCopy)}</button>
-        <button class="pv-btn" type="button" data-pv-restart>${esc(t.pvRestart)}</button>
-      </div>
-      ${rec.note ? `<p class="pv-hint" dir="auto">${esc(rec.note)}</p>` : ""}
-    </div>`;
-  return wrap;
 }
 
 function pvFail(err) {
   const el = document.createElement("div");
   el.className = "msg bot";
+  el.appendChild(botAvatar());
+  const main = document.createElement("div");
+  main.className = "bot-main";
   const a = document.createElement("div");
   a.className = "answer err";
   a.dir = "auto";
-  a.textContent = `${t.pvFailed}（${err && err.message ? err.message : err}）`;
-  el.appendChild(a);
+  // 只显示本地化的那句话。以前尾巴上挂着「（HTTP 503）」——维语界面上给患者
+  // 看一个英文状态码，等于把运维细节端到看不懂它的人面前。状态码进控制台。
+  console.warn("[previsit]", err);
+  a.textContent = t.pvFailed;
+  main.appendChild(a);
+  el.appendChild(main);
   $("pvMsgs").appendChild(el);
   scrollToBottom();
 }
@@ -1564,7 +1790,7 @@ function renderLangSwitch() {
   box.innerHTML = [info.lang, altLang()].map((code) =>
     `<button type="button" data-lang="${esc(code)}"`
     + ` class="${code === uiLang ? "on" : ""}"`
-    + ` title="${esc(code === info.lang ? "维吾尔语界面" : "中文界面")}">`
+    + ` title="${esc(LANG_NAME[code] || code)}">`
     + `${esc(LANG_NAME[code] || code)}</button>`).join("");
 }
 
@@ -1572,6 +1798,8 @@ function setLangMode(on) {
   if (on === altMode) return;
   altMode = on;
   uiLang = on ? altLang() : info.lang;
+  // 记住这次的选择：下次打开别再按浏览器语言猜一遍。
+  try { localStorage.setItem(LANG_KEY, uiLang); } catch (e) { /* 隐私模式忽略 */ }
   t = T[uiLang] || T[info.lang];
   applyChrome();          // 内含 renderLangSwitch：高亮跟着走
   // 按 DOM 重画所有回答（含侧栏里点开的历史）。渲染只看 altMode，
@@ -1582,6 +1810,12 @@ function setLangMode(on) {
     relabelBot(bot);
   });
   renderSessions();
+  // 预问诊气泡也按新语言重挑一份文本重画。**不重开会话、不清空、不重发请求**
+  // ——和上面那个答案区的循环是同一件事。以前这里是"换语言就 pv.gen++ 重开
+  // 一场"，那等于给预问诊单开一套语言系统：界面切个语言，患者的病史全没了。
+  document.querySelectorAll("#pvMsgs .msg").forEach(pvRepaint);
+  // 切到维语时，缺维语版本的气泡交给后端翻译补齐（异步，不挡输入）。
+  if (view === "pv") pvLocalize();
   scrollToBottom(true);
 }
 
@@ -1700,9 +1934,11 @@ function friendly(err) {
 function errorBubble(bot, raw) {
   const f = friendly(raw);
   bot.dataset.raw = String(raw || "");
-  bot.classList.add("failed");     // 失败气泡整体换配色，别和正常答案长得一样
-  bot.innerHTML = `<div class="answer err" dir="auto"></div>`;
-  const el = bot.querySelector(".answer");
+  // 失败配色只挂在内容列上：头像留在左边，不要跟着变成一整块砖橙。
+  const main = bot.querySelector(".bot-main") || bot;
+  main.classList.add("failed");
+  main.innerHTML = `<div class="answer err" dir="auto"></div>`;
+  const el = main.querySelector(".answer");
   el.textContent = f.msg;
   if (f.detail) el.title = f.detail;
 }
@@ -1727,14 +1963,17 @@ async function send() {
 
   const user = bubble("user");
   user.textContent = q;
-  const bot = bubble("bot");
-  bot.innerHTML = `<div class="answer streaming" dir="auto"></div>`;
-  const answerEl = bot.querySelector(".answer");
+  const { bot, main } = botRow();
+  // 注意：bot 行不能带 dir=auto——徽标是维语文本时整行会被解析成 RTL，
+  // flex 一翻，头像就跑到右边去了。方向只由 answer 等文本块自己的 dir=auto 决定。
+  $("msgs").appendChild(bot);
+  main.innerHTML = `<div class="answer streaming" dir="auto"></div>`;
+  const answerEl = main.querySelector(".answer");
   activeAnswer = answerEl;
   const metaEl = document.createElement("div");
   metaEl.className = "thinking";
   metaEl.textContent = t.searching;
-  bot.appendChild(metaEl);
+  main.appendChild(metaEl);
   scrollToBottom();
 
   const started = Date.now();

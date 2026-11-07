@@ -53,6 +53,11 @@
   --ui: var(--ug);
   --col: 748px;          /* 正文与输入框的公共列宽 */
   --side-w: 262px;
+  /* 强调色：整站一套绿。头像、用户气泡、导航选中态、示例胶囊 hover、
+     预问诊医生气泡都认它，换色只改这一处。 */
+  --acc: var(--brand);
+  --acc-line: var(--brand-line);
+  --acc-soft: var(--brand-soft);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -195,11 +200,11 @@ body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
 }
 .nav-item:hover { background: color-mix(in srgb, var(--ink) 6%, transparent); color: var(--ink); }
 .nav-item.on {
-  background: var(--surface); color: var(--brand);
+  background: var(--surface); color: var(--acc);
   border-color: var(--line); box-shadow: var(--shadow-sm);
 }
 .nav-item.on svg { stroke-width: 2; }
-.nav-item.on .ni-meta { color: var(--brand); opacity: .7; }
+.nav-item.on .ni-meta { color: var(--acc); opacity: .7; }
 /* 空板块：能看见、点得动（点进去会说"这一栏还没有资料"），但明显弱化——
    直接置灰会让人以为按钮坏了，而它其实是想告诉你"去导入资料"。 */
 .nav-item.is-empty .ni-label { opacity: .55; }
@@ -389,8 +394,8 @@ body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
 }
 .chip .txt { min-width: 0; }
 .chip:hover {
-  border-color: var(--brand-line); color: var(--brand);
-  background: var(--brand-soft); box-shadow: var(--shadow-sm);
+  border-color: var(--acc-line); color: var(--acc);
+  background: var(--acc-soft); box-shadow: var(--shadow-sm);
 }
 .chip:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 
@@ -421,13 +426,40 @@ body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
   padding: 9px 15px; white-space: pre-wrap;
   box-shadow: 0 6px 18px -12px rgba(10, 60, 45, .7);
 }
-/* AI 回答不套卡片：整页白底上直接排字，读起来最安静（原稿也长，
-   再包一层边框和阴影只是加噪点）。证据徽标负责给它一个视觉起点。 */
-.msg.bot { align-self: stretch; max-width: 100%; padding: 2px 0; }
-.msg.bot.failed {
+/* AI 回答两列排：头像在左、正文在右（头像见 .avatar）。回答、徽标、
+   来源胶囊、脚注都收在 bot-main 里，保证它们左缘对齐而不是绕着头像打转。 */
+.msg.bot { align-self: stretch; max-width: 100%; padding: 2px 0; display: flex; gap: 10px; }
+.bot-main { flex: 1; min-width: 0; }
+.avatar {
+  flex: none; width: 28px; height: 28px; margin-top: 3px;
+  border-radius: 50%;
+  background: var(--acc-soft);
+  box-shadow: inset 0 0 0 1px var(--acc-line);
+  color: var(--acc);
+  display: flex; align-items: center; justify-content: center;
+}
+.avatar svg {
+  width: 15px; height: 15px;
+  fill: none; stroke: currentColor; stroke-width: 1.8;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+.msg.bot.failed,
+.msg.bot > .bot-main.failed {
   border-radius: var(--r-lg); padding: 12px 14px;
   background: var(--warn-soft); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warn) 22%, transparent);
 }
+/* 预问诊是医患对话：每轮就一两句，套个气泡才像聊天；问答那边原稿长、
+   刻意不套卡片，两处不共用。颜色走板块强调色（预问诊=蓝）。 */
+#pvMsgs .msg.bot > .bot-main {
+  align-self: flex-start; max-width: 82%;
+  padding: 10px 15px;
+  background: var(--acc-soft);
+  border-radius: 4px 16px 16px 16px;
+  box-shadow: inset 0 0 0 1px var(--acc-line);
+}
+#pvMsgs .msg.bot .answer { font-size: 15.5px; line-height: 1.7; }
+#pvMsgs .msg.bot .answer.err { padding-inline-start: 0; }
+#pvMsgs .msg.bot .answer.err::before { content: none; }
 
 /* ------------------------------------------------------------ 答案正文 */
 .answer { white-space: pre-wrap; font-size: 16px; }
@@ -556,6 +588,13 @@ body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
 /* 答案语言标记：只在"这条答案不是当前界面语言"时出现。
    小、灰、不抢眼——它的作用是不让人误会，不是让人盯。 */
 .foot .alang {
+  font-size: 12px; color: var(--ink-3);
+  border: 1px solid var(--line); border-radius: 999px;
+  padding: 1px 8px; line-height: 1.6; white-space: nowrap;
+}
+/* 预问诊气泡不在 .foot 里，同一条规则给它一份——语言标记只有一种长相。 */
+.msg .alang {
+  display: inline-block; margin-top: 8px;
   font-size: 12px; color: var(--ink-3);
   border: 1px solid var(--line); border-radius: 999px;
   padding: 1px 8px; line-height: 1.6; white-space: nowrap;
@@ -776,47 +815,12 @@ body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
   .top h1 { font-size: 14px; }
 }
 
-/* ------------------------------------------------------------ 预问诊病历卡
 
-   问诊结束后要落一份东西。之前它是独立站点里的一张整页表单；现在收在同一个
-   聊天流里，所以做成"最后一条回答"的形态：和答案同宽、同样的字号，只是加了
-   边框把它跟对话区分开。
-   分诊结论单独一块置顶：患者翻十屏摘要，最后想知道的还是"该去哪个科、急不急"。 */
-.pv-card {
-  margin-top: 4px; padding: 16px 18px;
-  background: var(--surface); border: 1px solid var(--line);
-  border-radius: var(--r-lg); box-shadow: var(--shadow-sm);
+/* 首屏等待遮罩：服务刚启动时 /api/info 要重试几轮，这期间不能是白屏——
+   白屏和"坏了"在用户眼里是同一件事。 */
+.bootmask {
+  position: fixed; inset: 0; z-index: 99;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--bg); color: var(--muted);
+  font-family: var(--zh); font-size: 15px; letter-spacing: .02em;
 }
-.pv-card > h3 {
-  margin: 0 0 10px; font-size: 16px; font-weight: 700; color: var(--ink);
-}
-.pv-triage {
-  display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px;
-  padding: 10px 12px; margin-bottom: 14px;
-  background: var(--brand-soft); border-radius: var(--r-md);
-  border: 1px solid var(--brand-line);
-}
-.pv-triage .dept { font-size: 16.5px; font-weight: 700; color: var(--brand); }
-.pv-triage .urg { font-size: 13px; color: var(--ink-2); }
-/* 红旗征 / 急诊：这里必须显眼。它和普通"尽快就诊"不是一个量级。 */
-.pv-triage.is-urgent { background: var(--warn-soft); border-color: color-mix(in srgb, var(--warn) 34%, transparent); }
-.pv-triage.is-urgent .dept, .pv-triage.is-urgent .urg { color: var(--warn); }
-
-.pv-sec + .pv-sec { margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--line-soft); }
-.pv-sec > h4 {
-  margin: 0 0 4px; font-size: 12.5px; font-weight: 600; letter-spacing: .03em;
-  color: var(--ink-3);
-}
-.pv-sec > p { margin: 0; font-size: 15px; line-height: 1.85; white-space: pre-wrap; }
-.pv-acts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
-.pv-btn {
-  display: inline-flex; align-items: center; gap: 6px;
-  padding: 7px 13px; border: 1px solid var(--line); border-radius: 9px;
-  background: var(--surface-2); color: var(--ink-2);
-  font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
-  transition: border-color .14s, color .14s, background .14s;
-}
-.pv-btn:hover { border-color: var(--brand-line); color: var(--brand); background: var(--brand-soft); }
-.pv-btn.primary { background: var(--brand); border-color: var(--brand); color: #fff; }
-.pv-btn.primary:hover { background: var(--brand-2); color: #fff; }
-.pv-hint { margin: 10px 0 0; font-size: 12.5px; color: var(--ink-3); line-height: 1.7; }

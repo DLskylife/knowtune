@@ -3,6 +3,7 @@
 # providers:
 #   <名字>:                     小写字母数字，2-24 字符
 #     kind: local | openai      local 表示模型带 .gguf、本机能起
+#     autostart: true           可选；后台启动时自动拉起默认模型
 #     base_url: http://...      OpenAI 兼容地址，末尾到 /v1
 #     model: <默认模型 id>
 #     api_key_env: <变量名>      可选；密钥也可以只放界面里
@@ -30,12 +31,18 @@ providers:
     base_url: http://127.0.0.1:8097/v1
     model: Qwen2.5-7B-Instruct-Q4_K_M
     kind: local
+    autostart: true
     models:
     - id: Qwen2.5-7B-Instruct-Q4_K_M
       alias: ''
       context: 4096
       path: D:/llamafactory/models/lmstudio-ai/Qwen2.5-7B-Instruct-GGUF/Qwen2.5-7B-Instruct-Q4_K_M.gguf
       port: 8097
+    - id: Qwen-3b-doctor-weiyi-bf16
+      alias: ''
+      context: 4096
+      path: D:\llamafactory\models\lmstudio-ai\Qwen-3b-doctor-weiyi-bf16\Qwen-3b-doctor-weiyi-bf16.gguf
+      port: 8090
   deepseek:
     base_url: https://api.deepseek.com
     model: deepseek-flash

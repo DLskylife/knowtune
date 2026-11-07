@@ -47,17 +47,13 @@ OVERRIDES_NAME = "previsit.overrides.yaml"
 # 目前没有需要重启进程的字段——这是这套面板的前提，破例之前先想清楚。
 GROUPS: list[dict[str, str]] = [
     {"key": "model", "label": "模型与生成",
-     "desc": "这一组决定追问和摘要由谁来说。改完立即生效，下一轮追问就走新模型。"},
-    {"key": "flow", "label": "问诊流程",
-     "desc": "轮次上限和总开关。模型再快，问二十轮患者也会跑。"},
-    {"key": "kg", "label": "知识图谱追问",
-     "desc": "槽位问齐后，用共现症状补几条系统回顾问题。库缺失会自动跳过。"},
-    {"key": "retrieval", "label": "语义召回",
-     "desc": "拿患者原话去后端知识库召回，只用来「选病症」，不直接把召回文本发给患者。"},
+     "desc": "预问诊就是这段提示词加模型本身，这一组决定由谁来说、说多长。"},
+    {"key": "flow", "label": "开关",
+     "desc": "总开关。关掉后入口还在，但不会开新会话。"},
     {"key": "copy", "label": "界面文案",
      "desc": "站点标题、欢迎语、免责声明。改的是患者看到的那一层。"},
     {"key": "prompts", "label": "提示词",
-     "desc": "三个模板都只能产出「问题」和「摘要」，分诊与病历正文由本地规则拼装。"},
+     "desc": "整场问诊只有这一段系统提示词：怎么问、问几轮、何时收尾，全交给模型。"},
 ]
 
 FIELDS: list[dict[str, Any]] = [
@@ -68,51 +64,29 @@ FIELDS: list[dict[str, Any]] = [
     {"path": "model", "group": "model", "type": "model", "label": "模型",
      "help": "留空 = 用该后端的默认模型。可手填服务上真实存在的模型名。", "maxlen": 120},
     {"path": "temperature", "group": "model", "type": "float", "label": "温度",
-     "help": "追问要稳，0.1~0.4 就够；调高只会让问法更花哨，不会更准。",
+     "help": "问诊要稳，0.1~0.4 就够；调高只会让问法更花哨，不会更准。",
      "min": 0.0, "max": 2.0, "step": 0.05},
     {"path": "max_tokens", "group": "model", "type": "int", "label": "单次生成上限（token）",
-     "help": "一句话追问 + 一段 120 字摘要，320 足够。本地 7B 给 1024 只是让患者多等。",
+     "help": "一句追问 320 足够。本地 7B 给 1024 只是让患者多等。",
      "min": 64, "max": 4096, "step": 32},
     {"path": "timeout_s", "group": "model", "type": "int", "label": "模型超时（秒）",
-     "help": "超时即熔断、本轮退回模板，30 秒内不再试探。交互场景别给太大。",
+     "help": "超时即报错，不编一句话糊过去。交互场景别给太大。",
      "min": 3, "max": 120, "step": 1},
+    # 维吾尔语会话的翻译链路单独一条：问诊推理仍走上面那个模型，翻译要用
+    # 能真写维语的模型（本地 7B 写不出来，会混成阿拉伯/拉丁/西里尔乱码）。
+    # 这两项只对 ug 会话生效，中英文会话一次都不会用到。
+    {"path": "translator_provider", "group": "model", "type": "provider",
+     "label": "维语翻译后端",
+     "help": "只给维吾尔语会话用；留空 = 跟随后台当前后端。",
+     "empty": "跟随后台默认"},
+    {"path": "translator_model", "group": "model", "type": "model",
+     "label": "维语翻译模型", "maxlen": 120,
+     "help": "留空 = DeepSeek-V4.1-Flash。必须是能写维语的模型；"
+             "本地 7B 翻不出来，维语会话会直接报错（不会退回中文）。"},
 
-    # ------------------------------------------------------------ 流程
+    # ------------------------------------------------------------ 开关
     {"path": "enabled", "group": "flow", "type": "bool", "label": "启用预问诊",
-     "help": "关掉后页面仍可打开，但开始问诊会被拒绝。"},
-    {"path": "max_turns", "group": "flow", "type": "int", "label": "最多问几轮",
-     "help": "问满就收网出病历。域槽位 5 + 病史 2 + 图谱 3，14 才不会把病史挤掉。",
-     "min": 3, "max": 30, "step": 1},
-
-    # ------------------------------------------------------------ 知识图谱
-    {"path": "kg.enabled", "group": "kg", "type": "bool", "label": "启用图谱追问"},
-    {"path": "kg.ros_max", "group": "kg", "type": "int", "label": "最多追几条共现问题",
-     "help": "3 是经验值：再多问诊变长，患者中途跑掉；再少抓不住咯血/盗汗这类关键信息。",
-     "min": 0, "max": 8, "step": 1},
-    {"path": "kg.min_ratio", "group": "kg", "type": "float", "label": "覆盖率下限",
-     "help": "低于它的伴随症状（含主症的疾病里不足这个比例）不占一轮。",
-     "min": 0.0, "max": 1.0, "step": 0.01},
-    {"path": "kg.dept_fallback", "group": "kg", "type": "bool", "label": "科室投票兜底",
-     "help": "手写分诊规则全没命中时，用图谱科室投票给出建议。"},
-
-    # ------------------------------------------------------------ 语义召回
-    {"path": "retrieval.enabled", "group": "retrieval", "type": "bool", "label": "启用语义召回"},
-    {"path": "retrieval.url", "group": "retrieval", "type": "text", "label": "知识库服务地址",
-     "help": "主服务挂载时就是它自己；独立部署访问不到会自动降级。", "maxlen": 200},
-    {"path": "retrieval.kb", "group": "retrieval", "type": "text", "label": "知识库名称",
-     "help": "按名字找库，不写死 id——id 会随建库/删库漂移。", "maxlen": 120},
-    {"path": "retrieval.top_k", "group": "retrieval", "type": "int", "label": "召回条数",
-     "help": "同域去重会消耗候选，8 条才够病种文档挤进来。", "min": 1, "max": 20, "step": 1},
-    {"path": "retrieval.max_per_doc", "group": "retrieval", "type": "int",
-     "label": "单文档上限",
-     "help": "不限的话问「头晕」时前三块全是同一篇文档，top_k 被一个域吃干。",
-     "min": 1, "max": 5, "step": 1},
-    {"path": "retrieval.min_score", "group": "retrieval", "type": "float", "label": "最低分",
-     "help": "0 = 不卡分，全接受，靠名次加权。", "min": 0.0, "max": 1.0, "step": 0.01},
-    {"path": "retrieval.timeout_s", "group": "retrieval", "type": "float", "label": "召回超时（秒）",
-     "help": "交互场景，1.5 秒拿不到就当后端不在。", "min": 0.3, "max": 10.0, "step": 0.1},
-    {"path": "retrieval.rerank", "group": "retrieval", "type": "bool", "label": "召回后精排",
-     "help": "这套库上不划算：CrossEncoder 要几秒，换来的名次提升不值患者等待。"},
+     "help": "关掉后开新会话会被拒绝。"},
 
     # ------------------------------------------------------------ 文案
     {"path": "title", "group": "copy", "type": "text", "label": "站点标题", "maxlen": 60},
@@ -125,19 +99,15 @@ FIELDS: list[dict[str, Any]] = [
      "maxlen": 500},
 
     # ------------------------------------------------------------ 提示词
-    {"path": "prompts.extract", "group": "prompts", "type": "textarea", "label": "抽取提示词",
-     "help": "占位符 {fields} / {multi_fields}，缺字段时原样保留。", "rows": 6, "maxlen": 4000},
-    {"path": "prompts.ask", "group": "prompts", "type": "textarea", "label": "追问提示词",
-     "help": "占位符 {known} {profile} {label} {hint} {tips} {ask} {retry}。",
-     "rows": 8, "maxlen": 4000},
-    {"path": "prompts.report", "group": "prompts", "type": "textarea", "label": "摘要提示词",
-     "help": "占位符 {known} {profile} {dept} {urgency}。", "rows": 7, "maxlen": 4000},
+    {"path": "prompts.chat", "group": "prompts", "type": "textarea", "label": "系统提示词",
+     "help": "整场问诊的唯一提示词。没有占位符，模型看得到全部对话历史。",
+     "rows": 10, "maxlen": 4000},
 ]
 
 _FIELD_BY_PATH: dict[str, dict[str, Any]] = {f["path"]: f for f in FIELDS}
 
 # 这些键保存后必须重建客户端/连接，不能只换个字典了事。
-RESTART_KEYS = ("provider", "model", "retrieval.", "kg.", "timeout_s")
+RESTART_KEYS = ("provider", "model", "timeout_s")
 
 
 # ---------------------------------------------------------------- 路径与读写

@@ -166,14 +166,14 @@ src/knowtune/            主项目
   retrieve/              engine（双路召回、融合、拒答判定）/ rerank（精排 + MMR）
   generate/              prompt / llm / cite / evidence / support / think
   api/app.py             后台全部 HTTP 接口（约 4400 行），唯一大文件
-  api/static/            后台前端：index.html / app.js / style.css，构建号 0.9.56
+  api/static/            后台前端：index.html / app.js / style.css，构建号 0.9.62
   frontsite/             instcfg / runner / site
     static/              前台前端：index.html / app.js / style.css
   previsit/app.py        主项目装配层（注入进程内检索器、LLM 适配器、建 FastAPI app）
 src/previsit/            预问诊独立实现（v0.3.0），零 knowtune 依赖
   app / engine / config / llm / retriever / kb / kgdb / store / settings
 config/                   default / local / models / instances / prompts(.yaml) / prompts/*.md
-                          previsit.yaml / previsit.overrides.yaml / previsit_kb.yaml
+                          previsit.yaml / previsit.overrides.yaml
 data/                    不进版本库：library.db、uploads/、models/、calibration/、secrets.json
 docs/                    7 份文档
 scripts/                  fake_llm.py / get_llama.py / shot_models.py
@@ -243,6 +243,17 @@ scripts/                  fake_llm.py / get_llama.py / shot_models.py
 - 模型页「清空密钥」→ `POST /api/models/keys/clear`，内存与文件一起清。
 - 键是**后端名**不是模型名：同一个后端换模型不该让密钥失效。
 - `_inline_key` 是 pydantic `PrivateAttr`，`model_dump()` / YAML 回写都拿不到它，密钥绝不进序列化结果。
+
+### 3.6 本地端点自启与回环不走代理
+
+**为什么要自启**：预问诊可以钉在某个后端上。钉在 `local` 时，如果重启后没人去模型页点「启动」，它不会报错——按设计降级成规则模板，问话变朴素、抽取退化成关键词，界面上却一切正常。配置写着「本地」而模型根本没在跑，是最难察觉的那种失败。所以 `config/models.yaml` 的后端支持 `autostart: true`（`config.py:ProviderCfg`，`modelcfg._spec_of` 只在打开时写进文件，避免每个端点都被灌一个 `false` 而让「与默认值有无差异」的判断失效）。
+
+`api/app.py:_autostart_local_models` 在 lifespan 里起一个 daemon 线程，挑出 `kind=local` 且 `autostart` 的端点，用 `localmodels.start()` 拉起默认模型，再把实际端口回写到 `base_url` 并 `modelcfg.persist`。放线程里而不是同步：4.4GB 权重实测加载 20 秒上下，同步做会让 `knowtune serve` 二十秒不监听端口。代价是这二十秒内打进来的问诊仍走模板，所以成功/失败都往 logbus 写一条。现行配置：`local` 端点 `autostart: true`，默认模型 `Qwen2.5-7B-Instruct-Q4_K_M`（:8097）。
+
+**为什么回环要走 NO_PROXY**：机器上开着系统代理（Clash 之类）时，httpx 默认读 `HTTP_PROXY`，连 `http://127.0.0.1:8097` 也会被送进代理绕一圈。实测（2026-11-07，本机代理 `:62091`）一次 300 token 的调用 **5.6s → 2.0s**；预问诊一轮两次调用，白等三秒半，而且看起来像「本地模型就是慢」。两处收口：
+
+- `cli.py:_bypass_proxy_for_loopback()`：`knowtune serve` 启动时把 `127.0.0.1 / localhost / ::1` 并进 `NO_PROXY`。改环境变量而不是逐个调用点传 `trust_env=False`——走本机的路径不止预问诊客户端，还有模型探测、检索、网关转发，漏一个就漏一份延迟；云端后端该走代理照走。
+- `previsit/llm.py:_proxy_kw()`：预问诊客户端自己再判一次目标主机，回环就 `trust_env=False`，不依赖调用方有没有设过 `NO_PROXY`。
 
 ---
 
@@ -550,8 +561,15 @@ rag.ask
 参数：`config/default.yaml`（唯一权威，带注释）→ `config/local.yaml`（用户改过的差异项）→ 库级 `kb.config_json`（**全量快照 `__full__`**）→ 按库标定文件覆盖。「用户手动改过」的判据见 §3.4。
 
 - 后端注册表：`config/models.yaml`；密钥在 `data/secrets.json`（DPAPI），**不写进 models.yaml**。
-- 预问诊参数：`config/previsit.yaml` + `previsit.overrides.yaml` + `previsit_kb.yaml`，后台「前台站点 → 预问诊参数」写回；**模型一律跟随 `/v1` 固定入口**，不在这些文件里钉后端。
+- 预问诊参数：`config/previsit.yaml` + `previsit.overrides.yaml`，后台「前台站点 → 预问诊参数」写回。2026-11-07 起预问诊只剩一层壳（一段 `prompts.chat` + 模型），槽位、危险词、分诊规则、追问知识库、图谱追问、病历/摘要生成本身已删除；模型接不上直接报 503，无规则兜底。**默认跟随 `/v1` 固定入口**（网关换端点、换模型，预问诊自动跟着变）；需要把它钉死在某个后端时，在 `previsit.overrides.yaml` 写 `provider` / `model`，网关按 `X-KnowTune-Provider` 头路由过去——现行就是钉在 `local`（§3.6）。
 - `config/previsit.yaml:86` 的 `retrieval.url: http://127.0.0.1:8000` **只在预问诊独立部署时生效**；主服务挂载时注入 `InProcessRetriever`（进程内查库），LLM 网关由 `KNOWTUNE_GATEWAY` 按实际端口注入。用 8013 启动不会踩 8000。
+- **预问诊的作答语言跟随界面语言**（`ui_lang`：`ug` / `zh` / `en`，2026-11-07 起）：前台 `pvPost` 在 `start` / `reply` 里都带上 `ui_lang`，路由透传成 `lang`。`zh` 直接用 `prompts.chat`；`en` 用整段 `prompts.chat_en`（本地 7B 跟得住英文指令）。**维语不能整段换提示词**：实测把 `prompts.chat_ug`（整段维语）交给本地 `Qwen2.5-7B-Instruct` 会崩成中文元叙述（"可以先询问患者……以下是一个示例"），它对维语指令基本不服从。所以维语走**翻译层**：7B 全程用中文提示、中文推理，只在边界做双向翻译——患者输入的维语先译成中文再进上下文，模型输出的中文再译成维语给患者看。每条 turn 因此有两个字段：`content`（患者看到的，维语）与 `content_int`（模型内部上下文，中文）；`_trim` 取 `content_int` 拼历史，保证 7B 看到的一直是中文。翻译客户端由 `previsit/app.py:build_translator` 装配，**显式指定强模型**；来源优先级 `translator_model`（配置 / 覆盖层）> 环境变量 `PREVISIT_TRANSLATOR_MODEL` > 内置 `deepseek-ai/DeepSeek-V4.1-Flash`，配套的 `translator_provider` 决定网关路由头（空 = 按模型名路由，不是"配置失效"）——不能用网关默认模型，那台本地 7B 做不了维语翻译。这两项在后台「站点 → 模型与提示词」的预问诊行（翻译 / 推理两个下拉）或预问诊参数面板都能改，两条路写同一份 `previsit.overrides.yaml`、都即时 `reload_engine()`。
+
+**作答语言只有一个来源：本次请求**（2026-11-07 六修，与问答板块对齐）。`/api/ask` 的口径是：`answer_lang` 每次请求一算、答案存主文 + 中文原稿、界面按 `altMode` 挑一份、对不上当前语言时打「某某语作答」的标记。预问诊以前是另一套——会话记 `session.lang`、切语言就重开一场、翻译失败直接 503。两套语言系统必然对不上，线上表现就是「界面是维语、气泡是中文」，而且切一次语言病史全丢。现在完全同一套：①`start` / `reply` 按请求里的 `ui_lang` 作答（会话上的 `lang` 只在前端漏发时兜底）；②每条 `turn` 记 `lang`（这条正文是什么语言）和 `translated`（是否真译成目标语言），与 `answer_lang` / `answer_translated` 一一对应；③维语答复同时存 `content`（维语）和 `content_int`（中文原稿），前端 `pvRepaint()` 照 `paintAnswer()` 的规则按 `altMode` 挑一份，切语言只重画、不重开、不清会话；④翻译失败落中文原文并置 `translated=false`，界面挂本地化提示「翻译未完成，以下是原文」，不再 503 把整场问诊打死；⑤某条确实没有目标语言版本时（例如维语会话中途切成中文后产生的纯中文答复），气泡下面打 `alang` 语言标记，与答案区同一个规则。翻译客户端仍是懒装配 + 客户端链 + 译文质量闸门（这三条只在「维语答复」这条路上生效），回归见 `tests/test_previsit_lang.py`。 **界面默认语言不再等于站点主语言**（2026-11-07 四修）：`config/instances.yaml` 的 `lang: ug` 是给维族患者设备用的，但中文电脑第一次打开也是满屏维吾尔语——连"哪里能点"都看不出，这不是本地化而是拒客。现在 `app.js:pickLang()` 按「用户上次手动选择（`localStorage.knowtune.uiLang`）> `navigator.language` 命中的备选语言 > 站点主语言」决定首屏语言，手动切换后写入 localStorage；`altMode` 与 `uiLang` 在 `boot()` 里同步设置（两者不同步就会一半中文一半维语）。另外首屏 `/api/info` 失败时不再摊一个"维语标题 + 中文说明"的死页面：`fetchInfo()` 先重试 8 次、期间显示 `.bootmask` 等待遮罩（白屏和"坏了"在用户眼里是同一件事），仍失败才进 `bootFail()` 单语提示并按次数自动刷新。 同一批改动里还有两个必须留着的细节：一是 `pv.gen` 作为「这一场问诊的代号」，`pvStart` / 侧栏「+」都会 `++`，过期响应整包丢弃——否则被顶掉的那次开场白会在几秒后落地，画进刚重开的新会话；二是 `pvRepaint()` 只在**渲染**这一层做语言选择，绝不能反过来让它发请求。实测：维语界面开诊并回答 → 切中文，会话 id 不变、三条气泡原地变中文；继续用中文问 → 新答复是中文；切回维语 → 前三条回维语、纯中文那条下面挂「中文作答」标记，五条一条不丢。
+
+**开场白是界面文案，不是模型的话**（2026-11-07 七修）。前面那条把语言统一了，但「谁来说第一句」还留着旧写法：进入预问诊就 `POST /start`、让模型现编一句问候，再走一次 zh2ug 翻译——患者看到的是一个空白页和「تەييارلىنىۋاتىدۇ…」，而那句话本来就是固定的。现在开场问候写在 `app.js` 的 T 词典里（`t.pvHello`，中/维/英三段），与 `welText`（另两个板块的欢迎语）同一个来源：**进入即有、切换语言原地跟着换、不发任何请求**。`enterPv()` 只画这一条；患者说出第一句才 `POST /start`（这句同时就是主诉，一次到位）。对应的两条后端约定：`ChatEngine.start()` 在 `complaint` 为空时**只建会话、不调模型**（流水里没有开场白这一条，前端 `pvRender()` 每次重画都把固定问候补在第一条）；`config/previsit.yaml` 的三段提示词都删掉了「开场先问候」的指令，改成「界面已经问候过，别再自我介绍」——否则模型会在固定问候下面再念一遍「您好，我是预问诊助手」。回归见 `tests/test_previsit_lang.py::test_start_without_complaint_never_calls_model`与 `scripts/check_pv_hello.py`。
+
+**切语言 = 翻译同一句话，不是让模型重答一遍**（2026-11-07 八修）。七修解决了「开场白谁来写」，但已有回答只有生成时的那个语言：中文问出来的答复，患者切到维语时没有维语版本可用，界面上就是中文正文 + 「中文作答」标记（用户原话「这两个切换每次内容不统一，我让你参照维医问答的方式，实现翻译」）。现在的口径与 `/api/ask` 完全一致——**答案存两份**：`turn` 加 `content_ug` 列（维语版本），`content_int` 始终是中文那份，`content` 是生成时的正文。中文界面问出来的回答切到维语时，前端 `pvLocalize()` 调 `POST /api/previsit/localize`，后端`ChatEngine.localize()` 只挑 **assistant 且缺 `content_ug`** 的条目（患者自己的话照原样显示），并发翻（最多 4 路、单次最多 6 条），译好写回库——**同一句话只翻一次**，第二次切过来零请求。翻译期间沿用 `t.translating`（「正在译为维吾尔语…」），气泡先显示原文 + 语言标记，译好标记自动消失；译不出来就维持原文，不报错、不拦输入。前端 `pvText()` 按 `uiLang` 挑 `dataset.ug` / `dataset.int`，`pvRepaint()` 的标记规则改成「有目标语言版本就不挂」，与答案区一致。回归见`tests/test_previsit_lang.py::test_localize_fills_ug_for_chinese_answers`（含「只翻一次」「不动患者原话」「没翻译客户端时不抛错」三条）与`scripts/check_pv_hello.py`（实测请求序列只有 `start` + 一次 `localize`）。
 
 ### 9.2 角色解析链（`roles.py:81-111`）
 
@@ -655,7 +673,7 @@ effective_fields(): 逐字段
 **④ 前台静态资源构建号三值不一致**
 - 现象：`index.html` 的 `style.css?v=1.7.18` / `app.js?v=1.7.7`，与 `index.html:18`、`app.js:25` 的 `1.7.17` 不一致；后台统一 `0.9.54`。
 - 以什么为准：以前台统一构建号为准。
-- 影响：版本号漂移会让浏览器缓存判断错乱，界面显示与请求版本对不上。**已修正**（2026-11-07 全量重写时，前台 `index.html` 的 css / js 查询串、`SITE_REQ_BUILD`、`app.js` 的 `SITE_BUILD` 曾统一为 `1.7.18`、后台 `0.9.54`；同日补 `progress` 进度事件后，两端前端按规则同步升为前台 `1.7.19`、后台 `0.9.55`；同日站点配置弹窗重排（三页签 + 模型矩阵）再把后台升为 `0.9.56`，**这是现行值**）。
+- 影响：版本号漂移会让浏览器缓存判断错乱，界面显示与请求版本对不上。**已修正**（2026-11-07 全量重写时，前台 `index.html` 的 css / js 查询串、`SITE_REQ_BUILD`、`app.js` 的 `SITE_BUILD` 曾统一为 `1.7.18`、后台 `0.9.54`；同日补 `progress` 进度事件后，两端前端按规则同步升为前台 `1.7.19`、后台 `0.9.55`；同日站点配置弹窗重排（三页签 + 模型矩阵）再把后台升为 `0.9.56`；同日移除预问诊病历功能、问句改为纯模型生成，前台升为 `1.7.20`；同日预问诊整体退化为「提示词 + 模型」纯对话，前台升为 `1.7.27`；同日修复维语模式下预问诊仍用中文作答（前端补发 `ui_lang`、引擎按界面语言作答，维语会话走`本地 7B 中文推理 + 外部强模型双向翻译`），前台升为 `1.7.28`；同日后台「模型与提示词」矩阵补预问诊的两个模型位（翻译 / 推理），后台升为 `0.9.62`，**这是现行值**）。
 
 **⑤ `config/previsit.yaml:86` 的 `retrieval.url: http://127.0.0.1:8000`**
 - 现象：配置里写死 8000，而主服务默认/示例用 8013。

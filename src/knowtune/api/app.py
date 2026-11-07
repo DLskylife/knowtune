@@ -247,6 +247,59 @@ def _sweep_stale_parts() -> int:
     return removed
 
 
+def _autostart_local_models(state: "AppState") -> None:
+    """把标了 autostart 的本地端点拉起来。在后台线程里跑。
+
+    为什么需要这个：预问诊可以钉在某个端点上（`config/previsit.yaml` 的
+    `provider`）。钉在 local 时，如果重启后没人去模型页点「启动」，预问诊
+    不会报错——它会按设计降级成规则模板，问出来的话术变朴素、抽取退化成
+    关键词，而界面上一切正常。配置写着"本地"，实际模型没在跑，是最难察觉的
+    那种失败。
+
+    放线程里而不是像前台站点那样同步起：加载 4.4G 权重实测 20 秒上下，
+    同步做会让 `knowtune serve` 二十秒不监听端口。代价是启动后这二十秒内
+    打进来的问诊仍会降级，所以成功/失败都往日志里写一条，别让它悄悄发生。
+    """
+    from .. import localmodels as local_mod
+
+    for name, p in state.cfg.generation.providers.items():
+        if not getattr(p, "autostart", False) or p.kind != "local":
+            continue
+        entry = p.entry()
+        if entry is None or not entry.path:
+            logbus.note(f"端点「{name}」标了开机自启，但默认模型没有本地路径（path），跳过",
+                        level="WARNING", source="models")
+            continue
+        inst_name = f"{name}/{entry.id}"
+        try:
+            cur = local_mod.status(inst_name)
+            if cur.get("state") in ("running", "starting"):
+                logbus.note(f"本地实例已在运行：{entry.id} @ :{cur.get('port')}", source="models")
+                continue
+            inst = local_mod.start(
+                name=inst_name, path=entry.path,
+                port=entry.port or None,
+                ctx=entry.context or local_mod.DEFAULT_CTX,
+                alias=entry.id,
+            )
+        except Exception as exc:      # 显存不够、端口被占、文件被删……
+            logbus.note(
+                f"本地端点「{name}」自启失败：{type(exc).__name__}: {exc}。"
+                f"钉在它上面的功能（预问诊 / 站点角色）会降级成模板，去模型页手动启动可恢复",
+                level="ERROR", source="models")
+            continue
+        entry.port = inst.port
+        p.base_url = inst.base_url
+        try:
+            modelcfg.persist(state.cfg)
+        except Exception as exc:      # 落盘失败不该让这次启动白费
+            logbus.note(f"自启后回写端点地址失败：{type(exc).__name__}: {exc}",
+                        level="WARNING", source="models")
+        services_mod.invalidate(name)
+        logbus.note(f"本地实例已自启：{entry.id} @ {inst.base_url}（pid {inst.pid}）",
+                    source="models")
+
+
 def _warmup(state: "AppState") -> None:
     """后台预热嵌入模型。
 
@@ -340,6 +393,10 @@ async def lifespan(app: FastAPI):
     # 这一步漏了，模型页重启后就是整页"还没探测"，而盘上明明有记录。
     services_mod.warm_cache(state.cfg)
     threading.Thread(target=_warmup, args=(state,), daemon=True, name="warmup").start()
+    # 标了 autostart 的本地端点先起（加载权重二十秒上下，必须异步）。
+    # 放在站点自启之前：站点里的角色可能也指向同一个本地端点。
+    threading.Thread(target=_autostart_local_models, args=(state,),
+                     daemon=True, name="local-autostart").start()
     # 标了 autostart 的前台实例随后台一起起来。放在线程外面同步做：它们只是
     # 端口监听，不阻塞，而放到后台线程里会让"启动失败"变得没有反馈。
     for name in state.sites.start_autostart():
@@ -558,53 +615,17 @@ state = AppState()
 app = FastAPI(title="KnowTune", version="0.1.0", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
-def _previsit_kb_id() -> int | None:
-    row = state.conn.execute(
-        "SELECT id FROM kb WHERE name=?", ("预问诊知识库",)
-    ).fetchone()
-    return int(row["id"]) if row else None
-
-
-def _kb_search_for_previsit(question: str, top_k: int = 6) -> list[dict]:
-    """给预问诊的进程内语义检索（不绕 HTTP）。
-
-    预问诊和后台在同一个进程里，走接口要多付 1.8 秒的请求开销，而检索本身
-    只要十几毫秒——这里直接调引擎，返回的结构和 /api/search/debug 的 final
-    对齐，预问诊侧不用区分两条路。
-    """
-    kb_id = _previsit_kb_id()      # 每次查一次：库可能被删了重建，id 会变
-    if kb_id is None:
-        return []                  # 库不在 → 预问诊退回关键词选域
-    cfg = state.effective_cfg(kb_id)
-    result = state.engine.search(
-        state.conn, question, kb_id=kb_id, top_k=top_k, rerank=False, cfg=cfg,
-    )
-    return [
-        {
-            "doc_title": c.doc_title,
-            "heading_path": c.heading_path,
-            "text": c.text,
-            "score": c.rerank_score if c.rerank_score is not None else (c.dense_score or 0.0),
-        }
-        for c in result.candidates
-    ]
-
-
 # 预问诊不再挂在后台这个口。它只是维医站点里的第三个板块（页面在站点里画，
 # 接口在站点下的 /previsit/api/...），后台需要的只有"参数面板"那几个函数，
 # 走 /api/previsit/*，不必为了一个弹窗把整个站点挂到后台来——正是那一挂，
 # 让它在后台看起来像个"独立站点"。
-# 进程内检索这一路照旧注册：预问诊和后台同进程，走 HTTP 要多付一秒多。
-try:
-    from ..previsit.app import set_kb_search as _set_kb_search
-    _set_kb_search(_kb_search_for_previsit)
-except Exception as _pv_exc:      # noqa: BLE001 - 预问诊挂了不能拖垮整个后台
-    logbus.note(f"预问诊桥接失败，后台其余功能不受影响："
-                f"{type(_pv_exc).__name__}: {_pv_exc}", level="ERROR", source="api")
+#
+# 2026-11-07：预问诊退化成"提示词 + 模型"的纯对话，语义召回整层删除，
+# 后台不再需要把进程内检索注册过去。
 
 
 class PrevisitConfIn(BaseModel):
-    # {字段路径: 值}，路径形如 "max_turns" / "retrieval.top_k"。
+    # {字段路径: 值}，路径形如 "max_tokens" / "prompts.chat"。
     # 只认 previsit.settings.FIELDS 里声明过的键，其余静默丢弃——面板是白名单。
     values: dict[str, Any] = Field(default_factory=dict)
 

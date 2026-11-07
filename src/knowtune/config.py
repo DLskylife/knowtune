@@ -250,6 +250,10 @@ class ProviderCfg(BaseModel):
     base_url: str | None = None
     model: str = ""
     kind: str = "openai"            # local | openai，只用于界面分组
+    # 后台启动时自动拉起这个端点下的默认模型（只有 kind=local 且模型带 path
+    # 的才做得到）。给"必须用本地模型"的场景用：预问诊钉在 local 上时，重启后
+    # 没人去点「启动」，问诊就会静默退化成规则模板——配置写着本地，实际没在跑。
+    autostart: bool = False
     # 该端点"我打算用"的模型清单。现在是实体列表，带路径和端口。
     # YAML 里写成 `models:`——`model_list` 是旧名字，保留字段名兼容已有代码，
     # 但配置一律用新写法（populate_by_name 让两种都能解析）。

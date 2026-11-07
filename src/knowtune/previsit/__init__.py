@@ -1,8 +1,9 @@
 """预问诊桥接（knowtune → previsit 独立包）。
 
 预问诊的实现已经**整体迁移到顶层独立包 `previsit`**（src/previsit）——
-它不 import 主项目的任何东西，能单独部署、只依赖后端知识库
-（previsit.yaml / previsit_kb.yaml / kg.db）。本模块只做两件事：
+它不 import 主项目的任何东西，能单独部署，数据面只有 `previsit.yaml`
+（界面文案 + 模型参数 + 一段提示词）和 `data/previsit.db`（会话流水）。
+本模块只做两件事：
 
 1. **向后兼容的再导出**：老代码里 `from knowtune.previsit import ...`
    照常用，实现全在 `previsit` 包；
@@ -19,19 +20,19 @@ from typing import Any
 
 # 再导出（实现见 src/previsit）
 from previsit import (                       # noqa: F401
+    ChatEngine,
     PrevisitEngine,
     Store,
-    kgdb,
 )
 from previsit.config import load_previsit    # noqa: F401
 from previsit.llm import LLMError            # noqa: F401
 
 
 class KnowtuneLLMAdapter:
-    """把主项目的 LLMClient 适配成独立引擎的 complete() 接口。
+    """把主项目的 LLMClient 适配成壳子引擎的 complete() 接口。
 
-    mock 后端回吐的是"链路回显"，不是答案也不是追问；拿它当话术发给患者
-    等于骗人。明确当作"没有模型"返回空串，引擎自然走规则兜底。
+    mock 后端回吐的是"链路回显"，不是问诊话术；拿它发给患者等于骗人。
+    明确当作"没有模型"返回空串，引擎会如实报错（壳子没有规则兜底）。
     """
 
     def __init__(self, client: Any, provider: str | None = None,

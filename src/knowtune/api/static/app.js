@@ -1,6 +1,6 @@
 /* 构建号：与 index.html 里那份一致，不一致说明浏览器拿到的是旧 JS，
    页面加载完会强制换一次（见 index.html 的自检脚本）。 */
-window.ADMIN_BUILD = "0.9.56";
+window.ADMIN_BUILD = "0.9.63";
 
 const $ = (id) => document.getElementById(id);
 
@@ -6222,8 +6222,8 @@ function siteStatusBadge(st) {
  * 所以每个后端展开成一组：组内第一项是「默认 · 后端自己的模型」，其余是
  * 这个后端能用的模型。值写成「后端::模型」，只写后端名仍然合法（旧配置）。
  */
-function provSelect(role, cur, providers, meta, defProvider) {
-  const head = `<option value="">跟随系统（${esc(defProvider || "-")}）</option>`;
+function provSelect(role, cur, providers, meta, defProvider, headLabel) {
+  const head = `<option value="">${esc(headLabel || `跟随系统（${defProvider || "-"}）`)}</option>`;
   const ref = String(cur || "");
   const cut = ref.indexOf("::");
   const curBase = cut >= 0 ? ref.slice(0, cut) : ref;
@@ -6264,8 +6264,27 @@ function provSelect(role, cur, providers, meta, defProvider) {
   // 当前值指向一个已删除/改名的后端时，它的 optgroup 根本不存在，浏览器会
   // 静默选中第一项——用户以为还配着，一保存就被改成别的后端，而且卡片上
   // 看不出发生过什么。补一条占位，让"已不存在"这件事写在脸上。
-  const orphan = ref && !(providers || []).includes(curBase)
-    ? `<option value="${esc(ref)}" selected>${esc(ref)}（已不存在）</option>` : "";
+  //
+  // 但「只写了模型名、没写后端」是**合法**配置（预问诊的维语翻译模型就是这样：
+  // 交给网关切点按模型名路由）。这种值不加后缀——模型名本身就够长，再缀上
+  // 「按模型名路由」在窄列里会被截成「（按…」，看着像渲染坏了。
+  const knownModels = new Set();
+  for (const m of (meta || [])) {
+    for (const it of (m.models || [])) {
+      const id = String((it && it.id) || "").trim();
+      if (id) knownModels.add(id);
+    }
+    for (const id of (m.probed || [])) {
+      const s = String(id || "").trim();
+      if (s) knownModels.add(s);
+    }
+  }
+  let orphan = "";
+  if (ref && !(providers || []).includes(curBase)) {
+    const bareModel = !curModel && knownModels.has(curBase);
+    orphan = `<option value="${esc(ref)}" selected>${esc(ref)}${
+      bareModel ? "" : "（已不存在）"}</option>`;
+  }
 
   return head + orphan + groups;
 }
@@ -6392,7 +6411,7 @@ function siteBlock(i, meta, plan, defProv) {
  * #modalBody [data-f] 组 payload，隐藏页签里的控件仍在 DOM 里（用 hidden
  * 属性切换，不重建 DOM），所以分不分页对保存完全透明，后端零改动。
  */
-function siteGroups(i, meta, plan, defProv) {
+function siteGroups(i, meta, plan, defProv, pv) {
   const d = state.sites || {};
   const roles = i.roles || {};
   const a = i.alt || {};
@@ -6414,8 +6433,9 @@ function siteGroups(i, meta, plan, defProv) {
       value="${esc(val || "")}" placeholder="${esc(ph || "留空用默认")}">`;
   const sec = (key) => (i.sections && i.sections[key]) || {};
   const secOn = (key) => sec(key).enabled !== false;
-  const sel = (field, role, cur, title) =>
-    `<select data-f="${field}" title="${esc(title)}">${provSelect(role, cur, d.providers, meta, defProv)}</select>`;
+  const sel = (field, role, cur, title, headLabel) =>
+    `<select data-f="${field}" title="${esc(title)}">${
+      provSelect(role, cur, d.providers, meta, defProv, headLabel)}</select>`;
 
   // 一行字段：标签在左、控件在右，说明放在控件下方，不再往控件行里塞小字。
   const field = (label, control, note, cls = "") => `<div class="scfg-field ${cls}">
@@ -6467,6 +6487,18 @@ function siteGroups(i, meta, plan, defProv) {
 
   /* ---------- 页 2：模型与提示词（矩阵） ---------- */
   const resolved = (plan && plan.resolved) || {};
+  // 预问诊的两个模型位不在实例 roles 里，而在 config/previsit.yaml 的覆盖层上
+  // （全局一份，不按站点分）。这里只把当前值拼成 provSelect 认的「后端::模型」
+  // 形状，保存时再拆回 provider / model 两个键。
+  const pvVals = (pv && pv.values) || {};
+  const pvRef = (prov, mdl) => {
+    const p = String(prov || "").trim();
+    const m = String(mdl || "").trim();
+    if (!p) return m;                       // 只配了模型：原样显示，别丢
+    return m ? `${p}::${m}` : p;
+  };
+  const pvTrCur = pvRef(pvVals.translator_provider, pvVals.translator_model);
+  const pvGenCur = pvRef(pvVals.provider, pvVals.model);
   const mrow = (label, sub, tr, gen, prompt, cls = "") => `<tr class="${cls}">
       <td class="scfg-mrow-k"><b>${esc(label)}</b><span>${esc(sub)}</span></td>
       <td>${tr}</td><td>${gen}</td><td>${prompt}</td></tr>`;
@@ -6504,8 +6536,12 @@ function siteGroups(i, meta, plan, defProv) {
               "古籍问答的推理模型；留空跟随站点默认"),
             promptBtn('data-open-prompt="classic"', "板块提示词"))}
           <tr class="scfg-mrow-soft">
-            <td class="scfg-mrow-k"><b>预问诊</b><span>独立引擎 · 不走知识库检索</span></td>
-            <td colspan="2" class="scfg-mrow-note">模型、轮次与提示词在预问诊参数面板里单独配置，不随上表继承。</td>
+            <td class="scfg-mrow-k"><b>预问诊</b><span>独立引擎 · 不随上表继承</span></td>
+            <td>${sel("pv_role_translate", "translate", pvTrCur,
+              "维语会话专用的翻译模型；留空 = 内置强模型（本地 7B 写不了维语）。只有模型名、没有后端时，按模型名路由。",
+              "内置默认（DeepSeek-V4.1-Flash）")}</td>
+            <td>${sel("pv_role_generate", "generate", pvGenCur,
+              "预问诊的推理模型；留空 = 跟随后台当前后端")}</td>
             <td>${promptBtn("data-open-pvcfg", "模型与提示词")}</td>
           </tr>
         </tbody>
@@ -6581,7 +6617,7 @@ function siteGroups(i, meta, plan, defProv) {
     </div>
     <div class="scfg-tabs" role="tablist" aria-label="站点配置分区">
       ${tab("sections", "01", "板块与知识库", "3 个入口", false)}
-      ${tab("models", "02", "模型与提示词", "6 个模型位", true)}
+      ${tab("models", "02", "模型与提示词", "8 个模型位", true)}
       ${tab("site", "03", "站点设置", "端口 · 语言 · 文案", false)}
     </div>
     <div class="scfg-panel" data-scfg-panel="sections" hidden>${secPanel}</div>
@@ -6595,13 +6631,54 @@ async function openSiteConfig(name) {
   const plans = (state.rolePlan && state.rolePlan.sites) || [];
   const plan = plans.find((p) => p.name === name) || null;
   const defProv = (state.rolePlan && state.rolePlan.default_provider) || "";
+  // 预问诊的模型不在实例 spec 里（配置是全局一份），单独取当前值来渲染那两个
+  // 下拉。取不到就照旧只显示「模型与提示词」入口——参数面板读不出来不该把
+  // 整个站点配置弹窗拦住。
+  let pv = null;
+  try { pv = await api("/api/previsit/config"); } catch (_) { pv = null; }
 
-  showModal(`站点 · ${name}`, siteGroups(i, state.modelMeta || [], plan, defProv),
+  showModal(`站点 · ${name}`, siteGroups(i, state.modelMeta || [], plan, defProv, pv),
     async () => {
       const payload = readSiteBlock($("modalBody"));
+      // 预问诊的两个模型位先摘出来：它们是 previsit 的全局覆盖层，不属于
+      // 这个站点的 spec，混在 PUT 里既存不进去也容易让人以为按站点分了。
+      const pvTr = payload.pv_role_translate;
+      const pvGen = payload.pv_role_generate;
+      delete payload.pv_role_translate;
+      delete payload.pv_role_generate;
+
       const r = await jsonSend("PUT", `/api/instances/${encodeURIComponent(name)}`, payload);
+
+      // 「后端::模型」拆成 previsit 配置认的 provider / model 两个键。
+      // 没有 `::` 时有两种可能：只选了后端（"local"），或者只写了模型名
+      // （previsit 的翻译模型就是后者，它按模型名路由）。靠后端清单区分，
+      // 否则会把模型名当后端名存进去——配置没报错，但路由头是错的。
+      const provs = (state.sites && state.sites.providers) || [];
+      const split = (v) => {
+        const s = String(v || "").trim();
+        const i = s.indexOf("::");
+        if (i >= 0) return [s.slice(0, i), s.slice(i + 2)];
+        return provs.includes(s) ? [s, ""] : ["", s];
+      };
+      let pvNote = "";
+      if (pvTr !== undefined || pvGen !== undefined) {
+        const values = {};
+        if (pvGen !== undefined) {
+          const [p, m] = split(pvGen);
+          values.provider = p;
+          values.model = m;
+        }
+        if (pvTr !== undefined) {
+          const [p, m] = split(pvTr);
+          values.translator_provider = p;
+          values.translator_model = m;
+        }
+        await jsonSend("PUT", "/api/previsit/config", { values });
+        pvNote = " · 预问诊模型已更新";
+      }
       await renderSites();
-      toast(r.restarted ? `${name} 已保存并重启` : `${name} 已保存 · 立即生效`);
+      toast(r.restarted ? `${name} 已保存并重启${pvNote}`
+                        : `${name} 已保存 · 立即生效${pvNote}`);
     }, { okLabel: "保存并生效", wide: true, cls: "site" });
 
   bindTrTest();
@@ -6801,10 +6878,13 @@ async function openPrevisitConfig() {
   };
 
   const rt = cfg.runtime || {};
+  // 这行只报"现在真在用什么"。槽位/图谱/召回那套早就删了，继续照旧显示
+  // 「图谱不可用 · 召回关闭」会把真正的故障点（维语翻译没接上）盖住。
   const rtLine = [
-    rt.llm ? "模型已接上" : "模型未接上（规则兜底）",
-    rt.kg ? "图谱可用" : "图谱不可用",
-    rt.retrieval ? `召回 ${esc(rt.retrieval_kind || "")}` : "召回关闭",
+    rt.llm ? `模型 ${esc(rt.model || "已接上")}` : "模型未接上",
+    rt.translator
+      ? `维语翻译 ${esc(rt.translator_model || "已接上")}`
+      : "维语翻译未接上（维语会话会报错，不会退回中文）",
   ].join(" · ");
   // 路径只显示文件名：绝对路径在这里会被弹窗右边裁掉，看起来像排版坏了。
   const file = String(cfg.overrides_path || "").split(/[\\/]/).pop();
@@ -6815,7 +6895,7 @@ async function openPrevisitConfig() {
       只记和 <code>previsit.yaml</code> 不一样的键，改回默认值那一行会自动消失。
       保存后立即生效——不重启、不打断正在进行的问诊。
     </p>
-    <div class="pv-rt">${esc(rtLine)}${rt.llm_error ? ` · 上次报错：${esc(rt.llm_error)}` : ""}</div>
+    <div class="pv-rt">${esc(rtLine)}${rt.llm_error ? ` · 上次报错：${esc(rt.llm_error)}` : ""}${rt.translator_error ? ` · 翻译报错：${esc(rt.translator_error)}` : ""}</div>
     <div class="pv-groups">${groups.map(groupHTML).join("")}</div>
     <div class="form-actions">
       <button class="mini" type="button" id="pvReset">全部恢复出厂值</button>

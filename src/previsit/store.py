@@ -40,6 +40,9 @@ CREATE TABLE IF NOT EXISTS turn (
   seq         INTEGER NOT NULL,
   role        TEXT NOT NULL,
   content     TEXT NOT NULL,
+  content_int TEXT NOT NULL DEFAULT '',
+  lang        TEXT NOT NULL DEFAULT '',
+  translated  INTEGER NOT NULL DEFAULT 1,
   created_at  REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_turn_session ON turn(session_id, seq);
@@ -65,6 +68,30 @@ _ADDED_COLUMNS = {
     # 存 JSON：归一后的标准症状、本地图谱锁定的候选病、科室投票、MedRAG
     # 命中的病种。都是"线索"不是"结论"，加字段不用迁移。
     "dx": "TEXT NOT NULL DEFAULT '{}'",
+    # content_int：每条 turn 额外存一份"模型内部语言"文本（目前只给维语会话用）。
+    # 维语走"本地 7B 用中文推理 + 外部模型翻译"的链路：7B 全程看中文，
+    # 所以内部上下文是中文；界面给患者看的 content 才是维吾尔语。加字段不用迁移。
+    # lang：会话创建时的界面语言（zh / ug / en）。reply 请求没带语言时以它为准——
+    # 前端被缓存住旧 JS、漏发 ui_lang 时，患者不该突然收到另一种语言。
+    "lang": "TEXT NOT NULL DEFAULT ''",
+    "content_int": "TEXT NOT NULL DEFAULT ''",
+}
+
+# turn 表后加的列（同上面的迁移逻辑，但作用在 turn 上）。
+_ADDED_TURN_COLUMNS = {
+    "content_int": "TEXT NOT NULL DEFAULT ''",
+    # lang：这一条正文是哪种语言（ug / zh / en）。问答板块每条回答都带
+    # `answer_lang`（前端 `rec.al`），渲染时据此打"某某语作答"的标记；
+    # 预问诊以前只有会话级的语言，切一次语言整场都错，这里改成逐条记录。
+    "lang": "TEXT NOT NULL DEFAULT ''",
+    # translated：目标语言是否真的译成了。0 = 正文是原文（中文），界面要挂
+    # 一条"翻译未完成"的提示——问答板块同一含义的字段叫 answer_translated。
+    "translated": "INTEGER NOT NULL DEFAULT 1",
+    # content_ug：这条 turn 的维吾尔语版本。谁生成的不重要——中文界面问出来的
+    # 回答，患者切到维语时要看得到维语；缺的由 `ChatEngine.localize()` 调一次
+    # 翻译补上并写回这里，只补一次。content_int 始终是中文那份，两者一起
+    # 构成"同一句话的两个语言版本"，切语言只换文本、不重开、不重新生成。
+    "content_ug": "TEXT NOT NULL DEFAULT ''",
 }
 
 
@@ -78,10 +105,15 @@ class Store:
 
     @staticmethod
     def _migrate(c: sqlite3.Connection) -> None:
-        have = {r["name"] for r in c.execute("PRAGMA table_info(session)")}
+        have_s = {r["name"] for r in c.execute("PRAGMA table_info(session)")}
         for col, decl in _ADDED_COLUMNS.items():
-            if col not in have:
+            if col not in have_s:
                 c.execute(f"ALTER TABLE session ADD COLUMN {col} {decl}")
+        # turn 表也要迁移：content_int 是后加的（维语会话存内部语言）。
+        have_t = {r["name"] for r in c.execute("PRAGMA table_info(turn)")}
+        for col, decl in _ADDED_TURN_COLUMNS.items():
+            if col not in have_t:
+                c.execute(f"ALTER TABLE turn ADD COLUMN {col} {decl}")
 
     def _conn(self) -> sqlite3.Connection:
         c = sqlite3.connect(self.path)
@@ -91,17 +123,17 @@ class Store:
     # ---------------------------------------------------------------- session
     def create(self, chief: str, empty_slots: dict[str, Any],
                profile: dict[str, Any] | None = None,
-               domain: str = "") -> str:
+               domain: str = "", lang: str = "") -> str:
         sid = uuid.uuid4().hex[:16]
         now = time.time()
         with self._conn() as c:
             c.execute(
-                "INSERT INTO session(id, created_at, updated_at, state, chief, slots, profile, domain)"
-                " VALUES(?,?,?,?,?,?,?,?)",
+                "INSERT INTO session(id, created_at, updated_at, state, chief, slots, profile, domain, lang)"
+                " VALUES(?,?,?,?,?,?,?,?,?)",
                 (sid, now, now, "intake", chief,
                  json.dumps(empty_slots, ensure_ascii=False),
                  json.dumps(profile or {}, ensure_ascii=False),
-                 domain or ""),
+                 domain or "", (lang or "").strip()),
             )
         return sid
 
@@ -111,7 +143,8 @@ class Store:
             if not row:
                 return None
             turns = c.execute(
-                "SELECT role, content, created_at FROM turn WHERE session_id=? ORDER BY seq",
+                "SELECT role, content, content_int, content_ug, lang, translated, created_at"
+                " FROM turn WHERE session_id=? ORDER BY seq",
                 (sid,),
             ).fetchall()
         out = dict(row)
@@ -124,8 +157,28 @@ class Store:
             out["record"] = json.loads(out.get("record") or "null")
         except json.JSONDecodeError:
             out["record"] = None
-        out["turns"] = [{"role": t["role"], "content": t["content"]} for t in turns]
+        out["turns"] = [{"role": t["role"], "content": t["content"],
+                         "content_int": t["content_int"] or t["content"],
+                         "content_ug": t["content_ug"] or "",
+                         "lang": t["lang"] or "",
+                         "translated": bool(t["translated"])}
+                        for t in turns]
         return out
+
+    def turns_raw(self, sid: str) -> list[dict[str, Any]]:
+        """带 id 的原始流水，只给"补译文"这条路用（要按 id 回填）。"""
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT id, role, content, content_int, content_ug FROM turn"
+                " WHERE session_id=? ORDER BY seq",
+                (sid,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def set_turn_ug(self, turn_id: int, text: str) -> None:
+        """把某条的维吾尔语版本写回去。翻译只做一次，下次切语言直接读。"""
+        with self._conn() as c:
+            c.execute("UPDATE turn SET content_ug=? WHERE id=?", (text or "", turn_id))
 
     def update(self, sid: str, **fields: Any) -> None:
         if not fields:
@@ -145,12 +198,19 @@ class Store:
             c.execute(f"UPDATE session SET {', '.join(cols)} WHERE id=?", vals)
 
     # ---------------------------------------------------------------- turn
-    def add_turn(self, sid: str, role: str, content: str) -> None:
+    def add_turn(self, sid: str, role: str, content: str,
+                 content_int: str = "", lang: str = "",
+                 translated: bool = True, content_ug: str = "") -> None:
+        # content：界面展示语言（维语会话里是维吾尔语）；content_int：喂给模型
+        # 的内部语言（维语链路里是中文，让本地 7B 在自己最强的语言上推理）；
+        # content_ug：维语版本（中文界面下先留空，切到维语时由 localize 补）。
         with self._conn() as c:
             n = c.execute(
                 "SELECT COALESCE(MAX(seq), 0) FROM turn WHERE session_id=?", (sid,)
             ).fetchone()[0]
             c.execute(
-                "INSERT INTO turn(session_id, seq, role, content, created_at) VALUES(?,?,?,?,?)",
-                (sid, int(n) + 1, role, content, time.time()),
+                "INSERT INTO turn(session_id, seq, role, content, content_int,"
+                " content_ug, lang, translated, created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+                (sid, int(n) + 1, role, content, content_int or "",
+                 content_ug or "", lang or "", 1 if translated else 0, time.time()),
             )

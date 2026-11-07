@@ -1,18 +1,18 @@
 """预问诊的 HTTP 入口（只有 API，没有页面）。
 
-预问诊的界面画在维医站点里（左侧第三个板块）：同一套引擎、同一个会话库，
-不另开一个页面、不另起一个端口。这个包只提供接口：
+预问诊的界面画在维医站点里（左侧第三个板块），这里只提供接口：
 
-    /api/previsit/meta      界面要的文案、槽位、域
+    /api/previsit/meta      界面要的文案
     /api/previsit/start     开一场问诊
     /api/previsit/reply     答一句
     /api/previsit/config*   参数面板（后台 /api/previsit/* 也调同一套函数）
 
 数据与依赖边界：
 
-- 知识面：config/previsit.yaml + config/previsit_kb.yaml + data/previsit/kg.db；
+- 配置：config/previsit.yaml（文案 + 模型参数 + 一段提示词）；
 - 会话数据：`$PREVISIT_DATA_DIR/previsit.db`；
-- 模型：由主项目注入（跟随后台当前后端）；没接上就纯规则 + 知识库跑完全程。
+- 模型：由主项目注入（跟随后台当前后端）。这是**硬依赖**——壳子没有规则
+  兜底，模型接不上就如实报错，不编一句话糊过去。
 """
 
 from __future__ import annotations
@@ -25,9 +25,10 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from . import settings as settings_mod
+from .chat import ChatEngine, ChatError
 from .config import ROOT, load_previsit
-from .engine import PrevisitEngine
-from .llm import GatewayLLM, OpenAICompatLLM, build_llm
+from .llm import (GatewayLLM, OpenAICompatLLM, TranslatorChain, build_llm,
+                  gateway_url)
 from .store import Store
 
 
@@ -41,7 +42,7 @@ def data_dir() -> Path:
     return p
 
 
-_engine: PrevisitEngine | None = None
+_engine: ChatEngine | None = None
 _store: Store | None = None
 
 # 模型后端清单的来源。主项目挂载时会把自己的注册表交进来（那时才有
@@ -53,11 +54,7 @@ _LLM_FACTORY: Any = None
 
 
 def set_model_catalog(fn: Any) -> None:
-    """主项目把"有哪些后端和模型"这件事交给预问诊的参数面板。
-
-    签名：`fn() -> {"source": ..., "providers": [{"name","label","model",
-    "models":[...], "local", "ready"}]}`。不注册就只有文件里那点信息。
-    """
+    """主项目把"有哪些后端和模型"这件事交给预问诊的参数面板。"""
     global _MODEL_CATALOG
     _MODEL_CATALOG = fn
 
@@ -88,34 +85,64 @@ def model_catalog() -> dict:
     return settings_mod.catalog_from_file()
 
 
-def get_engine() -> PrevisitEngine:
-    """进程级单例。
-
-    被主项目 mount 时，同一进程里只建一次：两份配置、两个 Store 句柄会出现
-    "配置明明改了、一边生效一边不生效"的排查陷阱。
-    """
+def get_engine() -> ChatEngine:
+    """进程级单例：两份配置、两个 Store 句柄会出现"改了不生效"的排查陷阱。"""
     global _engine, _store
     if _engine is None:
         pv = load_previsit()
         _store = Store(data_dir() / "previsit.db")
-        _engine = PrevisitEngine(pv, _store, build_llm_for(pv))
+        main_llm = build_llm_for(pv)
+        # 维语翻译模型：复用主链路的网关地址（保证可达），但强制用强模型翻译
+        # —— 本地 7B 扛不了维语，必须走网关上的强模型（实测 DeepSeek-V4 中英↔维语
+        # 干净）。装配失败不影响起站：工厂留在引擎上，第一次 ug 请求前会再试一次。
+        _engine = ChatEngine(pv, _store, main_llm,
+                             translator=build_translator(pv, main_llm),
+                             translator_factory=build_translator)
     return _engine
+
+
+def build_translator(pv: dict[str, Any], main_llm: Any) -> Any:
+    """维语翻译客户端链：和主问答共用网关地址（可达性有保证），但模型显式指定
+    为强模型——本地 7B 做不了维语翻译，若用网关默认模型（很可能就是那台 7B）会
+    退回中文。
+
+    模型来源优先级：参数面板/覆盖层 > 环境变量 > 内置默认。
+    链的顺序：配置的模型 → 网关当前默认模型。第二条不是摆设：配置里那个模型
+    被下线/限流时，网关默认模型往往还能翻，比直接报错强。
+    `retry_after=0` 是有意的：默认那 20 秒熔断窗口是为主问诊设计的（别每轮都
+    白等一次超时），翻译链不行——它失败一次的代价是患者这一轮直接看不到回答，
+    下一句必须重新试。"""
+    base = getattr(main_llm, "base_url", "") or gateway_url(pv)
+    if not base:
+        return None
+    provider = str(pv.get("translator_provider") or "").strip()
+    model = (str(pv.get("translator_model") or "").strip()
+             or os.environ.get("PREVISIT_TRANSLATOR_MODEL")
+             or "deepseek-ai/DeepSeek-V4.1-Flash")
+    try:
+        clients = [GatewayLLM(base, provider=provider, model=model,
+                              timeout_s=20.0, retry_after=0.0)]
+        if model:                          # 兜底：让网关挑它当前的默认模型
+            clients.append(GatewayLLM(base, provider=provider, model="",
+                                      timeout_s=20.0, retry_after=0.0))
+        return TranslatorChain(clients)
+    except Exception:                          # 网关不在就别让站点起不来
+        return None
 
 
 def reload_engine() -> dict:
     """把磁盘上的配置重新灌进引擎（参数面板保存后调用）。
 
-    不重建引擎：会话池、线程池、熔断计时器都在引擎里，换掉对象等于把正在
-    等模型的那一轮凭空掐掉。这里只换配置派生出来的部件——模型客户端按新
-    的 provider/model 重定向，图谱连接和检索器在 `apply_config` 里重建。
+    不重建引擎：会话流水在 Store 里，换对象等于把正在等模型的那一轮掐掉。
+    这里只换配置和模型客户端（端点 / 模型 / 密钥都可能被面板改掉）。
     """
     eng = get_engine()
     pv = load_previsit()
     eng.apply_config(pv)
-    # 端点 / 模型 / 网关地址都可能被面板改掉，统一按新配置重建模型客户端。
-    # 引擎本身不换：会话池、线程池、熔断计时器都挂在它身上，换掉等于把
-    # 正在等模型的那一轮凭空掐掉。
     eng.llm = build_llm_for(pv)
+    # 翻译客户端也必须跟着重建：它粘的是主模型的网关地址，面板一改端点，
+    # 旧 translator 会继续往老地址发请求，维语会话静默退回中文。
+    eng.set_translator(build_translator(pv, eng.llm))
     return pv
 
 
@@ -126,50 +153,38 @@ def get_store() -> Store:
 
 
 class StartReq(BaseModel):
-    # 主诉可以空着：表单上那个必填文本域已经去掉了，哪里不舒服由第一句追问
-    # 来问，患者开口的第一句话会被落成主诉（engine.reply 里做）。
+    # 主诉可以空着：哪里不舒服由模型第一句来问；患者直接开口的第一句话
+    # 就是主诉（当作他说的第一句）。
     complaint: str = Field(default="", max_length=2000)
-    # 基本信息表单。字段由 config/previsit.yaml 的 profile_fields 定义，
-    # 这里收成自由 dict 再白名单过滤——schema 是配置驱动的，写死成模型字段
-    # 就等于"加一个表单项要改代码"。
-    profile: dict[str, Any] | None = None
+    # 作答语言（界面语言）。预问诊不检索资料，答案直接按界面语言给；
+    # 不传就按中文默认。后端据此选整段提示词的语言。
+    ui_lang: str = Field(default="", max_length=8)
 
 
 class ReplyReq(BaseModel):
     session_id: str = Field(min_length=1, max_length=64)
     message: str = Field(min_length=1, max_length=2000)
+    ui_lang: str = Field(default="", max_length=8)
+
+
+class LocalizeReq(BaseModel):
+    """把已有流水补成某种语言（目前只补维吾尔语）。"""
+    session_id: str = Field(min_length=1, max_length=64)
+    ui_lang: str = Field(default="", max_length=8)
 
 
 class ConfigReq(BaseModel):
-    # {字段路径: 值}，路径形如 "max_turns" / "retrieval.top_k"。
+    # {字段路径: 值}，路径形如 "max_tokens" / "prompts.chat"。
     # 只认 settings.FIELDS 里声明过的键，其余静默丢弃——面板是白名单。
     values: dict[str, Any] = Field(default_factory=dict)
 
 
-class ProfileReq(BaseModel):
-    # 中途补填基本信息：整份表单回传，空值表示删掉该项。
-    profile: dict[str, Any] = Field(default_factory=dict)
-
-
-class SupplementReq(BaseModel):
-    session_id: str = Field(min_length=1, max_length=64)
-    message: str = Field(min_length=1, max_length=2000)
-
-
-class RecordEditReq(BaseModel):
-    # 患者在结果页手改过的病历全文。只改这一栏，结构化 sections 仍是原始事实。
-    text: str = Field(min_length=1, max_length=20000)
-
-
-def _runtime(eng: PrevisitEngine) -> dict:
-    """参数面板顶部那行"现在实际在用什么"。
-
-    配置写的是"想要什么"，这里报的是"真的接上了什么"：模型客户端建没建成、
-    图谱库开没打开、检索走的是进程内还是 HTTP。两行对不上时，问题就在这一行。
-    """
-    retriever = getattr(eng, "retriever", None)
+def _runtime(eng: ChatEngine) -> dict:
+    """参数面板顶部那行"现在实际在用什么"：配置写的是想要什么，这里报真的。"""
     llm = eng.llm
     gw = isinstance(llm, GatewayLLM)
+    tr = eng.translator
+    chain = tr.models() if isinstance(tr, TranslatorChain) else []
     return {
         "provider": eng.provider or "",
         "model": eng.model or "",
@@ -178,25 +193,25 @@ def _runtime(eng: PrevisitEngine) -> dict:
         "llm_source": (getattr(llm, "source", "") if gw else ("direct" if llm else "none")),
         "llm_gateway": llm.base_url if gw else "",
         "llm_gateway_error": llm.last_error if gw else "",
+        # 维语翻译模型（外部）。base/model 都对得上才说明翻译链路通了；
+        # error 不为空就是"维语会话会报错"的现场证据（以前静默退回中文，
+        # 面板上看不出任何异常）。
+        "translator": bool(tr),
+        "translator_base": getattr(tr, "base_url", "") if tr else "",
+        "translator_model": (getattr(tr, "_model", "")
+                             or getattr(tr, "model", "") or "") if tr else "",
+        "translator_chain": chain,
+        "translator_error": eng.translator_error,
         "temperature": eng.pv.get("temperature"),
         "max_tokens": eng.pv.get("max_tokens"),
         "timeout_s": eng.timeout_s,
-        "max_turns": eng.pv.get("max_turns"),
         "llm": bool(eng.llm),
         "llm_error": eng.last_error,
-        "kg": bool(getattr(getattr(eng, "kg", None), "ok", False)),
-        "kg_error": getattr(getattr(eng, "kg", None), "error", None),
-        "retrieval": bool(getattr(retriever, "ok", False)) if retriever else False,
-        "retrieval_kind": type(retriever).__name__ if retriever else "",
-        "domains": len(eng.domains),
-        "slots": len(eng.slots),
     }
 
 
 # ---------------------------------------------------------------- 参数面板（函数层）
 # 这三个函数是"参数面板"的唯一实现，HTTP 路由和后台 /api/previsit/* 都调它们。
-# 以前只有路由，后台要读参数就得先 mount 一个 /previsit 才能反向调自己的接口——
-# 为了一个弹窗把整个站点挂上去，才逼出"预问诊像个独立站点"那套结构。
 def describe_config() -> dict:
     data = settings_mod.describe(model_catalog())
     data["runtime"] = _runtime(get_engine())
@@ -221,21 +236,25 @@ def reset_config() -> dict:
     return data
 
 
-def create_app(engine: PrevisitEngine | None = None) -> FastAPI:
+def create_app(engine: ChatEngine | None = None) -> FastAPI:
     """engine 可注入：挂进主项目时传入（用主项目的 LLM 后端和密钥体系）。
 
-    这里只有 API —— 预问诊的界面画在维医站点里（第三个板块），没有自己的
-    页面。以前那个独立页面/独立部署已经删掉了：同一件事两套壳，两边都得改。
-    """
+    宿主注入引擎会跳过 get_engine() 里的翻译装配，所以这里补一刀：注入的引擎
+    若没挂维语翻译模型，就地给它装上（否则 ug 会话拿不到翻译，退回中文）。"""
     if engine is not None:
         global _engine, _store
         _engine = engine
         _store = engine.store
+        # 宿主注入的引擎是裸的（build_engine 只给了 pv/store/llm）。这里补两刀：
+        # 先挂工厂（缺了能自愈），再当场装一个（面板的「运行时」要能立刻看到）。
+        engine.translator_factory = build_translator
+        if not getattr(engine, "translator", None):
+            engine.set_translator(build_translator(engine.pv, engine.llm))
     eng = get_engine()
     store = get_store()
     pv = eng.pv
 
-    app = FastAPI(title="预问诊", version="0.3.0")
+    app = FastAPI(title="预问诊", version="0.4.0")
 
     @app.get("/api/previsit/meta")
     def meta() -> dict:
@@ -246,17 +265,10 @@ def create_app(engine: PrevisitEngine | None = None) -> FastAPI:
             "welcome": pv.get("welcome"),
             "disclaimer": pv.get("disclaimer"),
             "placeholder": pv.get("placeholder"),
-            # 适配器（主项目）没有 provider 属性，这里要能退到配置里的名字，
-            # 否则主项目挂载时整页 meta 会 500——患者看到的是"连不上服务"。
+            # 适配器（主项目）没有 provider 属性，退到配置里的名字，否则整页
+            # meta 会 500——患者看到的是"连不上服务"。
             "provider": (getattr(eng.llm, "provider", None)
                          or eng.provider or None),
-            # 空态不列槽位：还没说主诉，系统并不知道要问什么——硬列一套
-            # 腹痛的槽位只会让咳嗽的人以为被问错了。开诊后由 start 返回真槽位。
-            "slots": [],
-            "domains": [{"key": d["key"], "label": d["label"]} for d in eng.domains],
-            "profile_fields": pv.get("profile_fields") or [],
-            "record_title": (pv.get("record") or {}).get("title"),
-            "record_note": (pv.get("record") or {}).get("note"),
         }
 
     @app.get("/api/previsit/health")
@@ -269,9 +281,6 @@ def create_app(engine: PrevisitEngine | None = None) -> FastAPI:
         }
 
     # ------------------------------------------------------------ 参数面板
-    # 改的是 config/previsit.overrides.yaml（只记和 previsit.yaml 不一样的键），
-    # 保存后让新参数立即生效——不重启进程、不打断会话。逻辑在模块级
-    # describe_config / save_config / reset_config，后台也调那几个。
     @app.get("/api/previsit/config")
     def get_config() -> dict:
         return describe_config()
@@ -289,19 +298,33 @@ def create_app(engine: PrevisitEngine | None = None) -> FastAPI:
 
     @app.post("/api/previsit/start")
     def start(req: StartReq) -> dict:
-        # 参数面板上的总开关。页面照常打开（患者能看到说明），但不让开新问诊——
-        # 关掉一个入口却还能继续挂新会话，那不叫关闭。
+        # 参数面板上的总开关。关掉之后不让开新会话——入口还在，但点了会说
+        # 明没开放，而不是让患者对着空白页猜。
         if not eng.pv.get("enabled", True):
             raise HTTPException(403, "预问诊当前未开放，请到人工分诊台就诊")
-        complaint = req.complaint.strip()
-        # 空主诉是正常入参（表单上不再收这一项），engine 会开一个"等患者开口"
-        # 的空会话，而不是让入口直接 400。
-        return eng.start(complaint, req.profile)
+        try:
+            return eng.start(req.complaint.strip(), lang=req.ui_lang or None)
+        except ChatError as exc:
+            raise HTTPException(503, str(exc)) from None
 
     @app.post("/api/previsit/reply")
     def reply(req: ReplyReq) -> dict:
         try:
-            return eng.reply(req.session_id, req.message.strip())
+            return eng.reply(req.session_id, req.message.strip(), lang=req.ui_lang or None)
+        except KeyError:
+            raise HTTPException(404, "会话不存在或已过期，请点「重新开始」") from None
+        except ChatError as exc:
+            raise HTTPException(503, str(exc)) from None
+
+    @app.post("/api/previsit/localize")
+    def localize(req: LocalizeReq) -> dict:
+        """切到某种语言时，把还没有该语言版本的答复翻过去。
+
+        和 `/api/ask` 同一件事的另一种时机：那边是"生成时就产出目标语言"，
+        这边是"切过来时才补翻译"——因为预问诊一场会话会被反复来回切，
+        提前翻全部是浪费，切到哪补到哪、补完写库，只花一次。"""
+        try:
+            return eng.localize(req.session_id, lang=req.ui_lang or None)
         except KeyError:
             raise HTTPException(404, "会话不存在或已过期，请点「重新开始」") from None
 
@@ -311,47 +334,6 @@ def create_app(engine: PrevisitEngine | None = None) -> FastAPI:
         if not sess:
             raise HTTPException(404, "会话不存在")
         return eng.view(sess)
-
-    @app.get("/api/previsit/record/{sid}")
-    def record(sid: str) -> dict:
-        """单独取病历：给"复制/下载"用，也方便别处（HIS、导诊台）按 id 拉。"""
-        sess = store.get(sid)
-        if not sess:
-            raise HTTPException(404, "会话不存在")
-        rec = sess.get("record")
-        if not rec:
-            raise HTTPException(409, "问诊尚未结束，病历还没生成")
-        return rec
-
-    @app.patch("/api/previsit/profile/{sid}")
-    def patch_profile(sid: str, req: ProfileReq) -> dict:
-        """首屏跳过表单后，患者在对话里随时补填 / 修改基本信息。"""
-        try:
-            return eng.set_profile(sid, req.profile)
-        except KeyError:
-            raise HTTPException(404, "会话不存在") from None
-
-    @app.post("/api/previsit/supplement")
-    def supplement(req: SupplementReq) -> dict:
-        """结束后又想起一件事：重新抽取、重新生成病历，不新开会话。"""
-        try:
-            return eng.supplement(req.session_id, req.message.strip())
-        except KeyError:
-            raise HTTPException(404, "会话不存在") from None
-        except PermissionError as exc:
-            raise HTTPException(409, str(exc)) from None
-
-    @app.patch("/api/previsit/record/{sid}")
-    def patch_record(sid: str, req: RecordEditReq) -> dict:
-        """保存结果页上的手改病历。只改展示用全文，不动结构化分区。"""
-        sess = store.get(sid)
-        if not sess:
-            raise HTTPException(404, "会话不存在")
-        rec = sess.get("record")
-        if not isinstance(rec, dict):
-            raise HTTPException(409, "问诊尚未结束，病历还没生成")
-        store.update(sid, record={**rec, "text": req.text, "edited": True})
-        return eng.view(store.get(sid))
 
     return app
 
@@ -364,5 +346,4 @@ def _count_sessions(store: Store) -> int:
         return 0
 
 # 不再有模块级 `app = create_app()`：预问诊没有自己的进程，app 只由调用方
-# 按需创建（站点 build_site 里 mount、后台侧只取参数面板那几个函数）。留着
-# 它会让"import 这个模块"顺手建一个引擎——那是一份和站点互不相同的配置快照。
+# 按需创建（站点 build_site 里 mount、后台侧只取参数面板那几个函数）。

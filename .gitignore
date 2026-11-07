@@ -18,6 +18,8 @@ data/
 _shot/
 _shot_*.png
 .wbapp_*.genie
+# 本地起服务时重定向的控制台日志（重启前那份会被覆盖，没有留存价值）
+_serve.log
 
 # A/B 打分台的结果与会话（含模型原文和评分，本地产物）
 evals/runs/

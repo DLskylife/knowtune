@@ -24,19 +24,6 @@ from .store import Store
 from previsit.llm import GatewayLLM
 
 
-_KB_SEARCH = None
-
-
-def set_kb_search(fn) -> None:
-    """主服务把"进程内查库"这个函数交给预问诊（省掉一次 HTTP 往返）。
-
-    签名：`fn(question: str, top_k: int) -> list[dict]`，dict 里带
-    doc_title / heading_path / text / score。不注册就走 HTTP 那条路。
-    """
-    global _KB_SEARCH
-    _KB_SEARCH = fn
-
-
 def model_catalog() -> dict:
     """把主项目的后端注册表交给预问诊的参数面板。
 
@@ -87,23 +74,20 @@ def _main_llm_factory(pv: dict) -> object:
 
 
 def build_engine() -> PrevisitEngine:
-    """主项目侧的引擎装配。api/app.py、frontsite/site.py 共用这一个入口。"""
+    """主项目侧的引擎装配。api/app.py、frontsite/site.py 共用这一个入口。
+
+    translator_factory 必须一起给：任何一个"只给了 pv/store/llm 的引擎"都是一颗
+    定时炸弹——它照样能开诊、能问问题，只有在维语会话里才会表现成"回中文"，
+    而且只在某些装配顺序下发生。工厂挂在引擎上，缺了会在下一个 ug 请求前自愈。
+    """
+    from previsit.app import build_translator
+
     cfg = load_config()
     pv = load_previsit()
     secrets_mod.attach(cfg.storage.data_dir)
     store = Store(cfg.storage.data_dir / "previsit.db")
     llm = _main_llm_factory(pv)
-    eng = PrevisitEngine(pv, store, llm)
-    ret = pv.get("retrieval") or {}
-    if _KB_SEARCH is not None and isinstance(ret, dict) and ret.get("enabled"):
-        from previsit.retriever import InProcessRetriever
-
-        eng.retriever = InProcessRetriever(
-            _KB_SEARCH,
-            top_k=int(ret.get("top_k") or 8),
-            max_per_doc=int(ret.get("max_per_doc") or 2),
-        )
-    return eng
+    return PrevisitEngine(pv, store, llm, translator_factory=build_translator)
 
 
 def _bind_main() -> None:
