@@ -352,7 +352,7 @@ footer{
 <tr><td class="c">3.1</td><td class="w">稠密向量检索</td><td class="d">bge-small-zh-v1.5，numpy 暴力点积，61 chunk 实测 17–36ms</td><td class="r c-req">F2.1</td><td class="s"><span class="b-ok">已交付</span></td></tr>
 <tr><td class="c">3.2</td><td class="w">jieba ＋ FTS5 稀疏路</td><td class="d">预分词后写入；实测 trigram 对 2 字查询命中为 0，故弃用默认分词器</td><td class="r c-req">F2.2</td><td class="s"><span class="b-ok">已交付</span></td></tr>
 <tr><td class="c">3.3</td><td class="w">归一化加权融合</td><td class="d">0.50 稠密 ＋ 0.35 稀疏，归一化后加权（RRF 在长尾上拖后腿，已替换）</td><td class="r c-req">F2.3</td><td class="s"><span class="b-ok">已交付</span></td></tr>
-<tr><td class="c">3.4</td><td class="w">精排与降级</td><td class="d">CrossEncoder 路径完整（超时降级／失败缓存），模型未下载 → rerank_unavailable</td><td class="r c-req">F2.4</td><td class="s"><span class="b-warn">有限制</span></td></tr>
+<tr><td class="c">3.4</td><td class="w">精排与降级</td><td class="d">精排已开启（1.1 GB 权重就位，三库 enabled=true）；8 秒超时／加载失败降级，4096 条逐对 LRU 打分缓存已实现；仅权重目录缺失时报 rerank_model_missing</td><td class="r c-req">F2.4</td><td class="s"><span class="b-warn">有限制</span></td></tr>
 <tr><td class="c">3.5</td><td class="w">元数据过滤 ＋ MMR</td><td class="d">source_types／时间范围／doc_ids，两路同一组条件；MMR 默认关闭</td><td class="r c-req">F2.6 / F2.7</td><td class="s"><span class="b-ok">已交付</span></td></tr>
 <tr><td class="c">3.6</td><td class="w">检索调试端点</td><td class="d">/api/search/debug：dense／sparse／融合／耗时／降级／拒答判定</td><td class="r c-req">F2.8</td><td class="s"><span class="b-ok">已交付</span></td></tr>
 </tbody></table></div></details>
@@ -362,7 +362,7 @@ footer{
 <tr><td class="c">4.1</td><td class="w">上下文装填预算</td><td class="d">按相关度排序 ＋ token 预算裁剪，记录 context_used／dropped</td><td class="r c-req">F3.1</td><td class="s"><span class="b-ok">已交付</span></td></tr>
 <tr><td class="c">4.2</td><td class="w">强制引用与校验</td><td class="d">cite.py：引用编号可点回查；覆盖率与越界编号检测</td><td class="r c-req">F3.2</td><td class="s"><span class="b-ok">已交付</span></td></tr>
 <tr><td class="c">4.3</td><td class="w">检索证据分档</td><td class="d">evidence.py：high／medium／low 随 prompt 下发，让模型知道自己站在什么地上</td><td class="r c-req">12.28</td><td class="s"><span class="b-ok">已交付</span></td></tr>
-<tr><td class="c">4.4</td><td class="w">拒答双条件与标定</td><td class="d">绝对阈值 0.54 ＋ 分布区分度；误拒 0%，但阈值分不开「相似但无答案」</td><td class="r c-req">F3.3</td><td class="s"><span class="b-warn">有限制</span></td></tr>
+<tr><td class="c">4.4</td><td class="w">拒答双条件与标定</td><td class="d">绝对阈值 0.54（交付时值）＋ 分布区分度；现行维医库标定 0.581 / AUC 1.0，古籍与临床药理库尚未标定（2026-11-07 注）</td><td class="r c-req">F3.3</td><td class="s"><span class="b-warn">有限制</span></td></tr>
 <tr><td class="c">4.5</td><td class="w">SSE 流式四事件</td><td class="d">meta／delta／done／error，先推 citations 骨架再出字</td><td class="r c-req">F3.4</td><td class="s"><span class="b-ok">已交付</span></td></tr>
 <tr><td class="c">4.6</td><td class="w">多后端接入</td><td class="d">mock／ollama／vllm／openai／deepseek／bailian；参数不兼容退让、代理直连</td><td class="r c-req">F3.5</td><td class="s"><span class="b-ok">已交付</span></td></tr>
 </tbody></table></div></details>
@@ -413,7 +413,7 @@ footer{
 <tr><td class="c">F4.4</td><td class="w">历史检索</td><td class="d">未实现</td><td><span class="tag">会话</span></td><td class="impact">只能按会话翻，不能跨会话搜「我以前问过什么」</td></tr>
 <tr><td class="c">F5.3</td><td class="w">生成忠实度：事实层判不准</td><td class="d">答案支撑度已落地（support.evaluate：逐句窗口最大余弦 + 句级事实锚点否决，随每次问答运行）；仍未接 LLM 逐句判据</td><td><span class="tag">评估</span></td><td class="impact">判「有没有依据」AUC 0.992；判「事实对不对」AUC 0.514（同块改 300ml→700ml 余弦不动），靠锚点兜住 84% 篡改，句级半真半假抓不出</td></tr>
 <tr><td class="c">F2.4</td><td class="w">精排：延迟与语料适配</td><td class="d">模型 1.1 GB 已就位，全局与三个知识库的 retrieval.rerank.enabled 均为 true，精排已开启；仍有 8 秒超时降级与失败缓存</td><td><span class="tag">检索</span></td><td class="impact">R@5 79.2%→83.3% 要付 19ms→7.5s；候选池缩到 12 条时反跌到 75%（该模型对「白话问、文言答」判定不稳）</td></tr>
-<tr><td class="c">F3.3</td><td class="w">拒答方法边界</td><td class="d">现行标定：AUC 0.959、阈值 0.692、误拒 4.9%、漏拒 23%（61 组留一法正负例）；只能当第一道筛子</td><td><span class="tag">生成</span></td><td class="impact">分数阈值在语义上分不开「相似但没答案」，且口语问法（不带文档核心名）分数更低易误拒；需换判据而非调参，真正拦截在生成后的支撑度</td></tr>
+<tr><td class="c">F3.3</td><td class="w">拒答方法边界</td><td class="d">现行标定（`data/calibration/kb_2.json`，2026-11-06）：AUC 1.0、阈值 0.581、52 组样本、误拒/漏拒均为 0，仅维医库有文件；上一轮留一法 0.692 / AUC 0.959 / 漏拒 23% 已不生效。只能当第一道筛子</td><td><span class="tag">生成</span></td><td class="impact">分数阈值在语义上分不开「相似但没答案」，且口语问法（不带文档核心名）分数更低易误拒；样本量小有乐观偏差，换语料必须重标。需换判据而非调参，真正拦截在生成后的支撑度；古籍库与临床药理库尚未标定</td></tr>
 <tr><td class="c">F1.2</td><td class="w">sitemap 整站抓取</td><td class="d">单条＋批量 ≤50 已通，整站未做</td><td><span class="tag">导入</span></td><td class="impact">整站迁移知识库要手工分批</td></tr>
 <tr><td class="c">F1.3</td><td class="w">.gitignore 解析</td><td class="d">只有扩展名白名单兜底</td><td><span class="tag">导入</span></td><td class="impact">导代码仓库会带进一堆噪音文件</td></tr>
 <tr><td class="c">—</td><td class="w">前台历史只存本地</td><td class="d">后台有 /api/sessions/{id}/messages 且后台前端在用；前台没接</td><td><span class="tag">会话</span></td><td class="impact">换设备／清缓存后前台历史全丢，服务端其实有数据却用不上</td></tr>
@@ -434,8 +434,8 @@ footer{
 <section><h2><span class="num">05</span>风险清单</h2>
 <p class="sub">只留会真的咬人的。已经发生过的标为高——概率不再是估计，是记录。</p>
 <div class="gap-tb risk"><div class="tb-wrap" style="padding-top:18px"><table><thead><tr><th>风险</th><th style="width:10%">概率</th><th>缓解</th></tr></thead><tbody>
-<tr><td class="w">CPU 精排把 P95 拖到 5s+</td><td class="imp high">高</td><td class="d">默认 base 档＋候选降到 10＋可关闭；当前直接降级</td></tr>
-<tr><td class="w">拒答阈值未标定导致误拒</td><td class="imp high">高</td><td class="d">S5 已标定 0.54，未标定时界面明示</td></tr>
+<tr><td class="w">CPU 精排把 P95 拖到 5s+</td><td class="imp high">高</td><td class="d">默认 base 档＋候选降到 10＋可关闭；精排现已开启，仅 8 秒超时／权重缺失时降级</td></tr>
+<tr><td class="w">拒答阈值未标定导致误拒</td><td class="imp high">高</td><td class="d">交付时 S5 标定 0.54；现行维医库 0.581 / AUC 1.0，另两库尚未标定，界面明示</td></tr>
 <tr><td class="w">评估集随分块策略失效</td><td class="imp mid">中</td><td class="d">expected 用文档级＋关键词柔性匹配，不用 chunk_id</td></tr>
 <tr><td class="w">PDF 抽取质量差（双栏／表格）</td><td class="imp high">高</td><td class="d">抽取器可替换＋导入后强制人工预览（2.6）</td></tr>
 <tr><td class="w">jieba 切碎专有名词</td><td class="imp mid">中</td><td class="d">用户词典＋自动沉淀术语</td></tr>

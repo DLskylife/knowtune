@@ -129,7 +129,7 @@ cli.py  ← 命令行
 | 文件 | 职责 |
 |---|---|
 | `engine.py` | 主链路：双路召回 → 加权 RRF 融合 → 精排 → MMR → 拒答判定。**每一段都可以失败，失败后必须降级并打标**，不能静默返回空结果。 |
-| `rerank.py` | 精排（CrossEncoder）与 MMR 去冗余。模型没下载时自动降级，并把 `rerank_unavailable` 写进响应。 |
+| `rerank.py` | 精排（CrossEncoder）与 MMR 去冗余。权重目录缺失时降级并打 `degraded=rerank_model_missing`，加载异常打 `rerank_unavailable`；按 (模型, 问题摘要, 片段摘要) 的 4096 条逐对 LRU 打分缓存已实现（进程内，重启即空）。 |
 
 ### 4.7 `src/knowtune/generate/` 生成链路
 
@@ -168,7 +168,7 @@ cli.py  ← 命令行
 |---|---|
 | `library.db` | 全部数据：知识库、文档、chunk、向量、FTS 索引、会话、消息、请求日志、反馈。**这是唯一需要备份的东西。** |
 | `uploads/` | 导入文件的原始副本，用于「回查原文」与重建索引。 |
-| `models/` | 本地模型权重（嵌入 92M，精排可选）。 |
+| `models/` | 本地模型权重（嵌入 92 MB、精排 1.1 GB）。精排是必需资产：`allow_download: false`，缺失只降级、不联网补下，下载路径见 RUNBOOK §2。 |
 | `vectors/` | 预留的向量落盘目录，当前向量直接存在 SQLite 里。 |
 | `secrets.json` | 会话密钥（服务停止即失效）。 |
 | `refusal_calibration.json` | **旧格式**的全局标定结果（仅 22 条样本、`reliable:false`，已不生效）。新标定按库分文件，见下一条。 |

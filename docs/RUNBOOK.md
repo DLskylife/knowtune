@@ -189,7 +189,7 @@ knowtune serve --port 8013
 
 端口都是可配的：后台由 `--port` 决定，前台由 `instances.yaml` 的 `port` 决定。README 与其他文档里出现的 `8000` / `8765` 只是不同时期的示例值，含义相同，不必照抄。
 
-**冷启要等**：嵌入模型加载实测 93 秒（16 核），期间 `embedder.available=false`，检索只有 BM25 一路。看 `GET /api/status` 的 `warmup.state` 变成 `ready` 再提问；前台已用流式光标与计时兜住这段静默，不代表卡死。
+**冷启要等**：嵌入模型加载实测 **43–93 秒**（16 核；冷盘首次约 93 s，OS 文件缓存热时 43 s），期间 `embedder.available=false`，检索只有 BM25 一路。看 `GET /api/status` 的 `warmup.state` 变成 `ready` 再提问；前台已用流式光标与计时兜住这段静默，不代表卡死。
 
 **安全边界**：服务默认只监听 `127.0.0.1`，且**后台没有任何入站鉴权**。要开局域网得显式 `knowtune serve --host 0.0.0.0`，别在不可信网络里这么干，更别直接暴露公网。
 
@@ -237,6 +237,13 @@ curl -s -N -X POST http://127.0.0.1:8800/api/ask \
 
 通过标准：`warmup.state=ready`；库里有 `ready` 文档；`/api/info` 的文档数不为 0；答案带 `[n]` 且能点开原文；检索日志里没有 `degraded=rerank_model_missing`（说明精排模型路径对了）；三个板块切换后标题与内容各自变化。
 
+**状态栏四个容易看错的口径**（2026-11-07 实测）：
+
+- `GET /api/status` **不带 `kb_id`** 报的是全局出厂配置：拒答 `min_score=0.35`、`mode=advisory`、提示「全局标定样本不足」。**这不是标定失效**——标定是按库存的，首页看的是全局。
+- 带 `?kb_id=2` 才看得到维医库的现行标定：`min_score=0.581`、`auc=1.0`、`mode=calibrated`、`calibrated_at=2026-11-06T09:01:29Z`（`data/calibration/kb_2.json`，52 组样本）。`?kb_id=3` / `?kb_id=4` 返回 0.35 与「本库尚未标定」：古籍库和临床药理库确实没有标定文件，需要时用已迁出的 `model-eval/calibrate.py` 重跑再放回 `data/calibration/`。
+- 精排看 `rerank.enabled=true`（三个库的 `retrieval.rerank.enabled` 均为 true），且检索日志里没有 `degraded=rerank_model_missing` / `rerank_timeout`，才算真的在跑。
+- `config/previsit.yaml` 里的 `retrieval.url: http://127.0.0.1:8000` **只在预问诊独立部署时生效**。主服务挂载时注入的是 `InProcessRetriever`（进程内查库，不看这个地址）；预问诊的 LLM 网关由主服务启动时按实际 `--port` 写入 `KNOWTUNE_GATEWAY`。所以按 §5 用 8013 启动不会踩 8000 的坑，别为了「对齐端口」去改这一行。
+
 ---
 
 ## 10. 常见故障对照
@@ -252,7 +259,8 @@ curl -s -N -X POST http://127.0.0.1:8800/api/ask \
 | 本地服务明明起着却探测超时 | `httpx` 读了 `HTTP_PROXY`，把 `127.0.0.1` 也送进代理 | 代码里已对 loopback 关掉 `trust_env`；若自己写客户端，同样设 `NO_PROXY=127.0.0.1,localhost` |
 | 换机器后已保存的密钥失效 | DPAPI 密文绑账户+本机 | 界面重填，或改走 `api_key_env` 环境变量 |
 | 8800 端口被占 | 上一次服务没退干净 | `netstat -ano | findstr :8800` 找 PID；详见 USER_GUIDE §8 |
-| 首次提问特别慢 | 冷启 93 秒 + 首次精排载入 1.1 GB | 等 `warmup.ready`；这是本地 CPU 推理的固有开销，换更快后端才是解法 |
+| 首次提问特别慢 | 冷启 43–93 秒 + 首次精排载入 1.1 GB | 等 `warmup.ready`；这是本地 CPU 推理的固有开销，换更快后端才是解法 |
+| 状态栏显示「全局标定样本不足」/ 阈值 0.35 | 不带 `kb_id` 调 `/api/status` 只报全局出厂值 | 带 `?kb_id=2` 看该库生效值；标定按库存，见 §9 的口径说明 |
 
 ---
 
