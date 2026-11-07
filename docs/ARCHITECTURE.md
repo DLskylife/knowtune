@@ -2679,11 +2679,16 @@ F1–F5 的逐条对照见 **§14**（含未完成项与原因）。
 
 ### 13.4 环境限制（非代码问题）
 
-本机 `huggingface.co` 直连返回 502（代理拦截），`hf-mirror.com` 可达但 `huggingface_hub` 的 Xet 下载路径会失败。当时用 `scripts/fetch_model.sh`（curl 直取 + 镜像）把 `bge-small-zh-v1.5` 下到 `data/models/`，`embedding.local_path` 指向本地即可（该脚本已在精简版移除，等价命令见下）。**`bge-reranker-base` 尚未下载**，所以当前所有请求都在 `rerank_model_missing` 降级路径上——这不是 bug，是缺模型。补下载只需：
+本机 `huggingface.co` 直连返回 502（代理拦截），`hf-mirror.com` 可达但 `huggingface_hub` 的 Xet 下载路径会失败。当时用 `scripts/fetch_model.sh`（curl 直取 + 镜像）把 `bge-small-zh-v1.5` 下到 `data/models/`，`embedding.local_path` 指向本地即可（该脚本已在精简版移除，等价命令见下）。当时 `bge-reranker-base` **尚未下载**，请求一度全在 `rerank_model_missing` 降级路径上——这不是 bug，是缺模型。补下载只需：
 
 ```bash
 huggingface-cli download BAAI/bge-reranker-base --local-dir data/models/BAAI--bge-reranker-base
 ```
+
+> **状态更新（2026-11-07）**：`bge-reranker-base` 已于 11-03 下载到
+> `data/models/BAAI--bge-reranker-base`（1.1 GB），全局 `config/default.yaml` 与三个知识库的
+> `retrieval.rerank.enabled` 均为 `true`，精排已开启，不再走 `rerank_model_missing`。
+> 上面记的下载困难与补下命令仍适用于换机部署。
 
 ---
 
@@ -2711,7 +2716,7 @@ huggingface-cli download BAAI/bge-reranker-base --local-dir data/models/BAAI--bg
 | F2.1 向量语义检索 | ✅ | bge-small-zh-v1.5（512 维，本地目录），numpy 暴力点积，61 chunk 实测 17–36ms |
 | F2.2 关键词检索 | ✅ | jieba 预分词 + FTS5 unicode61（**实测 trigram 对 2 字词全灭**，见 §4.3） |
 | F2.3 混合融合 RRF | ✅ | 加权 RRF，k=60，w=0.50/0.35 原样保留（不归一化） |
-| F2.4 重排序 | ⚠️ | 代码路径完整（CrossEncoder、超时降级、失败缓存），**模型未下载**，当前走 `rerank_model_missing` |
+| F2.4 重排序 | ⚠️ | 模型已下载（1.1 GB），全局与三个知识库的 `retrieval.rerank.enabled=true`，精排已开启；代码路径完整（CrossEncoder、8 秒超时降级、失败缓存）。⚠️ 保留的原因不是缺模型，而是**取舍与语料适配**：实测 R@5 79.2% → 83.3% 要付 19ms → 7.5s，候选池缩到 12 条时精排反而跌到 75%（该模型在现代汉语上训练，对「白话问、文言答」判定不稳），见 §12.45 |
 | F2.5 查询改写 | ⬜ | 配置项已留（`retrieval.query_rewrite`），未实现 |
 | F2.6 MMR | ✅ | `retrieve/rerank.py::mmr_select`，`retrieval.mmr.enabled/lambda` 可配，默认关 |
 | F2.7 元数据过滤 | ✅ | `source_types` / `imported_after` / `imported_before` / `doc_ids`，**两路检索同一组条件**（避免一路过滤一路不过滤的隐性漏检） |
@@ -2816,6 +2821,11 @@ huggingface-cli download BAAI/bge-reranker-base --local-dir data/models/BAAI--bg
 缩到 12 条，精排的 R@5 反而跌到 75%、低于不开的 79.2%——bge-reranker-base 是
 在现代汉语上训的，对"白话问、文言答"的 judgement 不稳定，池子小的时候它把正
 确块压下去的代价盖过了收益。开关留在参数面板，测得的表在上面，要开随时开。
+
+> **状态更新（2026-11-07）**：以上是 2026-10-30 当时的配置，属于开发记录，不要读成现状。
+> 模型权重已于 11-03 放回本地（1.1 GB），`config/default.yaml` 与三个知识库的
+> `retrieval.rerank.enabled` 现均为 `true`，**精排已重新开启**；现行参数是候选 10 /
+> 截断长度 384 / 批大小 32。上表的延迟-质量取舍数据仍然有效，但"关掉了"这句话已过时。
 
 **未解决**：12 题子集上"改造前 → 改造后"是 75.0% → 83.3%（同一配置族、同一
 批题目，可比）；26 题全集没有改造前的对照组（那需要拿旧代码重嵌一遍索引），
