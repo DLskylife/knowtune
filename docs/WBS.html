@@ -378,7 +378,7 @@ footer{margin-top:72px;padding-top:22px;border-top:1px solid var(--line);
 <tr><td class="c">F5.3</td><td class="w">支撑度归属与事实层</td><td class="d"><code>support.evaluate</code> 只在后台 <code>/api/ask</code> 链路算，前台不调用；判「有没有依据」可靠，判「事实对不对」靠事实锚点兜</td><td class="impact">不能写「每次问答都算支撑度」；事实篡改类半真半假抓不出</td><td class="d">归属更正 + 既定取舍；能力在本仓库，见 ARCHITECTURE §13 <span class="tag trade">既定取舍</span></td></tr>
 <tr><td class="c">—</td><td class="w">标定与语料绑定</td><td class="d">只有 kb2 有按库标定，kb3 / kb4 用出厂值；融合权重与标定都在维医语料上测</td><td class="impact">换语料需重跑</td><td class="d">既定取舍；<code>config.py</code> 用模型指纹（<code>embedding.model@dim</code>）决定标定是否生效 <span class="tag trade">既定取舍</span></td></tr>
 <tr><td class="c">—</td><td class="w">单机单用户与无入站鉴权</td><td class="d">SQLite + 进程内模型，无并发控制；后台默认只监听 <code>127.0.0.1</code></td><td class="impact">要开局域网须显式 <code>--host 0.0.0.0</code></td><td class="d">既定取舍，不是漏做；见 <a href="../README.md">README「已知限制」</a> <span class="tag trade">既定取舍</span></td></tr>
-<tr><td class="c">—</td><td class="w">运行资产不入库</td><td class="d"><code>data/</code> 与 <code>tools/llama/</code> 被 <code>.gitignore</code> 排除；仓库只有 96 个受版本控制文件，是主体代码 + 文档</td><td class="impact">clone 后须自行下载模型、初始化数据库、绑定库 id</td><td class="d">工程边界；从零到三板块可用见 <a href="RUNBOOK.md">RUNBOOK.md</a> <span class="tag">工程边界</span></td></tr>
+<tr><td class="c">—</td><td class="w">运行资产不入库</td><td class="d"><code>data/</code> 与 <code>tools/llama/</code> 被 <code>.gitignore</code> 排除；仓库只有 98 个受版本控制文件，是主体代码 + 文档</td><td class="impact">clone 后须自行下载模型、初始化数据库、绑定库 id</td><td class="d">工程边界；从零到三板块可用见 <a href="RUNBOOK.md">RUNBOOK.md</a> <span class="tag">工程边界</span></td></tr>
 </tbody></table></div></div></section>
 
 <section><h2><span class="num">06</span>风险清单</h2>

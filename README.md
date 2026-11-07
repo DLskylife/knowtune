@@ -12,7 +12,7 @@
 | Python | ≥ 3.11 | `pyproject.toml` 的 `requires-python` |
 | 端口 | 后台管理台 `8013` / 前台问答站 `8800` | 本文与 RUNBOOK 统一口径；`cli.py` 的 `serve` 默认 `--port 8000`，实际部署用 `--port 8013` |
 | 数据 | 3 个知识库、32 篇文档全部 `ready`、28020 个 chunk、28020 条 512 维向量 | 实测 `data/library.db`，2026-11-07 采集 |
-| 许可 | MIT | `pyproject.toml` |
+| 许可 | MIT | `LICENSE` + `pyproject.toml` |
 
 事实卡里的端口、库数、文档数都是当前跑起来的服务的实测值，不是设计目标。换一台机器、换一批语料，这些数字会变。
 
@@ -155,7 +155,7 @@ knowtune serve [--port 8013]           # 启动 Web UI
 - **融合权重与标定都在维医语料上测的**（两套探针 × 两个种子 × n≈300）。换一批文档，BM25 与向量的强弱关系可能反转，须重跑再定 `retrieval.fusion.*`。支撑度对事实篡改几乎无效：同块 `300ml→700ml` 的 AUC 仅 0.514（≈抛硬币），靠事实锚点兜，锚点捕获约 84%。
 - **单机单用户**：SQLite + 进程内模型，无并发控制。本地 7B 一次完整回答实测 222 秒（CPU 推理），SSE 流式已有，但检索完到首 token 之间仍静默。嵌入编码约 21 chunk/s（本机 CPU）。
 - **后台无入站鉴权，默认只监听 `127.0.0.1`。** 要开局域网须显式 `knowtune serve --host 0.0.0.0`。这是既定取舍，不是漏做：在只监听回环地址的前提下外部暴露面本就不存在；要上公网必须先补鉴权层。
-- **仓库不含运行资产**：`data/` 与 `tools/llama/` 被 `.gitignore` 排除，clone 后必须自行下载模型、初始化数据库、绑定库 id。仓库基线提交 `72509d8`，96 个受版本控制文件，是主体代码 + 文档。GitHub git 端点在此网络环境返回 502（2026-11-07 实测），推送走 `api.github.com` 的 Git Data API。
+- **仓库不含运行资产**：`data/` 与 `tools/llama/` 被 `.gitignore` 排除，clone 后必须自行下载模型、初始化数据库、绑定库 id。截至 2026-11-07，98 个受版本控制文件，是主体代码 + 文档。GitHub git 端点在此网络环境返回 502（2026-11-07 实测），推送走 `api.github.com` 的 Git Data API。
 
 需求覆盖 32 项有三套统计口径，**不得只引用一套**（逐条状态与换算见 `docs/ARCHITECTURE.md`）：
 
@@ -214,7 +214,7 @@ scripts/                  fake_llm.py / get_llama.py / shot_models.py
 
 ## 许可
 
-MIT。
+MIT，全文见 [LICENSE](LICENSE)。
 
 ## 与其他文档的分工
 
