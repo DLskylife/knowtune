@@ -1,7 +1,8 @@
 # 技术栈与架构
 
 > 本文件是 KnowTune 的「技术清单 + 架构主线」速查。所有内容均从 `pyproject.toml`、源码与配置中核出，不是泛泛而谈。
-> 数据模型、参数取舍、实测数据见 [ARCHITECTURE.md](ARCHITECTURE.md)；目录级说明见 [PROJECT_MAP.md](PROJECT_MAP.md)。
+> 数据模型、参数取舍、实测数据见 [ARCHITECTURE.md](ARCHITECTURE.md)；目录级说明见 [PROJECT_MAP.md](PROJECT_MAP.md)；
+> 从零部署与完整运行步骤见 [RUNBOOK.md](RUNBOOK.md)。
 
 ## 1. 一句话主线
 
@@ -89,7 +90,7 @@
 - 唯一正路：**先 jieba 分词、空格拼串写入** FTS5，查询侧同样分词。虚词在查询侧过滤但不删索引侧（两侧同步重索引成本高，而查询侧改动即时生效）。
 
 ## 5. 启动要点（速记）
-- 必须走 venv：`./.venv/Scripts/knowtune.exe serve --port 8000`（系统 Python 无包）
+- 必须走 venv：`./.venv/Scripts/knowtune.exe serve --port 8000`（端口自定，系统 Python 无包）
 - 8800 前端由 `instances.yaml` 的 `autostart: true` 自动拉起，不用手动起
 - **冷启动约 93 秒**（嵌入模型 `import torch`+读权重），期间 `embedder.available=false`，只有 BM25 稀疏检索；`/api/status` 的 `warmup.state` 变 `ready` 才算双路齐全，此前别急着提问
 - 后台进程绑定会话，会话结束即关；常驻需另配系统服务

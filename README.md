@@ -8,7 +8,7 @@
 
 ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![license](https://img.shields.io/badge/license-MIT-lightgrey)
 
-需求覆盖 32 项：24 已落地 / 4 部分 / 4 未做（其中 F5 评测相关 3 项已随评测台迁出，逐条对照见 [docs/ARCHITECTURE.md §14](docs/ARCHITECTURE.md)）。
+需求覆盖 32 项：24 已落地 / 4 部分 / 4 未做（其中 F5 评测相关 3 项已随评测台迁出，逐条对照与三种统计口径换算见 [docs/ARCHITECTURE.md §14](docs/ARCHITECTURE.md)；此处为「外部承接」口径）。
 
 ---
 
@@ -41,6 +41,9 @@ KnowTune 的做法是把"猜"变成"查"：
 
 需要 Python 3.11+。下面以 Windows Git Bash 为例，Linux/macOS 把 `.venv/Scripts` 换成 `.venv/bin`。
 
+> **从零 clone 的完整流程见 [docs/RUNBOOK.md](docs/RUNBOOK.md)**（含数据库初始化、密钥、模型目录、实例库绑定、验证清单、排障表）。
+> 仓库只包含代码与配置：`data/`（数据库、模型、密钥、语料）、`tools/llama/` 都在 `.gitignore` 里，clone 下来是空壳，必须按 RUNBOOK 生成一遍——**这不是文件漏传**，远端与本地逐文件比对为 95 : 95 完全一致。
+
 ### 0. 获取代码
 
 ```bash
@@ -54,24 +57,32 @@ cd knowtune
 
 ```bash
 python -m venv .venv && . .venv/Scripts/activate
-pip install -e ".[extract,local]"
 
-# CPU 版 torch 必须走官方 index，直接 pip install 会拉 CUDA 版（体积差 10 倍）
+# ① 先装 CPU 版 torch：必须走官方 index，直接 pip install 会拉 CUDA 版（体积差 10 倍）
 pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+# ② 再装本体（顺序不能反：local extra 里的 sentence-transformers 会带 torch）
+pip install -e ".[extract,local]"
 ```
 
 ### 2. 下载模型
 
-嵌入模型（中文，必需）与可选精排模型从 HuggingFace 下载到 `data/models/`：
+嵌入模型与精排模型从 HuggingFace 下载到 `data/models/`，**两个目录名规则不同，别写错**：
 
 ```bash
 # 国内访问不便时先设镜像：export HF_ENDPOINT=https://hf-mirror.com
-huggingface-cli download BAAI/bge-small-zh-v1.5 --local-dir data/models/BAAI--bge-small-zh-v1.5
-# 可选：重排模型，不下载则精排自动降级
+mkdir -p data/models
+
+# 嵌入（必需）：目录名【没有】 BAAI-- 前缀，与 default.yaml 的 embedding.local_path 一致
+huggingface-cli download BAAI/bge-small-zh-v1.5 --local-dir data/models/bge-small-zh-v1.5
+
+# 精排（默认开启）：目录名【有】 BAAI-- 前缀，程序按 model 里的 / 换成 -- 自动拼
 huggingface-cli download BAAI/bge-reranker-base --local-dir data/models/BAAI--bge-reranker-base
 ```
 
-无 `huggingface-cli` 时：先 `pip install -U huggingface_hub`，或手动从 HuggingFace / ModelScope 下载上述仓库到对应目录即可。
+`rerank.enabled: true` 且 `allow_download: false`：**不下载精排不会联网补，而是每次检索降级到融合分数排名**，能跑但召回质量下降（维医语料 R@5 79.2% → 83.3% 那一截就没了）。所以它是默认链路的一部分，不是可选项。
+
+无 `huggingface-cli` 时：先 `pip install -U huggingface_hub`（新版 CLI 名 `hf download`），或手动从 HuggingFace / ModelScope 下载仓库到对应目录即可。
 
 ### 3. 起服务
 
@@ -82,17 +93,20 @@ knowtune serve --port 8000
 # 或（未激活 venv 时）：./.venv/Scripts/knowtune.exe serve --port 8000
 ```
 
+- **端口自定**：本文用 `8000` 举例，本机部署常用 `8013`；其他文档里的 `8765` 等也是示例值，含义相同。
+- **首次启动会自动建库**：`config.py` 建 `data/` 目录、`db.conn()` 执行 `schema.sql` 建表并生成 `default` 知识库；也可先跑 `knowtune init` 显式确认。
 - 打开 **`http://127.0.0.1:8000`**（Web UI / API 文档 Swagger）。
 - **给别的程序调的地址：`http://127.0.0.1:8000/v1`**（OpenAI 兼容）。这是固定入口，不随本地模型实例的端口变化；换模型、换端口、重启实例，外部代码一个字都不用改。支持 `GET /v1/models`、`POST /v1/chat/completions`（含流式）、`POST /v1/completions`。指定后端用 `?provider=<端点名>`、请求头 `X-KnowTune-Provider`，或把 `model` 写成 `端点名::模型名`。启动日志和「模型服务」页的「API 接入」卡片里都有地址与可直接粘贴的 curl。**项目自己也在用这个入口**：预问诊的模型请求、打分台的候选模型都走 `/v1`，主服务没起时各自自动降级到原来的直连路径；维医前台问答站点仍走内部 roles，未改。
 - 想让同一局域网调用：主服务用 `knowtune serve --host 0.0.0.0 --port 8000` 启动，并在「模型服务」页勾「启动时允许局域网调用」，卡片会给出局域网地址（无鉴权，别在不可信网络里这么开）。
 - **8800 前端不用手动起** —— `config/instances.yaml` 里 `autostart: true`，主服务启动时会自动拉起前台问答站 `http://127.0.0.1:8800`。
 - 这是**前台/会话绑定进程**：在 WorkBuddy 里以后台任务跑，会话结束即关；要常驻请另配系统服务（见 [docs/TECH_STACK.md](docs/TECH_STACK.md)）。
 
-### 4. 首次三件事
+### 4. 首次四件事
 
 1. **填密钥**（用云端后端才需要）：进「模型」页，点后端卡片的 ✎，填 API Key，保存即可。**默认就存**——密文落在 `data/secrets.json`，用 Windows DPAPI 加密，绑当前账户与本机，拷走只是一串废数据。下次启动自动恢复，不用重填。想要"只保留这次"就取消勾选「保存到本机」。也可以完全不填：把密钥放进环境变量，端点配置里的 `api_key_env` 指向它就会自动读（优先级：本次填写 > 已保存 > 环境变量）。
-2. **建知识库**：「知识库」页 → 新建，选一套预设（通用 / 代码 / 精确 / 空白）作为初始值。
-3. **导文件**：「对话」页把文件拖进窗口，或直接甩到页面任意处。
+2. **建知识库**：「知识库」页 → 新建，选一套预设（通用 / 代码 / 精确 / 空白）作为初始值，`knowtune kb list` 记下它的 id。
+3. **绑库**（clone 到新机器必做）：`config/instances.yaml` 里 `kb_id: 2` / `classic_kb_id: 4` 是开发机的库 id，新机器上不存在。改成你自己的 id；没有独立古籍库就把 `classic_kb_id` 填 `0`（退回按标题关键词分栏）。漏了这步的表现是**服务正常、前台侧栏 0 篇文档**。改完在「站点」页点「应用」热生效，详见 [RUNBOOK §6](docs/RUNBOOK.md)。
+4. **导文件**：「对话」页把文件拖进窗口，或直接甩到页面任意处。
 
 然后提问。第一次问之前等一会儿——嵌入模型在后台预热，`/api/status` 的 `warmup.state` 变成 `ready` 才算好（冷启实测 93 秒，这期间检索只有关键词一路）。
 
@@ -107,7 +121,7 @@ knowtune status                        # 库、文档、chunk、向量数
 knowtune kb list                       # 知识库清单
 ```
 
-`models.yaml` 里不预置任何后端：要么在「模型服务」页新增一个 OpenAI 兼容地址，要么扫本地 `.gguf` 直接起 llama.cpp 实例。
+`config/models.yaml` 已预置 `siliconflow` / `deepseek` 两个云端端点与一个 `local` 端点；`local` 里的 `.gguf` 路径是开发机的绝对路径，换机器要改成自己的（或删掉这个后端）。也可以在「模型服务」页新增任意 OpenAI 兼容地址，或用 `python scripts/get_llama.py` 装 `llama-server`、扫本地 `.gguf` 起离线实例（见 [RUNBOOK §3](docs/RUNBOOK.md)）。
 
 ## 架构
 
@@ -302,6 +316,7 @@ docs/              架构文档、项目地图、WBS
 
 | 文件 | 内容 |
 |---|---|
+| [docs/RUNBOOK.md](docs/RUNBOOK.md) | **完整运行说明**：从零 clone 到三板块可用，含仓库内容清单、依赖顺序、模型路径、初始化、实例库绑定、验证清单与排障 |
 | [docs/USER_GUIDE.md](docs/USER_GUIDE.md) | **使用说明书**：跑起来、建库导入、怎么读引用与支撑度、参数含义、标定步骤、排障表、已知限制 |
 | [docs/PROJECT_MAP.md](docs/PROJECT_MAP.md) | 每个目录每个文件干什么，五层依赖怎么拼起来，两条主链路的时序 |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 数据模型、检索参数为什么这么定、拒答标定、实测数据、踩坑记录 |
