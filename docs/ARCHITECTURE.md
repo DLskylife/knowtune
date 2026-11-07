@@ -166,7 +166,7 @@ src/knowtune/            主项目
   retrieve/              engine（双路召回、融合、拒答判定）/ rerank（精排 + MMR）
   generate/              prompt / llm / cite / evidence / support / think
   api/app.py             后台全部 HTTP 接口（约 4400 行），唯一大文件
-  api/static/            后台前端：index.html / app.js / style.css，构建号 0.9.54
+  api/static/            后台前端：index.html / app.js / style.css，构建号 0.9.55
   frontsite/             instcfg / runner / site
     static/              前台前端：index.html / app.js / style.css
   previsit/app.py        主项目装配层（注入进程内检索器、LLM 适配器、建 FastAPI app）
@@ -407,9 +407,9 @@ SQLite FTS5 的默认 `unicode61` 对中文不分词，整句会被当成一个 
 
 结论：支撑度是「主题级」判据，不是「事实级」判据；**未接 LLM 逐句判据（NLI / claim-check）**。别把 0.992 读成「能查出编造」。
 
-### 5.5 SSE 四类事件
+### 5.5 SSE 五类事件
 
-流式按 SSE 标准格式，先发 `event: meta`（含 `trace_id` 与引用骨架，让前端提前渲染编号），再 `event: delta` 逐 token 推送，结束 `event: done`（含 `usage`、`citation_coverage`、`message_id`），出错 `event: error`（含可读原因与 `degraded` 标记）。**不允许**在 `done` 之后继续发送，也**不允许**用 HTTP 200 承载错误。重试仅限首 token 之前的 429 / 5xx / 超时；一旦已向客户端推过内容，禁止重试（会造成回答重复拼接）。
+流式按 SSE 标准格式。检索（含 CPU 精排约 3 秒）是同步的，先发 `event: progress`（`stage=retrieving` / `generating`，带 `label`；前台按界面语言显示本地化文案，后台显示 `label`），把「检索中」与「检索完到首 token」两处静默填上。随后 `event: meta`（含 `trace_id` 与引用骨架，让前端提前渲染编号），`event: delta` 逐 token 推送，结束 `event: done`（含 `usage`、`citation_coverage`、`message_id`），出错 `event: error`（含可读原因与 `degraded` 标记）。`progress` 不承载业务数据，旧前端忽略它也不会出错。**不允许**在 `done` 之后继续发送，也**不允许**用 HTTP 200 承载错误。重试仅限首 token 之前的 429 / 5xx / 超时；一旦已向客户端推过内容，禁止重试（会造成回答重复拼接）。
 
 本地 7B 一次完整回答实测 222 秒（CPU 推理）。SSE 已经让「首 token 之后」不静默，但「检索完到首 token」这段仍静默——这是已知体验边界，见 §14。
 
@@ -655,7 +655,7 @@ effective_fields(): 逐字段
 **④ 前台静态资源构建号三值不一致**
 - 现象：`index.html` 的 `style.css?v=1.7.18` / `app.js?v=1.7.7`，与 `index.html:18`、`app.js:25` 的 `1.7.17` 不一致；后台统一 `0.9.54`。
 - 以什么为准：以前台统一构建号为准。
-- 影响：版本号漂移会让浏览器缓存判断错乱，界面显示与请求版本对不上。**已修正**（本次重写中，前台 `index.html` 的 css / js 查询串、`SITE_REQ_BUILD`、`app.js` 的 `SITE_BUILD` 已统一为 `1.7.18`；后台保持 `0.9.54`）。
+- 影响：版本号漂移会让浏览器缓存判断错乱，界面显示与请求版本对不上。**已修正**（2026-11-07 全量重写时，前台 `index.html` 的 css / js 查询串、`SITE_REQ_BUILD`、`app.js` 的 `SITE_BUILD` 曾统一为 `1.7.18`、后台 `0.9.54`；同日补 `progress` 进度事件后，两端前端按规则同步升为前台 `1.7.19`、后台 `0.9.55`，这是现行值）。
 
 **⑤ `config/previsit.yaml:86` 的 `retrieval.url: http://127.0.0.1:8000`**
 - 现象：配置里写死 8000，而主服务默认/示例用 8013。
@@ -706,7 +706,7 @@ effective_fields(): 逐字段
 | F3.1 上下文装填 | ✅ | 按相关度排序 + `context_token_budget` 裁剪，记录 used/dropped（§5.2） |
 | F3.2 强制引用 | ✅ | 编号可点击回查原文；`cite.verify` 算覆盖率与越界编号（§5.3，形式指标） |
 | F3.3 拒答机制 | ⚠️ | 双条件（绝对阈值 + 分布区分度）。**只有 kb2 有标定**（现行 `0.581 / AUC 1.0 / 52 组`，§5.6）；kb3/kb4 用出厂 0.35。且**分数阈值分不开「相似但无答案」**（§5.6 方法边界） |
-| F3.4 流式输出 | ✅ | SSE，meta/delta/done/error 四类事件，先推 citations 骨架 |
+| F3.4 流式输出 | ✅ | SSE，progress/meta/delta/done/error 五类事件，检索阶段先推进度、再推 citations 骨架 |
 | F3.5 后端可配置 | ✅ | 任意 OpenAI 兼容 provider（`siliconflow` / `local` / `deepseek`），前端下拉切换，密钥 DPAPI |
 | F3.6 生成参数可调 | ✅ | `temperature` / `max_tokens` / `context_token_budget` / prompt 覆盖层，temperature 默认 0.3 |
 
@@ -753,13 +753,20 @@ effective_fields(): 逐字段
 
 ## 14. 已知边界（方法与资产边界，不是待办清单）
 
-以下是**取舍的结果**，不写成「下一步要修」的清单。
+以下是**取舍的结果**，不写成「下一步要修」的清单。按性质分三组，与 [README.md](../README.md)「已知限制」同一套分类：README 给触发条件与「现在能怎么办」，本节给代码依据与推导位置。
 
-- **方法与能力**：精排 CPU 延迟约 3 秒；短泛问题（「肚子疼」）会答错且系统不自知；古籍带现代注解会吸引无关问题；引用固定 5 条，不按分数二次裁剪。支撑度是主题级判据（AUC 0.992）不是事实级（篡改 AUC 0.514），靠锚点兜到 84%。拒答只是第一道筛子，52 组样本误拒 / 漏拒均 0 有乐观偏差。
-- **标定与语料**：只有 kb2 有按库标定，kb3 / kb4 用出厂 0.35；融合权重、标定都在**维医语料**上测的，换语料需重跑。
-- **部署形态**：单机单用户，SQLite + 进程内模型，无并发控制。后台无入站鉴权，默认只监听 `127.0.0.1`，要开局域网须显式 `--host 0.0.0.0`——既定取舍，不是漏做。
-- **资产边界**：`data/` 与 `tools/llama/` 被 `.gitignore` 排除，clone 后必须自行下载模型、初始化数据库、绑定库 id。仓库只有 **98 个受版本控制文件**，是**主体代码 + 文档**，不含运行资产。
-- **环境**：GitHub git 端点在此网络环境返回 502，推送走 `api.github.com` 的 Git Data API（`_pm/push_docs.py`，不在版本库）。
+- **A 方法边界**（判据的物理上限，调参无效）：
+  - 短泛问题（「肚子疼」）答错且系统不自知 —— 余弦分数区间重叠，`retrieve/engine.py` 的拒答判定只有分数条件，语义上分不开「相似但没有答案」。换阈值、多给引用都不改变这一点。
+  - 古籍现代白话注解吸引无关问题 —— 语料没区分原文与注解，BM25 只看字面相似度，注解对现代问题吸引力更强。
+  - 引用按名次取：`config/default.yaml:67` 的 `rerank.top_k: 5` 是**可配置**的条数，`retrieve/engine.py:380` 取 `candidates[:top_k]`；缺的是按精排分数设下限，当前前 5 名无论多低分都进上下文，只受 token 预算截断。改 `top_k` 能调条数，改不出「低分不送」。
+  - 支撑度是主题级判据：`generate/support.py` 的窗口最大余弦对「换一批不相关文档」AUC 0.992、阈值 0.665、两侧误判 0.0435（69 样本），对**同块事实篡改**（`300ml→700ml`）只有 0.514。`anchors_of()` 刻意不收裸数字（高频、无区分度），靠数字+单位、型号、版本号等锚点兜到约 84%。要补数值一致性校验只能做弱提示：引用编号、日期、单位换算、用户问题里自带的数字都会误报。
+  - 拒答是第一道筛子：kb2 的 52 组样本误拒 / 漏拒均为 0，这个满分来自样本构造，有乐观偏差；拦截主力在生成后的支撑度与 `generate/cite.py` 的引用校验。
+- **B 资产与标定边界**：现行生效文件只有 `data/calibration/kb_2.json`（`0.581` / AUC 1.0 / 52 组 `real-questions` / 2026-11-06，支撑度 `0.665` / 两侧误判 0.0435 / 69 样本），kb3、kb4 用出厂 `0.35`。`config.py:495-510` 的四个生效条件里，**模型指纹等于 `embedding.model@dim`** 最易被忽略——换嵌入模型或维度会让标定静默失效并退回出厂值，界面只提示「本库尚未标定」。旧 `data/refusal_calibration.json`（全局格式、`reliable:false`）盘上可能还在，但代码读的是 `data/calibration/kb_<id>.json`，**盘上有文件 ≠ 生效**。融合权重（两套探针 × 两个种子 × n≈300）与标定都只在维医语料测过，换语料后 BM25 与向量的强弱关系可能反转。`model-eval/calibrate.py` 已随评测台迁出，本仓库只读结果。
+- **C 部署与性能取舍**：精排 `10 × 384` 在 CPU 上 3.07 s（§4.4、§11）；减候选掉 top1（8 条时 0.727 → 0.682），缩截断会让答案落在块中段时排不出（`10×128` 分数虽高但只看标题首段），所以调这两个参数消除不了延迟。单机单用户（SQLite + 进程内模型，无并发控制），本地 7B 完整回答 222 秒、嵌入编码约 21 chunk/s；SSE 五类事件里 `progress` 已覆盖检索阶段（§5.5），生成侧首 token 仍受模型速度限制。后台无入站鉴权、默认只监听 `127.0.0.1`，是既定取舍，要上公网必须先补鉴权层。`data/` 与 `tools/llama/` 被 `.gitignore` 排除，98 个受版本控制文件，clone 后须自行下载模型、初始化数据库、绑定库 id。GitHub git 端点在此网络返回 502，推送走 `api.github.com` 的 Git Data API。
+
+**两组延迟数字不是同一组实验**：3.07 s 来自 `model-eval/scan_rerank.py` 参数扫描（维医库 22 道口语题、现行 `10 × 384`、计时口径是精排这一步），19ms → 7.5s 与「候选池 12 条反跌 75%」来自另一组 R@5 收益对照实验（端到端检索延迟、更早的候选配置）。逐项对照表在 [README.md](../README.md)「两组延迟数字为什么不一样」，本节不重复。现行端到端延迟以响应里的 `timings_ms.rerank_ms` 为准。
+
+**为什么改文档消除不了这些**：A 组是判据的物理上限，换参数只会把误差换个方向；B 组是数据与工具的适用范围，文字改不了文件是否存在、模型指纹是否匹配；C 组是单机架构的既定取舍，改写部署形态等于换产品。列出来是为了让误判可定位，不是为了承诺修复。
 
 ---
 

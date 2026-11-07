@@ -710,10 +710,14 @@ def build_site(spec, state: Any) -> FastAPI:
                     return
 
             t0 = time.perf_counter()
+            # 跨语言检索 + CPU 精排是同步的，期间前端一个事件都收不到。
+            # 检索前 / 后各推一条 progress，前端按 UI 语言显示 searching / thinking。
+            yield _sse("progress", {"stage": "retrieving", "label": "正在检索与精排…"})
             result = state.engine.search(
                 conn, query, kb_id=scope_kb_id, doc_ids=doc_ids, cfg=kb_cfg,
             )
             timings.update(result.timings)
+            yield _sse("progress", {"stage": "generating", "label": "检索完成，正在生成答案…"})
 
             # ② 检索证据分档：把"这批资料有多可信"显式告诉模型。
             # 命中硬 → 严格照资料答；命中差 → 允许用自身知识，但必须标明哪句是资料。

@@ -94,8 +94,6 @@ corpus = "\n".join(p.read_text(encoding="utf-8") for p in DOCS)
 for fact, label in [
     ("0.581", "现行拒答阈值"),
     ("AUC 1.0", "现行标定 AUC"),
-    ("1.7.18", "前台构建号"),
-    ("0.9.54", "后台构建号"),
     ("4096", "精排缓存容量"),
     ("8013", "后台端口"),
     ("8800", "前台端口"),
@@ -105,6 +103,31 @@ for fact, label in [
 ]:
     if fact not in corpus:
         errors.append(f"[missing-fact] {label} ({fact}) 未出现在任何文档")
+
+# Build numbers are read from source, not hardcoded. Hardcoding them made the
+# checker go stale on every legitimate version bump; it also could not detect
+# the actual failure mode (the four constants drifting apart).
+STATIC = ROOT / "src/knowtune"
+for label, pkg, const, req in [
+    ("前台构建号", "frontsite", "window.SITE_BUILD", "window.SITE_REQ_BUILD"),
+    ("后台构建号", "api", "window.ADMIN_BUILD", "window.ADMIN_REQ_BUILD"),
+]:
+    js = STATIC / pkg / "static/app.js"
+    html = STATIC / pkg / "static/index.html"
+    m = re.search(rf'{re.escape(const)}\s*=\s*"([^"]+)"', js.read_text(encoding="utf-8"))
+    if not m:
+        errors.append(f"[build] {label}: 无法从 {js.name} 读取 {const}")
+        continue
+    version = m.group(1)
+    declared = {version}
+    for pat in (rf'{re.escape(req)}\s*=\s*"([^"]+)"', r"\?v=([\d.]+)"):
+        declared.update(re.findall(pat, html.read_text(encoding="utf-8")))
+    if declared != {version}:
+        errors.append(f"[build] {label}: HTML 与 JS 构建号不一致 {sorted(declared)}")
+    if version not in corpus:
+        errors.append(f"[missing-fact] {label} 源码={version}，文档未同步")
+    else:
+        notes.append(f"{label} 源码={version}，HTML/JS 四处一致且文档已同步")
 
 def ordered(line: str, *tokens: str) -> bool:
     """Tokens must appear in order, searching forward from the previous hit.

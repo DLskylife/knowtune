@@ -22,7 +22,7 @@
 
 /* 构建号：和 index.html 里那份必须一致，不一致说明浏览器拿的是旧 JS，
    页面加载完会强制换一次（见 index.html 里的自检脚本）。 */
-window.SITE_BUILD = "1.7.18";
+window.SITE_BUILD = "1.7.19";
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
@@ -1795,6 +1795,14 @@ async function send() {
   function handle(raw) {
     const ev = parseEvent(raw);
     if (!ev) return;
+    if (ev.event === "progress") {
+      // 服务端在同步检索前 / 检索完各推一条阶段；用本地化文案，不收服务端 label。
+      const stg = (ev.data || {}).stage;
+      const label = stg === "retrieving" ? t.searching : t.thinking;
+      showStatus(label);
+      metaEl.textContent = label;
+      return;
+    }
     if (ev.event === "query") {
       const qd = ev.data || {};
       if (qd.translated) {

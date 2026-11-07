@@ -3403,6 +3403,12 @@ def ask(req: AskRequest) -> Response:
         conn = state.db.conn()
         started = time.perf_counter()
         timings: dict[str, int] = {}
+        # 检索（含 CPU 精排，约 3 秒）是同步的，此前整段一个事件都不发，
+        # 前端只能盯着空白转圈。检索前推一条阶段、检索完再推一条，
+        # 把「检索中」和「检索完到首 token」两处静默都填上。
+        if not req.direct:
+            yield _sse("progress", {"stage": "retrieving",
+                                    "label": "正在检索与精排…"})
         if req.direct:
             # 不挂载知识库 + 用户选了「直接问模型」：检索整段跳过。
             # 这里必须是"一条空结果"而不是 None——下面拒答判定、引用校验、
@@ -3421,6 +3427,8 @@ def ask(req: AskRequest) -> Response:
                 cfg=kb_cfg,
             )
         timings.update(result.timings)
+        yield _sse("progress", {"stage": "generating",
+                                "label": "检索完成，正在生成答案…"})
 
         if result.refusal and result.refusal.refused:
             payload_meta = {

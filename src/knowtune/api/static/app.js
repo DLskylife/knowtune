@@ -1,6 +1,6 @@
 /* 构建号：与 index.html 里那份一致，不一致说明浏览器拿到的是旧 JS，
    页面加载完会强制换一次（见 index.html 的自检脚本）。 */
-window.ADMIN_BUILD = "0.9.54";
+window.ADMIN_BUILD = "0.9.55";
 
 const $ = (id) => document.getElementById(id);
 
@@ -1463,7 +1463,13 @@ async function ask(question) {
         let obj = {};
         try { obj = JSON.parse(data); } catch (_) { continue; }
 
-        if (event === "meta") {
+        if (event === "progress") {
+          // 检索 + CPU 精排是同步的，服务端在检索前 / 后各推一条阶段。
+          // 还没出字时把阶段写进气泡，delta 一来 paint() 自然覆盖。
+          if (!acc && obj.label) {
+            bubble.innerHTML = `<span class="hint">${esc(obj.label)}</span><span class="cursor"></span>`;
+          }
+        } else if (event === "meta") {
           citations = obj.citations || [];
           state.lastCitations = citations;
           // 直问模型没有检索过程，右侧调试面板那一堆"dense/sparse/融合"
