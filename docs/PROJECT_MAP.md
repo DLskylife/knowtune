@@ -1,359 +1,307 @@
-# 项目地图 · KnowTune 是怎么搭起来的
+# PROJECT_MAP · 仓库地图
 
-这份文件回答两件事：**每个文件是干什么的**，以及**它们按什么顺序攒成一个能跑的系统**。
-想读设计取舍和实测数据去 [ARCHITECTURE.md](ARCHITECTURE.md)；想直接跑起来看
-[README](../README.md)；从零部署、模型目录与实例库绑定见 [RUNBOOK.md](RUNBOOK.md)。
-这里只讲结构（文中 `8000` 等端口均为示例，实际由 `--port` 与 `instances.yaml` 决定）。
-
----
+> 本篇只回答「文件在哪、各自干什么、想改功能动哪里」。架构原理见 [ARCHITECTURE.md](ARCHITECTURE.md)，安装与启动见 [RUNBOOK.md](RUNBOOK.md)，日常使用见 [USER_GUIDE.md](USER_GUIDE.md)，技术分层见 [TECH_STACK.md](TECH_STACK.md)。所有路径、模块职责、端口、优先级、状态以现行源码与配置为准；2026-10 月实现期的决策用过去时并标日期。
+>
+> 术语约定（英文键名首现括注中文）：provider（后端）、role（角色）、section（板块）、kb（知识库）、rerank（精排）、refusal（拒答）、support（支撑度）、degraded（降级标记）、calibration（标定）、dense（稠密向量路）、sparse（稀疏路）。FTS5 是 SQLite 全文索引虚表，WAL 是预写日志，DPAPI 是 Windows 数据保护 API，SSE 是服务端流式推送，LRU 是最近最少使用缓存，MMR 是最大边际相关去重，CrossEncoder 是交叉编码器精排模型。
 
 ## 1. 一句话
 
-一个**纯本地**的 RAG 知识库：文件进来 → 切成块 → 建两路索引（向量 + 关键词）→ 提问时两路召回融合 → 交给任意 OpenAI 兼容的模型写答案 → 每条结论都挂一个可点回原文的引用编号。
+KnowTune 是本地单机知识库问答系统：一个 FastAPI 进程（`api/app.py`）装下后台全部 HTTP 接口与前台问答站，SQLite + FTS5 存库，本地嵌入模型 + 双路召回 + CrossEncoder 精排，外接 OpenAI 兼容后端生成带引用的答案；预问诊作为第三个板块挂在前台 `/previsit` 下。源码用 `src/knowtune`（主项目）与 `src/previsit`（预问诊独立实现）两个顶层包，由 `pyproject.toml` 一起打进 wheel，入口 `knowtune = knowtune.cli:main`。
 
-三样东西不碰外部服务：数据（SQLite）、嵌入模型（本地 bge）、界面（自己写的静态页）。
-唯一的外部依赖是"你配的那个 LLM 后端"，它可以是本机的 vLLM / LM Studio，也可以是云端。
-
----
+它不是 Agent：检索链是固定流水线，分支只有若干布尔开关（精排、MMR、拒答、邻块扩展），没有让 LLM 决定下一步调什么工具。
 
 ## 2. 运行时全景
 
-系统里有**三类进程 / 入口**，共用同一份代码和同一个数据库：
-
-| 入口 | 默认地址 | 谁在用 | 代码入口 |
-|---|---|---|---|
-| 后台管理台 | `127.0.0.1:8000` | 你自己：建库、导入、调参、看日志 | `knowtune.cli serve` → `api/app.py` |
-| 前台问答站 | `127.0.0.1:8800` 起 | 终端用户：只能提问，看不到任何管理功能 | 由后台的 `InstanceManager` 在**同进程**内起 uvicorn 线程 |
-| 命令行 | — | 批量导入、脚本化评估 | `cli.py` |
-
-关键设计：**前台不是一个独立程序**。它是后台进程里的一条线程（`frontsite/runner.py`），
-这样检索器和嵌入模型只需要加载一次——模型加载是 93 秒级的开销，每个站点复制一份
-就等于把内存和冷启动都乘上站点数。
+一条命令 `knowtune serve --port 8013` 只拉起**一个进程**。CLI 先按实际端口把固定网关地址写进环境变量，交给 uvicorn 加载 `knowtune.api.app:app`；模块导入期就构造好全局 `AppState`（配置、DB、嵌入模型、向量/稀疏索引、精排器、检索引擎、导入流水线、LLM 客户端、`InstanceManager`）。`lifespan` 里恢复密钥、起嵌入预热线程、调 `start_autostart()`；后者在**同一进程内**为前台起一条 daemon 线程跑第二个 uvicorn，监听 8800，并把预问诊子应用挂到该站点的 `/previsit`。所以后台与前台共享同一份嵌入模型、向量缓存、检索器与 LLM 客户端。
 
 ```
-api/app.py  ← 后台 :8000
-├─ AppState         SQLite 连接 / 嵌入模型 / 向量与关键词索引 / 检索器 / 导入流水线 / LLM 客户端
-└─ InstanceManager  同进程起线程 → frontsite/site.py  ← 前台 :8800–8899
-                    复用上面那套检索器与 LLM 客户端（不再加载一遍模型）
-
-cli.py  ← 命令行
-└─ 批量导入 / 检索调试 / 评估 / 单次问答，调的是同一批组件
-
-                       ↓ 全部落到
-              data/library.db（SQLite）
-              ├─ 正文：kb / document / chunk
-              ├─ 索引：embedding / chunk_fts
-              └─ 会话：session / message / query_log / feedback
+  外部资产（本机磁盘 / 网络）                         ┌────────────────────────────┐
+  ┌───────────────────────────────────────────┐  │ provider：siliconflow /     │
+  │ data/models/bge-small-zh-v1.5  嵌入 512 维 │  │ local(127.0.0.1:8097) /    │
+  │ data/models/BAAI--bge-reranker-base  精排  │  │ deepseek  →  OpenAI 兼容    │
+  │ data/library.db（WAL）  8 表 + FTS5        │  └────────────▲───────────────┘
+  │ data/secrets.json（DPAPI）、calibration/   │               │ HTTP
+  │ data/previsit.db、data/previsit/kg.db      │               │
+  └───────────────▲───────────────────────────┘               │
+                  │ 加载 / 读写                               │
+  cli.py          │                                          │
+  cmd_serve ──────┤ 写 KNOWTUNE_GATEWAY=<host>:8013/v1        │
+                  ▼                                          │
+  ┌───────────────────────────────────────────────────────────┴──┐
+  │ uvicorn(127.0.0.1:8013)  knowtune.api.app:app                 │
+  │   导入期 state = AppState()（api/app.py:557）                   │
+  │     cfg / Database / Embedder / VectorStore / SparseIndex /     │
+  │     Reranker / RetrievalEngine / IngestPipeline / LLMClient     │
+  │     sites = InstanceManager                                     │
+  │   lifespan(app.py:325)：attach 密钥 → 预热线程 → start_autostart │
+  │   后台接口 /api/*（全部 HTTP）+ /v1/* 转发网关                    │
+  │   后台静态 api/static/*（构建号 0.9.54）                         │
+  │   /v1/chat/completions = 纯转发，不进 RAG                        │
+  └───────────────────┬────────────────────────────────────────────┘
+                      │ runner.start()（runner.py:296）
+                      ▼
+  ┌──────────────────────────────────────────────────────────────┐
+  │ 前台线程：同进程 daemon uvicorn(127.0.0.1:8800)               │
+  │   frontsite/site.py：/、/api/info、/api/ask、/api/feedback     │
+  │   frontsite/static/*（构建号 1.7.18）                          │
+  │   └─ app.mount("/previsit")                                   │
+  │        _SectionGate（pv 开关未开 → 404）                        │
+  │        └─ previsit.app（只有 API，没有页面）                     │
+  └──────────────────────────────────────────────────────────────┘
 ```
 
----
+**`/v1/chat/completions` 是纯转发网关**（`api/app.py:1271-1303`）：解析请求体、按选中的 provider 拼上游地址、把 body 原样 POST 出去，流式/非流式都只是转字节，不碰检索、不碰生成链。RAG 入口只有后台 `/api/ask` 与前台 `/api/ask` 两处。
 
-## 3. 顶层目录：每个文件夹为什么存在
+## 3. 顶层目录为什么存在
 
-| 路径 | 是什么 | 能不能删 |
+| 目录 / 文件 | 为什么存在 |
+|---|---|
+| `src/knowtune/` | 主项目全部代码：后台接口、检索/生成链、配置与存储、前台站点、预问诊桥接层。 |
+| `src/previsit/` | 预问诊**独立实现**（v0.3.0），刻意零 `knowtune` 依赖，可单独部署；wheel 里与 `knowtune` 并列打包。 |
+| `config/` | 出厂配置、本机覆盖、后端注册表、实例/板块、提示词资产与预问诊领域配置，都是随版本库走的文本。 |
+| `scripts/` | 三个开发期辅助脚本（假后端、下载 llama-server、截图），不参与运行时。 |
+| `docs/` | 面向人的文档，`docs/` 下 6 份 + 根 [README](../README.md) 共 7 份，各司其职见末节。 |
+| `pyproject.toml` | 打包与依赖分组（`extract` / `local` / `onnx` 可选未启用 / `dev`），入口与版本号。 |
+| `data/` | 运行数据：库、上传副本、本地模型、密钥、标定、会话库。**体积大且含个人内容，被 `.gitignore` 整目录排除，不进版本库**，clone 后由程序自建并自行下载模型。 |
+| `tools/llama/` | llama.cpp 可执行文件（约 100MB，按需由 `scripts/get_llama.py` 下载），**被 `.gitignore` 排除**，不是项目代码。 |
+| `_pm/` | 立项/需求类过程文档与内部基线，**被 `.gitignore` 排除，不是项目目录**，不参与构建与运行；`.workbuddy/`、`_shot/`、`.pytest_cache/`、`.venv/`、`.idea/` 同属本机环境或过程产物。 |
+
+## 4. 逐文件说明（对照 `find src -type f` 真实清单）
+
+下列表格只列源码与配置源文件。`__pycache__/*.pyc` 是字节码缓存，不列；`evaluate.py`、`frontsite/evalboard.py` 已随评测台迁出为独立项目，只残留 `.pyc`，**不是现行文件**，不要照着旧清单写。每张表一行一个文件。
+
+### 4.1 `src/knowtune/` 顶层模块
+
+| 文件 | 职责 | 关键约束 |
 |---|---|---|
-| `src/knowtune/` | 全部 Python 源码（含两套前端静态文件） | 不能 |
-| `config/` | 全部配置：默认值、本机覆盖、模型注册表、站点实例、提示词 | 不能 |
-| `data/` | 运行期数据：数据库、上传原件、模型权重、密钥 | 不能（删了等于重建库） |
-| `docs/` | 架构文档、WBS、本文件 | 不能 |
-| `.venv/` | 虚拟环境（1.3 GB，含 torch） | 可删，重装见 README |
-| `.workbuddy/memory/` | 开发过程的工作日志 | 可删，属于过程记录 |
-| `.idea/` | PyCharm 工程配置 | 可删，IDE 会重建 |
+| `src/knowtune/__init__.py` | 包标记，声明 `__version__ = 0.1.0`。 | 与 `pyproject.toml` 的 `version=0.1.0` 一致。 |
+| `src/knowtune/cli.py` | 命令入口 `init/status/kb/ingest/ask/debug/serve`；`cmd_serve`（:226）注入 `KNOWTUNE_GATEWAY` 后 `uvicorn.run("knowtune.api.app:app")`。 | 网关地址按实际 `--port` 写（:234），不是写死 8000；`cli.py` 默认端口是 8000，现行启动用 `--port 8013`，默认 host `127.0.0.1`。 |
+| `src/knowtune/config.py` | 加载 YAML、按库标定覆盖、模型指纹校验。 | 相对路径一律相对**项目根**，不随 CWD 变；标定生效需 kb_id 非空 + 文件存在 + JSON 可读 + 指纹等于 `embedding.model@dim`（:495-510）。 |
+| `src/knowtune/kbconfig.py` | 库级参数覆盖 + 出厂基线比对。 | `kb.config_json` 存**全量快照**并标 `__full__`；「用户手动改过」判据是与出厂基线值不同，不是「键存在」（`api/app.py:542-543`）。 |
+| `src/knowtune/settings.py` | 可调参数的声明式注册表（边界/步长/说明/生效方式），供 `/api/settings` 直接渲染。 | 三层取值（高→低）：运行时覆盖 > `config/local.yaml` > `config/default.yaml`；加参数只改此文件，前端自动多一行。 |
+| `src/knowtune/modelcfg.py` | `config/models.yaml` 端点注册表读写。 | 端点只分 `local` / `openai` 两类（历史上八种 kind 已砍）；**密钥不写进 models.yaml**。 |
+| `src/knowtune/promptcfg.py` | 提示词覆盖层（provider / scope），带 history / rollback / preview。 | 解析链以 `effective_fields():337-344` 为准：`by_provider > by_scope > default > 内置`；仅 `generate` / `translate` 两个 role 支持前两层，`copy_ug` / `copy_zh` 只读角色级。 |
+| `src/knowtune/roles.py` | 后端 / 角色解析（`translate` / `generate` / `copy_ug` / `copy_zh`）。 | 链（:81-111）：板块级 roles → 站点级 roles → 系统级 roles → 实例 provider → 默认 provider，每级用已知后端名校验，不合法继续下退。 |
+| `src/knowtune/schema.sql` | 建表 DDL。 | 8 张实体表 + 1 张 FTS5 虚表 `chunk_fts`（另有 5 张 FTS5 影子表）；`journal_mode=WAL` / `foreign_keys=ON` / `synchronous=NORMAL`；时间统一 UTC ISO8601 字符串。 |
+| `src/knowtune/db.py` | SQLite 连接管理。 | `threading.local` 每线程一连接（FastAPI 同步路由跑在线程池），WAL 下读写并行，不拼锁。 |
+| `src/knowtune/secrets.py` | 密钥内存为主、落盘密文。 | 默认保存（2026-11-01 由「只活内存」反转）；Windows DPAPI 用户态，密文绑当前账户 + 本机，换账户/换机器/拷走都解不开；`secrets.off` 仅本次会话可关。 |
+| `src/knowtune/services.py` | 后端服务探测，回答「现在到底能不能用」。 | 两段式：先打 `/models` 判端口，再发 `max_tokens=1` 补全判模型真加载（网关对 `/models` 常回 200 全列表）；结果带内存缓存且**落盘**。 |
+| `src/knowtune/localmodels.py` | 扫 `.gguf`、找 / 起 / 停 llama-server。 | 一个模型一个进程一个端口；llama.cpp 不支持热切换，「选模型」在本地语境下等于「换端口」。 |
+| `src/knowtune/chatctx.py` | 上下文占用核算：这轮还剩多少给历史。 | 只依赖标准库、按字符数粗略当 token，与 `generate/prompt.py` 口径一致；刻意不塞进 `app.py`（后者 import torch 要 4.5 秒）。 |
+| `src/knowtune/dashboard.py` | 首页数据聚合（资产、检索健康、服务状态、日志）。 | 只读不写、不做任何网络探测；首屏须 50ms 内出。 |
+| `src/knowtune/lang.py` | 语言识别与跨语言问答。 | 中文嵌入模型编码不出维吾尔语语义：维语提问必须先译成中文再检索；生成须换维语系统提示，否则模型照中文资料吐中文。 |
+| `src/knowtune/logbus.py` | 内存环形日志（最近 400 条），首页「系统日志」数据源。 | 进程重启即清空；要长期留存看 `query_log` 表，环形缓冲是「现场」。 |
+| `src/knowtune/models.py` | 跨模块轻量数据结构（`Block` 等 dataclass）。 | 刻意不放任何业务逻辑。 |
+| `src/knowtune/paths.py` | 路径判定纯函数（如 `source_missing`）。 | 单独成模块只为可测，避免单测背 `app.py` 的启动成本。 |
+| `src/knowtune/textnorm.py` | 码位归一化：把 CJK 部首区码位修回汉字。 | 不修会直接废掉检索——jieba 切不出、bge 词表无这些码位；不是排版问题。 |
 
----
+### 4.2 `src/knowtune/ingest/` 导入
 
-## 4. 逐文件说明
+| 文件 | 职责 | 关键约束 |
+|---|---|---|
+| `src/knowtune/ingest/__init__.py` | 包标记。 | 空。 |
+| `src/knowtune/ingest/loader.py` | 多格式抽取 → （纯文本 + 结构块）。 | 抽取失败必须给人能读懂的原因，绝不静默返回空文档；扫描件 PDF 无文本层是最典型的坑。 |
+| `src/knowtune/ingest/cleaner.py` | 导入前清洗，作用于抽取之后、切分之前的内存块。 | **源文件一个字节都不改**；每条规则报「删了几块 / 多少字 / 哪些行」并附样例，供预览逐条核对。 |
+| `src/knowtune/ingest/chunker.py` | 分块：结构优先、字符兜底。 | 先按标题/段落聚合，单段超长才退化字符切；`size/overlap` 改动必须进评估集回归，不能凭手感。 |
+| `src/knowtune/ingest/pipeline.py` | 导入流水线：抽取 → 切分 → 分词 → 嵌入 → 落库 → 原子切换。 | 状态机 `pending → indexing → ready | failed`；旧 `active_gen` 在新代次完全就绪前一直是 active，结构上杜绝「检索到半成品」。 |
 
-### 4.1 根目录
+### 4.3 `src/knowtune/index/` 索引
 
-| 文件 | 职责 |
-|---|---|
-| `pyproject.toml` | 打包与依赖声明。依赖分三档：核心（fastapi/numpy/jieba…）、`[extract]`（PDF/Word/Excel 抽取）、`[local]`（sentence-transformers）。**torch 不在这里**——CPU 版必须从 PyTorch 官方 index 装，写进依赖会被解析成 CUDA 版，体积差 10 倍。 |
-| `README.md` | 使用手册：装环境、跑起来、命令清单。 |
-| `docs/ARCHITECTURE.md` | 设计说明书。数据模型、检索参数为什么这么定、拒答阈值怎么标定、以及每一轮踩坑的完整记录（§12 是开发日志，出问题时先在这里搜）。 |
-| `docs/PROJECT_MAP.md` | 本文件。 |
+| 文件 | 职责 | 关键约束 |
+|---|---|---|
+| `src/knowtune/index/__init__.py` | 包标记。 | 空。 |
+| `src/knowtune/index/embedder.py` | 本地嵌入模型封装（默认 `BAAI/bge-small-zh-v1.5`，512 维）。 | CPU 优先；模型缺失不抛到调用方炸链路，上层把 dense 路降级、用稀疏路兜底并明确告知「当前为降级检索」。 |
+| `src/knowtune/index/vectors.py` | 内存矩阵 + 暴力点积向量检索。 | 规模 ≤10 万 chunk 时 ANN（FAISS/HNSW）是负资产；向量存 `embedding` 表 BLOB，与 chunk 同库同事务，不要「db 与 .f32 对不上」。 |
+| `src/knowtune/index/sparse.py` | jieba 预分词 + SQLite FTS5 稀疏检索。 | 中文必须预分词后写入 `text_seg`（FTS5 默认 unicode61 把整句当一个 token）；`bm25()` 返回负数、越小越相关，必须 `ORDER BY bm25(...) ASC`。 |
 
-### 4.2 `config/`
+### 4.4 `src/knowtune/retrieve/` 检索
 
-| 文件 | 职责 |
-|---|---|
-| `default.yaml` | **唯一真相来源**。所有可调参数与默认值都在这里，每个值都写了"为什么是这个数"。代码里不出现魔法数字。 |
-| `local.yaml` | 本机覆盖层，覆盖 `default.yaml` 的任意项。改端口、换后端地址这类"只对我这台机器成立"的东西放这儿。 |
-| `models.yaml` | 模型后端注册表（增删、切换、探测结果）。由「模型」页写入，也可手改。 |
-| `instances.yaml` | 前台问答站点的实例定义：哪个库、哪个端口、什么语言、用哪个模型角色。由「站点」页写入。 |
-| `prompts/qa_v1.md` | 默认系统提示（中文）。`prompt_version` 指向它。 |
-| `prompts/qa_ug.md` | 维吾尔语版本的系统提示。回答语言不是中文时自动改用它。 |
+| 文件 | 职责 | 关键约束 |
+|---|---|---|
+| `src/knowtune/retrieve/__init__.py` | 包标记。 | 空。 |
+| `src/knowtune/retrieve/engine.py` | 检索编排：双路召回 → 加权融合 → 邻块扩展 → 精排 → MMR → 拒答判定。 | 每段都可失败且失败后必须有明确去向（降级 + 打标），不允许「某一路静默返回空」这种看起来正常、实际召回腰斩的状态；融合方法以 `config/default.yaml` 现行的 `weighted` 为准。 |
+| `src/knowtune/retrieve/rerank.py` | CrossEncoder 精排、MMR、4096 条进程内 LRU 打分缓存。 | 当前三个知识库 `retrieval.rerank.enabled` 均为 `true`，**精排实际在跑**，`allow_download: false` 时缺失只降级不联网补；超时把同步 `predict` 丢单线程执行器 `wait(timeout)` 后放弃等待走降级；缓存键为 (模型, 问题摘要, 片段摘要)，换问法不命中、重启即空。 |
 
-### 4.3 `src/knowtune/` 地基（谁都要用的那层）
+### 4.5 `src/knowtune/generate/` 生成
 
-| 文件 | 职责 |
-|---|---|
-| `__init__.py` | 包声明，只有版本号。 |
-| `config.py` | 配置加载：YAML → pydantic 模型。**相对路径一律相对项目根解析**，不跟着 CWD 跑。合并顺序见 §8。还负责把 `refusal_calibration.json` 里的标定结果并进配置。 |
-| `settings.py` | 可调参数的**声明式注册表**（30 个参数 / 7 组）。一个参数只在这里声明一次：类型、范围、默认值、中文名、说明。参数面板、校验、落盘、恢复默认全部由这张表驱动——UI 上不再手写控件，就不会出现"前端写 0.5、后端按 0.3 算"。 |
-| `kbconfig.py` | **知识库级**参数覆盖。每个库一套自己的检索口径，存在 `kb.config_json` 里；建库时按预设复制一份，改完立刻生效。 |
-| `db.py` | SQLite 连接管理。核心是 `check_same_thread=False` + 每线程一条连接：FastAPI 的同步路由跑在线程池里，共用一条连接会撞锁。 |
-| `schema.sql` | 建表语句与索引。整个数据模型在这里看最快。 |
-| `models.py` | 跨模块传递的数据结构（`Chunk`、`Hit`、`DocMeta`…）。刻意保持无逻辑。 |
-| `paths.py` | 两个纯函数：判断源文件是否还在、判断路径是否越界。单独成模块是为了**可测**——放进 `app.py` 就等于让测试去背整个应用的启动成本。 |
-| `logbus.py` | 内存环形日志。接管 root logger 一份，首页「系统日志」读它。个人单机不需要 500MB 的 access.log，需要的是"最近 200 条里有没有错"。 |
-| `services.py` | 后端可用性探测："现在到底能不能用"。两段式（先 TCP 探活、再打一次 `/v1/models`），结果缓存 15 秒。本机地址自动绕代理。 |
-| `secrets.py` | 密钥存放。默认**落盘但只落密文**（Windows DPAPI，账户 + 机器级；无系统级加密的平台拒绝落盘并报错）。原来默认只在内存、勾了才存，实测"没人会去勾那个框"，于是每次重启都在重填，2026-11-01 反转了默认值。另有 `api_key_env` 第三来源，给服务器 / CI 用。 |
-| `modelcfg.py` | `models.yaml` 的读写：后端增删改、只存与默认值的差异、软删除。另出两份视图：`providers`（卡片用）与 `catalog`（扁平的后端×模型表，对话页下拉用——只列当前后端的话，用户加的模型就"选不到"）。 |
-| `roles.py` | **模型角色**：一次问答里其实有三种不同的模型调用（翻译 / 生成 / 嵌入），可以分别指定后端。绑死在一个后端上是偷懒。 |
-| `lang.py` | 语言识别、查询翻译、译文判废、答案翻译。跨语言问答的全部逻辑。含"剥掉模型原样抄回问题"这类防御。 |
-| `chatctx.py` | 上下文占用核算：这一轮还剩多少字符给历史。不依赖 torch，所以能单测。 |
-| `dashboard.py` | 首页数据聚合（资产、近 24h、存储评估、健康度）。只读，不探测。 |
-| `evaluate.py` | 评估：Recall@K / MRR / 拒答混淆矩阵 / 阈值标定。**没有基线的 RAG 无法判断改动好坏**，这个模块是唯一的裁判。 |
-| `cli.py` | 命令行入口：`init / status / kb / ingest / ask / debug / eval / serve`。 |
+| 文件 | 职责 | 关键约束 |
+|---|---|---|
+| `src/knowtune/generate/__init__.py` | 包标记。 | 空。 |
+| `src/knowtune/generate/prompt.py` | 上下文装填与提示词（`build_context`）。 | 超预算按相关度从低到高**丢整条**，绝不从中间截断单条；编号一旦确定不再重排，前端点 [3] 要精确回到第 3 条。 |
+| `src/knowtune/generate/llm.py` | LLM 客户端：一个 OpenAI 兼容协议、三档后端。 | 超时须显式数值且 read 单独给；重试只允许发生在**首 token 之前**；云端 profile 出站前做 PII 扫描、本地跳过；`disable_thinking: true`、SSE 流式。 |
+| `src/knowtune/generate/cite.py` | 引用校验：越界编号剥离 + 覆盖率统计。 | 只删不改，任何改写都等于二次创作；覆盖率只验证格式，不验证内容。 |
+| `src/knowtune/generate/evidence.py` | 检索证据分档，把召回质量显式告诉模型。 | 分档口径（2026-11-06 改）：资料答到 → 带 [n] 照资料说；没答到 / 只答一半 / 讲别的病 → 用自身知识把问题完整答完，不再写满屏「资料中未找到」。 |
+| `src/knowtune/generate/support.py` | 答案支撑度：句子与其引用块各自编码算余弦，判「引到了没有」。 | 补 `cite.py` 只验格式之缺；**只在后台 `/api/ask` 链路调用**，前台 `/api/ask` 不调用 `support.evaluate`，不得写成「每次问答都算支撑度」。 |
+| `src/knowtune/generate/think.py` | 剥掉模型吐出的 `<think>…</think>` 思考块。 | 放在 LLM 层做，`stream` / `complete` 两条路都盖住；避免中文草稿在 RTL 维语容器里显示成倒字。 |
 
-### 4.4 `src/knowtune/ingest/` 导入链路
+### 4.6 `src/knowtune/api/` 后台
 
-| 文件 | 职责 |
-|---|---|
-| `loader.py` | 多格式抽取：PDF / Word / Excel / PPT / Markdown / 网页 / 源码 → (纯文本 + 结构块)。原则是**失败必须给人话**，绝不静默返回空文档。 |
-| `cleaner.py` | 抽取之后、切分之前的清洗：去页眉页脚、去水印、去重复行。第一条原则是**源文件一个字节都不改**。 |
-| `chunker.py` | 分块：结构优先（标题层级 → 段落 → 句子），字符兜底。中文技术文档一个论点常横跨 3–5 段，按固定窗口切必然切断论证。 |
-| `pipeline.py` | 流水线：抽取 → 清洗 → 切分 → 分词 → 嵌入 → 落库 → **原子切换**。带状态机与进度，供后台轮询。重新索引时保留一代旧数据，用于回滚。 |
+| 文件 | 职责 | 关键约束 |
+|---|---|---|
+| `src/knowtune/api/__init__.py` | 包标记。 | 空。 |
+| `src/knowtune/api/app.py` | 后台全部 HTTP 接口（状态/看板、模型服务、设置、知识库、导入、分块、检索问答、会话日志、实例/预问诊）+ 静态页 + `/v1` 网关。**约 4400 行，仓库唯一大文件**。 | 模块级 `state = AppState()`（:557）在导入期构造，`app = FastAPI(lifespan=lifespan)`（:558）；`/v1/chat/completions`（:1271-1303）是**纯转发网关**，不是 RAG 入口；「手动改过」判据在 :542-543。 |
+| `src/knowtune/api/static/index.html` | 后台 UI 骨架，构建号 `0.9.54`（`window.ADMIN_REQ_BUILD`）。 | 与前台静态资源完全不共享；资源 URL 带 `?v=0.9.54` 破缓存。 |
+| `src/knowtune/api/static/app.js` | 后台交互逻辑，构建号 `0.9.54`（`window.ADMIN_BUILD`）。 | 参数控件由 `/api/settings` 吐出的注册表渲染，前端不写业务含义。 |
+| `src/knowtune/api/static/style.css` | 后台样式。 | 由 `index.html` 以 `style.css?v=0.9.54` 引用。 |
 
-### 4.5 `src/knowtune/index/` 两种索引
+### 4.7 `src/knowtune/frontsite/` 前台问答站
 
-| 文件 | 职责 |
-|---|---|
-| `embedder.py` | 本地嵌入模型（bge-small-zh-v1.5，512 维）。含预热线程与就绪状态——冷启动 93 秒里前端必须能解释"为什么还不能问"。 |
-| `sparse.py` | 关键词检索：jieba 预分词 + SQLite FTS5。**必须预分词**：实测 FTS5 默认分词器对中文完全失效（2 字查询命中 0 条），trigram 同样失效。 |
-| `vectors.py` | 向量检索：内存矩阵 + 暴力点积。10 万 chunk ≈ 196MB，这个量级上暴力算比建 ANN 索引更快也更准。 |
+| 文件 | 职责 | 关键约束 |
+|---|---|---|
+| `src/knowtune/frontsite/__init__.py` | 包标记 + 导出 `InstanceSpec` / `load_all` / `next_free_port` / `InstanceManager`。 | 定位「共用内核、分开表皮」：检索器/嵌入/LLM 复用后台，界面与接口另起一套。 |
+| `src/knowtune/frontsite/instcfg.py` | 实例配置（一个实例 = 一个独立问答站点），读 `config/instances.yaml`。 | 端口范围 8800–8899（`PORT_MIN/MAX`）；与 `models.yaml` 分开存，避免改模型带出站点配置。 |
+| `src/knowtune/frontsite/runner.py` | `InstanceManager` 启停；`start_autostart()`（:495）。 | 每实例 = 一条 daemon 线程里一个 uvicorn（:360），**同进程、不另起进程**；理由（2026-10-28）：嵌入模型只加载一份、日志/配置/队列集中、Windows 无 fork；代价是单实例崩溃带走后台，靠 uvicorn 异常隔离 + 启动前端口探测压住。 |
+| `src/knowtune/frontsite/site.py` | 前台问答站点：`/`、`/api/info`、`/api/ask`、`/api/feedback`，以及挂载 `/previsit`。 | 问答流程与后台 `/api/ask` 同构但**刻意不共用代码**（不要会话预算/调试面板/审计日志）；`app.mount("/previsit", _SectionGate(...))`（:333），`_SectionGate`（:308）按 `pv` 开关做 404 拦截；挂载失败吞异常但写 ERROR 日志，不拖垮站点。 |
+| `src/knowtune/frontsite/static/index.html` | 前台 UI 骨架，构建号 `1.7.18`（`window.SITE_REQ_BUILD`）。 | 维吾尔语 RTL，与后台静态资源完全隔离；资源 URL 带 `?v=1.7.18`。 |
+| `src/knowtune/frontsite/static/app.js` | 前台交互逻辑，构建号 `1.7.18`（`window.SITE_BUILD`）。 | 切换语言时不允许任何元素换边；引用牌做连续编号区间合并。 |
+| `src/knowtune/frontsite/static/style.css` | 前台样式。 | 由 `index.html` 以 `style.css?v=1.7.18` 引用。 |
 
-### 4.6 `src/knowtune/retrieve/` 检索编排
+### 4.8 两套 previsit 目录的关系（先讲清，再列表）
 
-| 文件 | 职责 |
-|---|---|
-| `engine.py` | 主链路：双路召回 → 加权 RRF 融合 → 精排 → MMR → 拒答判定。**每一段都可以失败，失败后必须降级并打标**，不能静默返回空结果。 |
-| `rerank.py` | 精排（CrossEncoder）与 MMR 去冗余。权重目录缺失时降级并打 `degraded=rerank_model_missing`，加载异常打 `rerank_unavailable`；按 (模型, 问题摘要, 片段摘要) 的 4096 条逐对 LRU 打分缓存已实现（进程内，重启即空）。 |
+**不是重复实现，也不是「两套预问诊」**。`src/previsit/` 是实现真身（v0.3.0，零 `knowtune` 依赖，能独立部署）；`src/knowtune/previsit/` 是**桥接 + 装配层**：五个同名文件是纯 `from previsit.xxx import ...` 再导出，`app.py` 只负责把主项目这一侧的东西接上去。运行时实际执行的是 `src/previsit/` 的代码，由 `frontsite/site.py:331-336` 挂到 `/previsit`，并用 `_SectionGate` 按 `pv` 开关做 404 拦截；预问诊**没有独立站点**，对外全路径是 `/previsit/api/previsit/*`。
 
-### 4.7 `src/knowtune/generate/` 生成链路
+| 文件 | 职责 | 关键约束 |
+|---|---|---|
+| `src/knowtune/previsit/__init__.py` | 桥接包标记，说明实现已整体迁到顶层 `previsit` 包。 | 只做两件事：向后兼容再导出 + 装配，不含业务逻辑。 |
+| `src/knowtune/previsit/app.py` | **主项目装配层**：注入进程内检索器、LLM 适配器、密钥、会话库，建 FastAPI app。 | 一行路由都不写，全从 `previsit.app.create_app(engine)` 来；`build_engine()` 注入 `InProcessRetriever`（:99-105）；另给后台参数面板提供 `config_describe/save/reset`。 |
+| `src/knowtune/previsit/config.py` | 桥接：`from previsit.config import ...` 纯再导出。 | 不是实现；独立包根目录解析优先 `PREVISIT_HOME`。 |
+| `src/knowtune/previsit/engine.py` | 桥接：`from previsit.engine import PrevisitEngine` 纯再导出。 | 不是实现。 |
+| `src/knowtune/previsit/kb.py` | 桥接：`from previsit.kb import ask_of/detect_domain/for_slot/retrieve` 纯再导出。 | 不是实现。 |
+| `src/knowtune/previsit/kgdb.py` | 桥接：`from previsit.kgdb import DEFAULT_DB, KG` 纯再导出。 | 不是实现。 |
+| `src/knowtune/previsit/store.py` | 桥接：`from previsit.store import SCHEMA, Store` 纯再导出。 | 不是实现。 |
 
-| 文件 | 职责 |
-|---|---|
-| `prompt.py` | 上下文装填与提示词组装：按相关度排序、按 token 预算裁剪、拼系统提示。两条硬规则：资料不足必须拒答、答案必须带引用编号。 |
-| `llm.py` | LLM 客户端：一个协议（OpenAI 兼容）、三档后端（vLLM / LM Studio / 云端）。整条链路唯一不可控的一段，超时、重试、字段退让、`reasoning_effort` 都在这里。 |
-| `think.py` | 剥掉思考型模型吐出的 `<think>…</think>` 块，避免推理过程被当成答案正文。 |
-| `evidence.py` | 证据分档：把"这批资料有多可信"量化成高/中/低，既不直接扔给模型、也不让界面假装很有把握。 |
-| `cite.py` | 引用校验：把"模型说它引用了"变成"确认它引用了"。算覆盖率、抓越界编号、给 feedback 关联 `message_id`。**它只判格式**——编号在不在、超没超范围。 |
-| `support.py` | 答案支撑度：把"引用了"变成"引到了"。答案逐句与所引证据块的 **150 字窗口**算余弦取最大（整块口径会把单句语义稀释掉，实测漏断率差 16 倍），外加事实锚点**句级否决**——半数以上锚点落空即不算有据。回答"这句话在资料里找不找得到"。不依赖 LLM，本地嵌入模型即可，所以能进每次问答的运行时链路。 |
+### 4.9 `src/previsit/` 实现真身
 
-### 4.8 `src/knowtune/api/` 后台
+| 文件 | 职责 | 关键约束 |
+|---|---|---|
+| `src/previsit/__init__.py` | 独立包标记，声明 v0.3.0，说明数据面只有三样（`previsit.yaml` / `previsit_kb.yaml` / `kg.db`）。 | 不 import 主项目任何东西（config / secrets / LLMClient / 检索链都不碰）。 |
+| `src/previsit/app.py` | 预问诊 HTTP 入口，**只有 API 没有页面**：`/api/previsit/meta|start|reply|config*`。 | 界面画在维医站点第三个板块，不另开页面、不另起端口；后台 `/api/previsit/*` 调同一套函数。 |
+| `src/previsit/engine.py` | 预问诊状态机（intake → start → 安检门 → 抽取槽位 → 更新档案 → 追问…），约 1860 行，本包最大文件。 | 命中危险词转 `emergency` 停止采集；`apply_config()` 支持改参数不重启进程。 |
+| `src/previsit/config.py` | 读 `config/previsit.yaml`，读成普通 dict 交给 engine。 | 刻意不复用主 Config；`previsit.yaml` 是带设计注释的手写文档，不用 `yaml.safe_dump` 回写（会铲平注释）。 |
+| `src/previsit/settings.py` | 运行时可改参数的定义（模型、上限、轮次、图谱追问、语义召回、界面文案、提示词）。 | 后台「站点 → 预问诊」改的就是这批字段，经 `apply_config()` 灌入，不直接改 `previsit.yaml`。 |
+| `src/previsit/kb.py` | 追问要点检索，按「症状域 × 槽位」组织。 | `detect_domain` 命中总字数最多的域胜出；`for_slot` 取最相关一条知识；`retrieve` 保留给没配 `domains` 的旧配置。 |
+| `src/previsit/kgdb.py` | 知识图谱查询层（`data/previsit/kg.db`，由构建脚本产出）。 | 只回答三件事：`ros()` 下一句问什么、`dept_votes()` 兜底分诊、`probes()` 口语归一；只作手写规则未命中时的兜底。 |
+| `src/previsit/llm.py` | 自带最小 OpenAI 兼容客户端。 | 刻意不 import 主项目 LLMClient（否则「独立部署」成空话）；配置全来自环境变量 `PREVISIT_LLM_BASE_URL` / `PREVISIT_LLM_GATEWAY` / `KNOWTUNE_GATEWAY`。 |
+| `src/previsit/retriever.py` | 语义召回：把患者原话发给后端知识库检索接口，从标题解析域/槽位/病种。 | 自己**不带向量模型**（不把 torch / sentence-transformers 拖回来）；`InProcessRetriever` 供主服务挂载时进程内查库，`config/previsit.yaml:86` 的 `http://127.0.0.1:8000` 只在独立部署时生效。 |
+| `src/previsit/store.py` | 预问诊档案存储（SQLite 单文件 `data/previsit.db`）。 | `session` / `turn` 两表；档案用 JSON 列而非一堆字段，槽位配置驱动、加槽位不用写迁移。 |
 
-| 文件 | 职责 |
-|---|---|
-| `app.py` | **全部 HTTP 接口**（约 4400 行，是项目里唯一的大文件）。启动时构造 `AppState`（连接、模型、检索器、流水线、LLM、站点管理器）并预热。路由按域分组：状态/看板、模型、设置、知识库、导入、检索调试、问答(SSE)、会话、日志、评估、实例。 |
-| `static/index.html` | 后台外壳：五视图导航（首页 / 对话 / 知识库 / 模型 / 站点）+ 弹窗容器 + 构建号自检。 |
-| `static/app.js` | 后台全部逻辑（约 5000 行）：路由、各视图渲染、SSE 对话、参数面板、站点卡片。无框架、无打包，直接 ES2020。 |
-| `static/style.css` | 后台样式。深色为基底。 |
+### 4.10 `config/`
 
-### 4.9 `src/knowtune/frontsite/` 前台问答站
+| 文件 | 职责 | 关键约束 |
+|---|---|---|
+| `config/default.yaml` | 出厂参数唯一权威，带「为什么是 480 不是 512」这类注释。 | 程序不写坏它；分块、检索、融合、精排、拒答、生成、会话参数都在这里。 |
+| `config/local.yaml` | 用户调参结果（差异项）。 | 与 `default.yaml` 分开，出厂注释永不被程序覆盖。 |
+| `config/models.yaml` | 后端注册表（OpenAI 兼容地址 + 模型清单）。 | **不写密钥**；密钥在 `data/secrets.json`。 |
+| `config/instances.yaml` | 前台实例与三板块配置。 | 当前只有一个实例 `uyghur-med`：`port: 8800`、`autostart: true`、`kb_id: 2`、`classic_kb_id: 4`；`sections` 定义 `med` / `classic` / `pv`，`sections.*.roles` 当前均未配置。 |
+| `config/prompts.yaml` | 提示词覆盖层（provider / scope）。 | 只记录与内置默认不同的字段；当前实配 `translate.by_provider.siliconflow.system`、`copy_zh.default.samples`，`overridden_scopes` 为空（当前没配板块级覆盖）。 |
+| `config/prompts/qa_v1.md` | `generate` 角色内置中文提示词，版本化资产。 | 按 `prompt_version` 选文件，不搬进数据库（搬走就丢了版本切换）。 |
+| `config/prompts/qa_ug.md` | `generate` 角色维语提示词。 | 按回答语言切到这里。 |
+| `config/previsit.yaml` | 预问诊领域配置：槽位、危险词、分诊规则、提示词。 | 手写文档、字段上压着设计注释；`:86` 的 `retrieval.url` 只在独立部署时生效，模型一律跟随 `/v1` 固定入口、不在这些文件里钉后端。 |
+| `config/previsit.overrides.yaml` | 预问诊运行时覆盖。 | 由后台「前台站点 → 预问诊参数」写回。 |
+| `config/previsit_kb.yaml` | 分域追问知识库（域 × 槽位 × 知识点 / 现成问法）。 | 供 `src/previsit/kb.py` 消费。 |
+| `config/prompts/_history/` | 目录：提示词每次保存前的自动回滚快照。 | 提示词 history / rollback 功能写入，**非配置源、被 `.gitignore` 排除、不进版本库**。 |
 
-| 文件 | 职责 |
-|---|---|
-| `site.py` | 前台应用的工厂：`build_site(spec, state)` 生成一个只含「问 + 答 + 来源」的 FastAPI 实例。**每次请求现读配置**（`_cur()`），所以改标题、改欢迎语不用重启站点。页面语言按**文案内容**判定（`_content_lang`），配置里的 `lang` 只在判不出时兜底；答案语言取前端随请求下发的 `ui_lang`（= 右上角高亮那颗）。 |
-| `instcfg.py` | 实例配置的读写（`instances.yaml`）：一个实例 = 一个知识库 + 一个端口 + 一套语言 + 一组模型角色。`alt` 存另一套语言的文案（含 `kb_name`），缺的字段由 `default_copy` 补齐。 |
-| `runner.py` | 实例启停：每条线程一个 uvicorn、一个端口。选线程而不是子进程，是为了共用已加载的模型。含端口占用检测（被别的程序占了要明说，不能默默失败）。 |
-| `static/index.html` | 前台外壳：左栏历史 + 中间问答 + 底部输入框。骨架**永不镜像**——切维语只换字形方向，不让侧栏跑到右边。 |
-| `static/app.js` | 前台逻辑：流式问答、会话历史（存在 localStorage）、引用牌断行绑定、三语文案。 |
-| `static/style.css` | 前台样式。和后台完全独立：配色、字体、圆角三套都不共用，改后台不会动到这里。维吾尔语字体必须走 `Microsoft Uighur` 一族，字体选错会让阿拉伯字母连写断开。 |
+### 4.11 `scripts/` 与 `docs/`
 
-### 4.10 `data/` 运行期数据
+| 文件 | 职责 | 关键约束 |
+|---|---|---|
+| `scripts/fake_llm.py` | 假的 OpenAI 兼容端点，专门验证「生成 → 引用 → 支撑度」链路。 | `good` 模式抄资料（应判 supported）、`bad` 模式编数字（应判 weak/unsupported 并被锚点抓到）；不是给人看的回答生成器。 |
+| `scripts/get_llama.py` | 下载 llama-server 到 `tools/llama`。 | 查 tag、选平台/后端资产、镜像兜底下载并解压；国内 github.com release 常 502，与 `api.github.com` 是两个网络路径。 |
+| `scripts/shot_models.py` | 截「模型服务」页的本地模型扫描面板，验证 llama-server 已被认到。 | 用系统 Edge（`channel=msedge`），不额外下 Chromium。 |
+| `docs/ARCHITECTURE.md` | 现行架构、数据模型、检索/生成链、实测数据、需求对照、历史归档。 | 不写操作步骤。 |
+| `docs/PROJECT_MAP.md` | 本篇：逐目录逐文件、启动顺序、配置优先级、改动落点。 | 不写实测指标。 |
+| `docs/RUNBOOK.md` | 从零 clone 到三板块可用：依赖顺序、模型路径、DB 初始化、绑库、判据、排障、备份。 | 不写架构原理。 |
+| `docs/USER_GUIDE.md` | 日常使用：建库导入、提问读引用、参数含义、指标、使用侧限制。 | 不写安装顺序细节。 |
+| `docs/TECH_STACK.md` | 技术清单与分层、三个关键决策、启动速记。 | 不写需求对照。 |
+| `docs/WBS.html` | 交付时的工作包与范围缺口**快照**。 | 明确标注「历史快照」，不冒充现行状态表。 |
 
-| 路径 | 内容 |
-|---|---|
-| `library.db` | 全部数据：知识库、文档、chunk、向量、FTS 索引、会话、消息、请求日志、反馈。**这是唯一需要备份的东西。** |
-| `uploads/` | 导入文件的原始副本，用于「回查原文」与重建索引。 |
-| `models/` | 本地模型权重（嵌入 92 MB、精排 1.1 GB）。精排是必需资产：`allow_download: false`，缺失只降级、不联网补下，下载路径见 RUNBOOK §2。 |
-| `vectors/` | 预留的向量落盘目录，当前向量直接存在 SQLite 里。 |
-| `secrets.json` | 会话密钥（服务停止即失效）。 |
-| `refusal_calibration.json` | **旧格式**的全局标定结果（仅 22 条样本、`reliable:false`，已不生效）。新标定按库分文件，见下一条。 |
-| `calibration/kb_<id>.json` | 该知识库的标定结果：拒答 AUC / 阈值 / 误拒漏拒率 / 每组探针的原始分数，支撑度 AUC（语义层与事实层各一个）/ 阈值 / 分布。由 `model-eval/calibrate.py` 产出，主项目只读。模型指纹对不上时自动失效。 |
-| `probe_cache.json` | 后端探测结果缓存，15 秒过期。 |
+### 4.12 代码 / 注释已知不一致（以代码为准）
 
----
+下列三类曾被记录为「注释说的」与「代码做的」不一致。文档如实点名，但**一律以代码为准**；这些注释已在本次重写中按代码口径修正，现行源码不再是旧描述：
 
-## 5. 项目是怎么"构建"起来的
+1. **提示词优先级注释**：`src/knowtune/promptcfg.py` 早期头注释与 `save()` docstring 曾声称 scope（板块）优先于 provider（后端），`config/prompts.yaml` 头注释曾漏写 `by_scope`。以代码为准：`effective_fields():337-344` 是 `by_provider > by_scope > default > 内置`，且仅 `generate` / `translate` 支持前两层。
+2. **`schema.sql` 注释**：`kb` 表 `config_json` 的早期注释曾写「只存与全局不同的项」。以代码为准：`src/knowtune/kbconfig.py` 实现是**全量快照 + `__full__`**，「用户手动改过」的判据是与出厂基线值不同（`api/app.py:542-543`），不是键存在。
+3. **前台构建号**：前台静态资源版本号（`style.css?v` / `app.js?v` / `SITE_REQ_BUILD` / `SITE_BUILD`）曾在多处不一致。以代码为准：当前前台统一 `1.7.18`、后台统一 `0.9.54`；两套静态资源各自独立，互不影响。
 
-不是靠打包脚本，而是靠**依赖方向**。五层，箭头只允许从上往下指：
+## 5. 项目是怎么「构建」起来的
 
-```
-L4  表皮层   api/static（后台界面）      frontsite/static（访客界面）
-L3  编排层   api/app.py 的 AppState —— 把下面几层组装成一条流水线
-L2  能力层   ingest · index · retrieve · generate
-L1  配置层   config · settings · kbconfig · modelcfg · roles
-L0  契约层   models（数据结构）· schema.sql（存储）· db（连接）
-旁挂 工具    lang（语言识别与翻译）· paths · logbus
-             谁都能调，但它们自己不 import 任何业务模块，不参与分层
+依赖自底向上五层，接口 / 前端是顶层消费者：
 
-     依赖只会向下：上面的 import 下面的，下面的从不 import 上面的
-```
+1. **配置**：`config/default.yaml` → `config/local.yaml` → `kb.config_json` 全量快照 → 按库标定；`config/models.yaml` 给后端，`config/instances.yaml` 给站点与板块。`src/knowtune/config.py` / `kbconfig.py` / `settings.py` / `modelcfg.py` / `promptcfg.py` / `roles.py` 逐层解析。
+2. **存储**：`src/knowtune/schema.sql` 建表，`db.py` 管连接，`secrets.py` 管密钥，`data/library.db` 是唯一持久化库。
+3. **索引**：`ingest/` 把文件变成 chunk，`index/embedder.py` 出向量、`index/sparse.py` 出 `text_seg`，`index/vectors.py` 在内存拼矩阵。
+4. **检索**：`retrieve/engine.py` 编排双路召回、融合、精排、拒答；`retrieve/rerank.py` 出精排与 MMR。
+5. **生成**：`generate/prompt.py` 装填上下文，`llm.py` 调后端，`cite.py` / `evidence.py` / `support.py` / `think.py` 做校验与后处理。
+6. **接口 / 前端**：`api/app.py` 暴露后台全部 HTTP 与 `/v1` 网关；`frontsite/` 起前台线程并挂 `/previsit`。
 
-规则很硬：
-
-- **L0 不认识任何人**。`models.py` 里没有业务逻辑，`schema.sql` 里没有 Python。
-- **L1 只读配置，不碰业务**。这一层回答"参数是多少"，不回答"参数怎么用"。
-- **L2 之间互不调用**。`retrieve` 不知道 `generate` 存在（`engine.py` 只 import `index` 和 `models`），
-  `ingest` 不知道自己以后会被检索。唯一的一处横向依赖是 `generate/prompt.py` 用了
-  `lang.answer_instruction`——`lang` 是旁挂工具，不反向依赖任何业务模块，所以不会成环。
-  这一层的每个模块都只靠 `models.py` 里的数据结构对话，这就是 259 条单测能跑在 13 秒内的原因：
-  每一层都能单独喂数据进去，不需要起服务、不连模型。
-- **L3 是唯一知道全局的地方**。`AppState` 把七个组件实例化并串起来，它不实现任何算法。
-- **L4 只做 I/O**。`app.py` 收参数、调 L2/L3、拼 JSON，不在路由里写业务分支。
-  两套前端（后台/前台）共用同一批 L2 组件，但**样式与文案完全独立**。
-
-反过来做就是灾难：如果 `retrieve` 直接 `import` 了 `generate`，想换个生成后端就得动检索；
-如果前台复用后台的 CSS，改一个后台按钮就会把访客界面弄乱。
-
----
+**为什么嵌入模型只加载一次**：前台是主服务**同进程内的 daemon 线程**（`runner.py` 起 uvicorn），`site.py` 直接复用 `AppState` 里已构造好的 `Embedder` / `VectorStore` / `SparseIndex` / `RetrievalEngine` / `LLMClient`。若改成每个前台实例一个子进程，要么每个站点各加载一次（多占几百 MB、还可能加载失败），要么加一套 IPC 让子进程回主进程检索——后者才是真正的冗杂。这是 2026-10-28 定下的取舍，代价是单实例崩溃会带走后台进程。
 
 ## 6. 两条主链路
 
-### 6.1 导入一篇文档
+**导入链路**：`/api/import/path|text|url|upload` 等入口 → `src/knowtune/ingest/pipeline.py` 的 `IngestPipeline` → `loader.py`（抽取，失败给可读原因）→ `cleaner.py`（内存清洗，不写回源文件）→ `chunker.py`（结构优先切块）→ `sparse.py` 预分词 + `embedder.py` 编码 → 落 `chunk` / `embedding` / `chunk_fts` → 原子切换 `document.active_gen`。`document.status` 走 `pending → indexing → ready | failed`；旧代次在新代次就绪前一直是 active。清洗方案存 `clean_json`，重索引沿用。
 
-```
-POST /api/kb/{id}/import   (或 CLI: knowtune ingest)
-   └─ ingest/loader.py      抽取：任意格式 → 纯文本 + 结构块
-   └─ ingest/cleaner.py     清洗：去页眉页脚/水印/重复行（不改源文件）
-   └─ ingest/chunker.py     切分：标题层级优先，句子兜底
-   └─ index/sparse.py       jieba 分词 → FTS5
-   └─ index/embedder.py     批量编码 → 512 维向量
-   └─ db.py + schema.sql    写 document / chunk / embedding / chunk_fts
-   └─ ingest/pipeline.py    原子切换：新代全部写成功才切，失败保留旧代
-```
+**问答链路 · 后台 `/api/ask`**：`effective_cfg`（配置 + 库级全量快照 + 按库标定 + 手动判据）→ `retrieve/engine.py` 的 `search`（dense + sparse → 加权融合 → 邻块扩展(关) → 精排 → MMR(关) → 拒答判定）→ 拒答分支 → `generate/prompt.py` 的 `build_context(provider=..., scope=...)` → `llm.stream` → `normalize_cites` → `cite.verify` → `verbatim_ratio` → `support.evaluate` → SSE `done`。降级标记写进 `query_log.degraded`。
 
-### 6.2 一次问答（前台，维吾尔语提问）
+**问答链路 · 前台 `/api/ask`**：`lang.py` 翻译提问 → 按板块定 `doc_ids` → `engine.search` → `evidence.py` 证据分档 → `build_context(provider=..., scope=...)` → 两段式生成 / 翻译 → `normalize_cites` → `cite.verify` → `done`。**前台不调用 `support.evaluate`**；支撑度目前只在后台 `/api/ask` 链路上算，不能写成「每次问答都算支撑度」。
 
-```
-浏览器 ──POST /api/ask (SSE)──► frontsite/site.py
-   1. lang.py        识别语种 → 需要时把问题译成中文（reasoning_effort=none）
-   2. AppState.engine 双路召回（向量 + BM25）→ 加权 RRF → 精排 → 拒答判定
-   3. generate/evidence.py  给这批资料定档（高/中/低）
-   4. generate/prompt.py    装填上下文（按 token 预算裁剪）
-   5. generate/llm.py       流式生成 → 边生成边推 delta 事件
-   6. generate/think.py     剥掉思考块
-   7. generate/cite.py      校验引用编号是否越界
-   8. lang.py               把答案译回维吾尔语
-   ──SSE events──► meta / stage / query / delta / done / error
-```
+**`/v1/chat/completions` 不进上述任何链路**，只转发到选中的 OpenAI 兼容后端。
 
-每一步失败都有明确去向：翻译失败 → 退原文并在界面挂提示条；精排不可用 → 降级并打标；
-证据不足 → 拒答模板而不是硬编。**没有"静默降级"这条路**。
+降级标记（`retrieve/engine.py` + `retrieve/rerank.py`）：`dense_unavailable` / `dense_disabled` / `sparse_failed` / `mmr_failed` / `refusal_uncalibrated` / `llm_error:`；精排六类 `rerank_unavailable`（模型在失败集或未装 sentence-transformers）、`rerank_model_missing`（本地权重找不到）、`rerank_load_failed`、`rerank_timeout`（>8s）、`rerank_failed`、`rerank_bad_output`。`rerank_unavailable` **不是**「模型没下载」的唯一标记，本地权重缺失对应的是 `rerank_model_missing`。
 
----
+## 7. 启动顺序（`cli.py` → `AppState` → `lifespan` → `start_autostart()`）
 
-## 7. 启动顺序
-
-```
-knowtune serve --port 8000
-  └─ uvicorn 加载 knowtune.api.app:app
-       └─ lifespan 启动 → AppState.__init__
-            ├─ load_config()          default.yaml + local.yaml + models.yaml + 标定结果
-            ├─ Database(cfg)          开 SQLite，PRAGMA foreign_keys=ON
-            ├─ Embedder(cfg)          加载 bge，**后台线程预热**（不阻塞启动）
-            ├─ VectorStore / SparseIndex / Reranker
-            ├─ RetrievalEngine        把上面四个串起来
-            ├─ IngestPipeline
-            ├─ LLMClient
-            └─ InstanceManager        读 instances.yaml，把 autostart 的站点拉起来
-```
-
-冷启动约 93 秒（主要是加载嵌入模型）。这段时间 `/api/status` 会持续返回
-`embedder.warmup.state=loading`，前端据此显示"索引预热中"，而不是让用户对着转圈猜。
-
----
+1. `src/knowtune/cli.py` 的 `main` → `cmd_serve`（:226）：按实际 `--port` 写 `os.environ["KNOWTUNE_GATEWAY"]`（:234），打印地址，再 `uvicorn.run("knowtune.api.app:app", host, port)`（:244）。
+2. uvicorn 导入 `knowtune.api.app`：**模块导入期**执行 `state = AppState()`（`api/app.py:557`）。`AppState.__init__`（:455）依次 `load_config()` → `Database` → `Embedder` → `VectorStore` → `SparseIndex` → `Reranker` → `RetrievalEngine` → `IngestPipeline` → `LLMClient` → `db.ensure_schema()` → `sites = InstanceManager(self)`（:483）。随后 `app = FastAPI(..., lifespan=lifespan)`（:558）。
+3. `lifespan`（`api/app.py:325`）：`secrets.attach()` 恢复密钥 → 清理孤儿导入与过期分片 → `services.warm_cache()` 读回探测结论 → 起 `_warmup` daemon 线程（:342，嵌入预热）→ `for name in state.sites.start_autostart()`（:345，同步做，启动失败要有反馈）。
+4. `InstanceManager.start_autostart()`（`frontsite/runner.py:495`）对 `autostart` 的实例逐个 `start()`（:296），在 daemon 线程里跑 uvicorn（:360）监听 8800；`frontsite/site.py` 建前台 app 并 `app.mount("/previsit", _SectionGate(...))`（:333）。
+5. `yield` 后服务就绪；关停时 `state.sites.stop_all()`（:358）。前台线程随主进程退出，没有独立子进程要回收。
 
 ## 8. 配置优先级
 
-从低到高，后者覆盖前者：
-
-```
-config/default.yaml          ← 出厂值，代码里不再有第二份默认值
-  ↑ config/local.yaml        ← 本机覆盖
-  ↑ config/models.yaml       ← 模型后端注册表（整段替换 generation.providers）
-  ↑ data/calibration/kb_<id>.json ← 该库的标定结果（拒答阈值 + 支撑度阈值；手改过的参数不覆盖）
-  ↑ kb.config_json           ← 知识库级覆盖（存数据库，每库一份）
-  ↑ 请求体里的临时参数        ← 单次请求有效
-```
-
-标定与手调的优先级：**手调过的参数 > 标定结果 > 出厂值**。判"手调过"的依据是与出厂值不同，而不是键存在——库里存的是全量快照，按"键存在"判断会让标定永远不生效（这个坑踩过一次：界面显示 calibrated，实际跑的还是快照里的 0.35）。
-
-**热更新边界**：绝大多数参数改完立刻生效（请求期现读配置）。只有两个是冷字段——
-站点端口、是否公开访问，改完必须重启那个站点，因为监听套接字已经建好了。
-这条边界写在「站点」页的提示里，不靠用户猜。
-
----
+- **参数**：`config/default.yaml`（唯一权威、带注释）→ `config/local.yaml`（用户改过的差异项）→ 库级 `kb.config_json`（**全量快照**，标 `__full__`）→ 按库标定文件覆盖。
+- **手动判据**：「用户手动改过」是**与出厂基线值不同**，不是「键存在」（`api/app.py:542-543`）；否则全量快照会让标定永不生效。
+- **后端与密钥**：注册表在 `config/models.yaml`；密钥在 `data/secrets.json`（Windows DPAPI，绑账户 + 本机，仅本次会话可用 `secrets.off`），**不写进 models.yaml**。
+- **角色解析链**（`roles.py:81-111`）：**板块级 roles → 站点级 roles → 系统级 roles → 实例 provider → 默认 provider**，每级用已知后端名校验，不合法继续下退。当前 `sections.*.roles` 均未配置，所以 `med` 与 `classic` 的解析结果相同。
+- **提示词解析链**（`promptcfg.py:337-344`，以代码为准）：`by_provider`（后端）> `by_scope`（板块）> `default`（角色默认）> 内置（builtin）。仅 `generate` / `translate` 两个 role 支持 `by_provider` 与 `by_scope`；`copy_ug` / `copy_zh` 只读角色级。
+- **预问诊参数**：`config/previsit.yaml` + `config/previsit.overrides.yaml` + `config/previsit_kb.yaml`，后台「前台站点 → 预问诊参数」写回；模型一律跟随 `/v1` 固定入口（`KNOWTUNE_GATEWAY`），不在这些文件里钉后端。
 
 ## 9. 想改功能，动哪里
 
-| 想做的事 | 改这些文件 |
+| 需求 | 落点文件 |
 |---|---|
-| 调检索参数（top-k、融合权重、阈值） | `config/default.yaml` → 参数面板；代码在 `retrieve/engine.py` |
-| 改分块策略 | `ingest/chunker.py`（+ `config` 的 `chunk` 段），改完要重新索引 |
-| 支持一种新文件格式 | `ingest/loader.py` 的抽取器表 + `pyproject.toml` 的可选依赖 |
-| 换生成后端 / 加一个模型 | 「模型」页（写 `config/models.yaml`），协议层在 `generate/llm.py` |
-| 改提示词 | `config/prompts/qa_v1.md`，版本号在 `config/default.yaml` 的 `prompt_version` |
-| 改后台界面 | `api/static/{index.html,app.js,style.css}`，改完升 `ADMIN_BUILD` |
-| 改前台界面 | `frontsite/static/{index.html,app.js,style.css}`，改完升 `SITE_BUILD` |
-| 改站点文案 / 加一种界面语言 | `config/instances.yaml`（`title`/`alt`）+「站点」页；判定逻辑在 `frontsite/site.py` 的 `_content_lang` / `_fill_copy`，内置文案在 `instcfg._DEFAULTS_UG/_DEFAULTS_ZH` |
-| 加一个 HTTP 接口 | `api/app.py`（按域加在对应分组里） |
-| 加一条单测 | 单测与前端冒烟工装已从精简版仓库移除；需要时自建 `tests/` 复用 `src` 的纯函数层（`src` 各层都可单独喂数据，无需起服务、不连模型） |
+| 改提示词 | `config/prompts.yaml`（覆盖层）、`config/prompts/qa_v1.md` / `config/prompts/qa_ug.md`（内置版本化）、`src/knowtune/promptcfg.py`（解析链）。 |
+| 改检索参数 | `config/default.yaml`（出厂）/ `config/local.yaml`（本机）/ `src/knowtune/settings.py`（加参数）/ `src/knowtune/retrieve/engine.py` · `src/knowtune/retrieve/rerank.py`（改逻辑）。 |
+| 加导入格式 | `src/knowtune/ingest/loader.py`（抽取器）+ `pyproject.toml` 的 `extract` 依赖分组；清洗规则看 `src/knowtune/ingest/cleaner.py`。 |
+| 改前端 | 后台 `src/knowtune/api/static/index.html` · `src/knowtune/api/static/app.js` · `src/knowtune/api/static/style.css`；前台 `src/knowtune/frontsite/static/index.html` · `src/knowtune/frontsite/static/app.js` · `src/knowtune/frontsite/static/style.css`。两套完全隔离，改完各自同步构建号。 |
+| 加板块 | `config/instances.yaml` 的 `sections` + `src/knowtune/frontsite/site.py`（路由 / 挂载 / `_SectionGate`）+ `src/knowtune/roles.py`（板块级 roles）。 |
+| 改预问诊 | 参数：`config/previsit.yaml` · `config/previsit.overrides.yaml` · `config/previsit_kb.yaml`；逻辑在 `src/previsit/` 实现真身（尤其 `src/previsit/engine.py`）；装配在 `src/knowtune/previsit/app.py`。 |
+| 换后端 | `config/models.yaml` + `src/knowtune/modelcfg.py`（注册表）+ `src/knowtune/roles.py`（角色绑定）；密钥在界面填，落 `data/secrets.json`，不进配置文件。 |
 
-**两个构建号**（`ADMIN_BUILD` / `SITE_BUILD`）别忘了一起改：HTML 是 no-store 的，
-但 WebView 可能把旧 JS 留在缓存里，编号对不上时页面会强制换一次，否则会出现
-"新按钮在、点了没反应"。三处要一致：`index.html` 的 `?v=`、`index.html` 的自检常量、`app.js` 的常量。
+## 10. 数据目录与备份
 
----
+`data/library.db` 是主库（WAL 模式，运行期还有 `library.db-wal` / `library.db-shm`）：8 张实体表 `kb` / `document` / `chunk` / `embedding` / `session` / `message` / `query_log` / `feedback`，加 1 张 FTS5 虚表 `chunk_fts`（及 5 张自动影子表）。`data/previsit.db` 是预问诊会话库，`data/previsit/kg.db` 是知识图谱，`data/models/` 放本地嵌入与精排权重，`data/uploads/` 放上传副本。
 
-## 10. 这次清理掉了什么
+`data/calibration/` 是按库标定目录，命名 `data/calibration/kb_<id>.json`；**当前只有 `data/calibration/kb_2.json` 存在**，kb3 / kb4 无标定文件、回退出厂阈值。旧格式全局标定文件 `data/refusal_calibration.json` 已不生效（历史，主项目只读 `data/calibration/`）；标定工具已随评测台迁出为独立项目，本仓库不自带。
 
-项目此前不是 git 仓库，删之前已整体打包到 **`D:\PythonProject\sky_agent_backup_20261029.tar.gz`**（16 MB，排除 `.venv/` 与 `data/`）。
+`data/secrets.json` 是 Windows DPAPI 密文，**绑当前账户 + 本机**：换账户、换机器、把文件拷走都只是一串解不开的字节，迁移后需在模型页重填密钥。整个 `data/` 被 `.gitignore` 排除，不进版本库；备份要连 `data/` 一起带走，但密钥密文换机不可解，别指望靠拷贝 `secrets.json` 免重填。
 
-| 删掉的 | 为什么 |
-|---|---|
-| `_shot/`（约 30 张 PNG + 1 个 demo HTML） | 开发期截图，每轮改 UI 的临时产物 |
-| `.workbuddy/` 下 134 张 PNG、18 个 CDP 脚本、4 个诊断脚本（13 MB → 124 KB） | 一次性排查工具；保留 `memory/` 工作日志 |
-| `.pytest_cache/`、全部 `__pycache__/` | 缓存，可再生成 |
-| `_patch.py` | 一次性补丁脚本（改动早已落到 `tests/test_core.py`） |
-| `_serve.log` | 一次启动的临时输出 |
-| `data/knowtune.db` | 0 字节空壳，真实库是 `data/library.db` |
-| `docs/env_report.json` | `scripts/check_env.py` 的输出（脚本已在精简版移除，此为历史产物） |
-| `.idea/workspace.xml` | IDE 窗口状态。删了会被 PyCharm 立刻重建，已写进 `.gitignore` |
+## 11. 这次重写清掉了什么
 
-### 10.1 第二轮清理：数据库瘦身（2026-11-01）
+旧版 PROJECT_MAP 里已失效的口径，本次按类别清除，不再写成现行状态：
 
-上一轮清的是文件，这轮清的是**数据库里的死数据**——`library.db` 从
-**217 MB 降到 22 MB**，检索指标一字未变（26 题 R@5 79.2% / MRR 0.570）。
+- **精排类**：把「模型未下载 / 精排未开启 / 直接降级 / 没有缓存 / 精排可选」当成现状。现行是三个库 `rerank.enabled=true`、精排实际在跑、有 4096 条进程内 LRU 打分缓存；限制是 CPU 延迟与语料适配，不是缺模型。
+- **拒答与标定类**：把早期或上一轮的阈值 / AUC / 留一法组数当成现行值。现行是按库标定、只有 kb2 生效，其余库用出厂值；全局口径与按库口径分开说。
+- **测试类**：「测试全绿」这类不带语料与样本数的断言一律不写。
+- **支撑度类**：「支撑度随每次问答运行」。现行只有后台 `/api/ask` 算，前台不算。
+- **降级标记类**：把 `rerank_unavailable` 当成「模型没下载」的唯一标记。现行精排降级有六类标记，各自语义不同。
+- **写法类**：现状与实现期历史混写。现改为历史用过去时并标日期，注释与代码冲突时以代码为准（见 4.12）。
 
-| 清理项 | 数量 | 为什么是死数据 |
-|---|---|---|
-| 非活跃 generation 的 chunk | 2059 行 | 重新索引会写新一代（`generation+1`），旧代从此无人读——全项目所有查询都带 `generation = active_gen`，没有一处例外，也没有任何清理逻辑 |
-| 孤儿向量（`embedding` 表） | 13485 / 14605 条 | `embedding` 按 `content_hash` 存、**没有指向 chunk 的外键**，所以 chunk 换了代它也赖着不走。92% 是孤儿 |
+## 与其他文档的分工
 
-两个关键前提，动手前必须验证，否则就是毁库：
-1. **`embedding` 是向量的唯一存储**（`chunk` 表里没有 vec 列），删错等于毁索引；
-2. 活跃块的向量覆盖率必须是 100%，不是就拒绝执行。
-
-这两条当时写进了 `scripts/prune_db.py` 做成硬闸门、默认 dry-run（该脚本已在精简版移除）。
-
-**曾误判、已排除**：一度怀疑 FTS 缺索引（`chunk_fts` 1120 行 vs `chunk` 3179 行），
-查下来是虚惊——活跃块恰好 1120 个且全部已索引，差的 2059 个正是上述废弃旧代块，
-它们不进 FTS 是**正确行为**。别再照着"FTS 缺 2/3"这个错误结论去改代码。
-
-顺带移出项目（在 `D:\_trash_skyagent_20261101\`，确认无误后可整个删）：
-`data/models/BAAI--bge-reranker-base`（1.1 GB，当时库级关着精排；后已放回并开启，见 ARCHITECTURE §4.5）、
-`data/library.db.bak_prefold`（208 MB 旧备份）、`_shot/`（开发截图）。
-
-清理后：非 `.venv` 文件数 334 → 97（其中 2 个是这次新增的：本文件与 `.gitignore`），
-非依赖部分体积 163 MB（全部是 `data/` 里的模型权重与数据库）。后台与前台服务照常响应，
-`pytest` 175 条全绿、前台冒烟 48 项全过。
-
-顺带补了一个 `.gitignore`：缓存、数据、模型、截图都写进去了，以后接版本库不会再把
-69 MB 的数据库和 92 MB 的模型提交上去。
-
-**刻意没删的**：`docs/WBS.html`（交付文档；`scripts/gen_wbs.py` 已在精简版移除，WBS 作为静态快照保留）、
-`data/models/`（92 MB 模型权重，删了要重新下载）、`data/uploads/`（原文副本，删了引用回查会断）。
+- [README](../README.md)：项目入口——是什么、装、启、能力速览、文档地图、已知边界摘要；不写逐文件地图。
+- [RUNBOOK.md](RUNBOOK.md)：从零 clone 到三板块可用的操作步骤与排障；不写架构原理。
+- [USER_GUIDE.md](USER_GUIDE.md)：日常使用与指标读法；不写安装顺序细节。
+- [ARCHITECTURE.md](ARCHITECTURE.md)：现行架构、数据模型、检索/生成链、关键决策与实测数据、需求对照、历史记录归档；不写操作步骤。
+- [TECH_STACK.md](TECH_STACK.md)：技术清单与分层、三个关键决策、启动速记；不写需求对照。
+- [WBS.html](WBS.html)：交付时的工作包与范围缺口**历史快照**，不冒充现行状态表。
+- **本篇**：逐目录逐文件说明、启动顺序、配置优先级、改动落点；不写实测指标与需求对照数字。

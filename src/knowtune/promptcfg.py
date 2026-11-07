@@ -16,11 +16,17 @@
       ↑ 被覆盖
     角色级覆盖（prompts.yaml: prompts.<role>.default.<field>）
       ↑ 被覆盖
+    板块级覆盖（prompts.yaml: prompts.<role>.by_scope.<med|classic>.<field>）
+      ↑ 被覆盖
     后端级覆盖（prompts.yaml: prompts.<role>.by_provider.<name>.<field>）
 
-后端级在最上层，是因为同一个提示词喂给 7B 本地模型和云端强模型，效果差得很远：
+最终顺序是 **后端 > 板块 > 角色默认 > 内置**（见 `effective_fields()`）。后端级
+在最上层，是因为同一个提示词喂给 7B 本地模型和云端强模型，效果差得很远：
 小模型需要把约束拆成编号条款、把例子写死，强模型一句话就懂。两套提示词共存
 才是正常状态，逼它们共用一份等于永远在为一个模型调参、让另一个模型跑偏。
+板块级是后加的一层：同一后端下，古籍板块要守原文、维医板块要接临床，可以各配
+一套；但一旦给该后端配了后端级提示词，后端级会盖过板块级——这是当前实现的
+确定性行为，配置时要避开同时写两层同名字段。
 
 三条不变式：
   1. 内置默认永远可恢复。`config/prompts/*.md` 和本文件的常量只读，后台只写
@@ -207,7 +213,8 @@ def _write(data: dict[str, Any]) -> None:
         "# 只记录与内置默认不同的字段：删掉某一行 = 该项回到内置默认。\n"
         "# 内置默认在 config/prompts/*.md（generate）和 knowtune/promptcfg.py（translate），\n"
         "# 本文件永远不覆盖它们，因此「恢复默认」是安全的。\n"
-        "# 解析顺序：by_scope.<板块> → by_provider.<后端> → default → 内置 → 兜底。\n\n"
+        "# 解析顺序（与 effective_fields() 一致）：by_provider.<后端> → by_scope.<板块>\n"
+        "# → default（角色默认）→ 内置 → 兜底。仅 generate / translate 支持前两层。\n\n"
     )
     OVERLAY_PATH.parent.mkdir(parents=True, exist_ok=True)
     tmp = OVERLAY_PATH.with_suffix(".yaml.tmp")
@@ -312,7 +319,9 @@ def effective_fields(role: str, provider: str = "", *, version: str = "qa_v1",
     """每个字段最终用哪份、从哪来。UI 要能一眼看出「这行是改过的还是内置的」。
 
     `scope` 是板块维度（med/classic）：古籍板块和维医板块即使共用同一个后端，
-    也可以各自配一套不同的 generate 提示词（古籍要守原文、维医要接临床）。"""
+    也可以各自配一套不同的 generate 提示词（古籍要守原文、维医要接临床）。
+    前提是**该后端没有配后端级提示词**——按上面的优先级，后端级同名字段会盖过
+    板块级；`source` 字段会把实际命中哪一层回报给界面。"""
     builtin = builtin_fields(role, version=version, answer_lang=answer_lang)
     data = read()
     node = (data.get("prompts") or {}).get(role) if isinstance(data.get("prompts"), dict) else None
@@ -500,8 +509,9 @@ def save(role: str, provider: str, fields: Mapping[str, str], *,
          scope: str = "") -> dict[str, Any]:
     """保存覆盖。字段为空字符串 = 删掉该字段的覆盖，回到上一层。
 
-    `scope` 是板块维度（med/classic/''），与 provider 正交：scope 优先于 provider，
-    因为板块是更上层的业务意图（古籍守原文、维医接临床），provider 只是模型调参。
+    `scope` 是板块维度（med/classic/''），与 provider 正交。两者都配时按
+    `effective_fields()` 的实际顺序 **provider 优先于 scope**（后端级覆盖比板块级
+    更靠前），所以给某后端配了提示词时，它会盖过该板块的同名字段。
 
     故意不提供「只改一个字段」的接口：UI 一次提交整组字段，服务端整体替换这一层，
     不会出现"改了 system 但 user 还是三天前的"这种半新半旧状态。

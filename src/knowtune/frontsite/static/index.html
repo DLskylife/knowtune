@@ -15,7 +15,7 @@
    * 核对 app.js 报上来的编号，对不上就强制换一次。只换一次（sessionStorage 记
    * 一笔），免得极端情况下刷成死循环。
    */
-  window.SITE_REQ_BUILD = "1.7.17";
+  window.SITE_REQ_BUILD = "1.7.18";
   addEventListener("load", function () {
     if (window.SITE_BUILD === window.SITE_REQ_BUILD) return;
     if (sessionStorage.getItem("knowtune.site.reloaded")) return;
@@ -122,6 +122,6 @@
     </footer>
   </div>
 </div>
-<script src="/app.js?v=1.7.7"></script>
+<script src="/app.js?v=1.7.18"></script>
 </body>
 </html>

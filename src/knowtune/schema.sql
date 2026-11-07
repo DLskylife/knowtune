@@ -9,8 +9,9 @@ CREATE TABLE IF NOT EXISTS kb (
   id          INTEGER PRIMARY KEY,
   name        TEXT NOT NULL UNIQUE,
   description TEXT,
-  -- 知识库级参数覆盖（JSON）。只存与全局不同的项，NULL = 完全跟随全局。
-  -- 存全量等于把当时的全局值永久冻结，之后全局改了也影响不到这个库。
+  -- 知识库级参数（JSON）：全量快照，与 kbconfig.py 的 __full__ 标记配套。
+  -- 早期按差异存储，全局改了会静默影响老库；现改为建库时冻结一整套值，
+  -- 「用户手动改过」的判据是与出厂基线比对，而不是看键是否存在。
   config_json TEXT,
   created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
 );

@@ -1,96 +1,101 @@
-# 技术栈与架构
+# 技术栈与架构速查
 
-> 本文件是 KnowTune 的「技术清单 + 架构主线」速查。所有内容均从 `pyproject.toml`、源码与配置中核出，不是泛泛而谈。
-> 数据模型、参数取舍、实测数据见 [ARCHITECTURE.md](ARCHITECTURE.md)；目录级说明见 [PROJECT_MAP.md](PROJECT_MAP.md)；
-> 从零部署与完整运行步骤见 [RUNBOOK.md](RUNBOOK.md)。
+本文是 KnowTune 的「技术清单 + 架构主线」速查，内容从 `pyproject.toml`、源码与配置核出。数据模型、参数取舍与实测推导见 [ARCHITECTURE.md](ARCHITECTURE.md)；逐文件地图见 [PROJECT_MAP.md](PROJECT_MAP.md)；从零部署见 [RUNBOOK.md](RUNBOOK.md)；日常使用见 [USER_GUIDE.md](USER_GUIDE.md)；项目入口见 [README.md](../README.md)。
 
 ## 1. 一句话主线
 
-**导入 → 切块 → 向量(BLOB)+FTS5 双写 → 查询双路召回 → 融合 → 精排 → MMR → 拒答 → LLM 带引用生成 → 可量化评估。**
+**导入 → 切块 → 向量(BLOB) + FTS5 双写 → 双路召回 → 加权融合 → 精排 → MMR(关) → 拒答 → LLM 带引用生成 → 引用校验 / 支撑度。**
 
-每一层都可独立失败、降级、打标，不存在「某路静默返回空」这种看起来正常、实际召回腰斩的状态。
+- 稠密（`dense`）路用 `BAAI/bge-small-zh-v1.5`（512 维），稀疏（`sparse`）路用 jieba 预分词写进 FTS5 BM25；两路各取 top 50，`weighted` 融合（w_dense 0.35 / w_sparse 0.50 / w_third 0），前 10 条送精排。
+- 精排（`rerank`）用 `BAAI/bge-reranker-base` CrossEncoder，三个库的 `rerank.enabled` 均为 `true`、**精排实际在跑**；MMR（最大边际相关）、邻块扩展、查询改写三项均未启用。
+- 引用校验（`cite.verify`）给引用覆盖率，是形式指标。**支撑度（`support`）只在后台 `/api/ask` 链路计算**，前台 `/api/ask` 不调用 `support.evaluate`；`/v1/chat/completions` 是纯转发网关，不进这条链。前台 `/api/ask` 与 `/v1` 网关都不算支撑度。
+- 每一层可独立失败、降级并打 `degraded`（降级标记），不存在「某路静默返回空」这种看着正常、实际召回腰斩的状态。
 
 ## 2. 分层架构
 
-| 层 | 职责 | 关键模块 |
+| 层 | 职责 | 真实文件路径 |
 |---|---|---|
-| **入口层** | CLI / REST API / 前端 | `cli.py`、`api/app.py`(8000)、`frontsite/`(8800)、`index.html`/`app.js`/`style.css`(原生 JS，零前端框架) |
-| **子系统** | 导入 / 检索 / 生成 / 评估 | `ingest/`、`retrieve/`、`generate/`、`evaluate.py` |
-| **能力层(算法)** | 混合检索、嵌入、精排、LLM | `index/embedder.py`、`index/vectors.py`、`index/sparse.py`、`retrieve/rerank.py`、`generate/llm.py` |
-| **存储层** | 单文件库 + 密钥 | `data/library.db`(SQLite)、`data/secrets.json`(DPAPI) |
-| **外部依赖** | 模型算力 | 云端 API(硅流/DeepSeek/混元)、本地 torch(CPU via sentence-transformers) |
+| **前端层** | 后台管理台 + 前台问答站，纯原生 HTML/CSS/JS，零前端框架、零打包 | `src/knowtune/api/static/{index.html,app.js,style.css}`（后台，构建号 0.9.54）；`src/knowtune/frontsite/static/{index.html,app.js,style.css}`（前台） |
+| **服务层** | 启动装配、全部 HTTP 接口、站点线程、预问诊桥接、配置与角色/提示词解析 | `src/knowtune/cli.py`、`src/knowtune/api/app.py`（约 4400 行，唯一大文件）、`src/knowtune/frontsite/{instcfg,runner,site}.py`、`src/knowtune/{config,kbconfig,roles,promptcfg,modelcfg,settings,secrets}.py`、`src/knowtune/previsit/app.py`（桥接装配）、`src/previsit/`（预问诊实现真身，v0.3.0，零 knowtune 依赖） |
+| **能力层** | 导入 / 索引 / 检索 / 生成四类算法 | `src/knowtune/ingest/{loader,cleaner,chunker,pipeline}.py`、`src/knowtune/index/{embedder,vectors,sparse}.py`、`src/knowtune/retrieve/{engine,rerank}.py`、`src/knowtune/generate/{prompt,llm,cite,evidence,support,think}.py` |
+| **存储层** | 单文件库 + 密钥密文 + 运行资产（均不进版本库） | `data/library.db`（SQLite WAL，8 表 + 1 张 FTS5 虚表 + 5 张影子表）、`data/secrets.json`（Windows DPAPI）、`data/models/`、`data/calibration/`、`data/uploads/` |
+
+两套 `previsit` 不是重复实现：`src/previsit/` 是实现真身，`src/knowtune/previsit/` 是五个同名文件纯再导出 + `app.py` 装配层，运行时由 `frontsite/site.py` 挂到 `/previsit` 并用 `_SectionGate` 按 `pv` 开关做 404 拦截。
+
+**分层约束**：依赖只允许从上往下（前端层 → 服务层 → 能力层 → 存储层），下层不反向 import 上层。服务层的 `AppState` 是唯一知道全局的地方，它只装配、不实现算法；能力层的 `ingest` / `index` / `retrieve` / `generate` 四个包互不调用，只靠数据结构对话，所以各层能单独喂数据、不连模型地验证。前台与后台两套静态资源的样式与文案完全独立，改后台不会动到前台。`pyproject.toml` 的 wheel 打包 `src/knowtune` 与 `src/previsit` 两个包。
 
 ## 3. 完整技术清单
 
-### 语言与运行时
-- **Python ≥3.11**（部署机为 3.13，项目用独立 venv，系统 Python 未装包）
-- **构建/分发**：`hatchling` 后端，可编辑安装 `pip install -e .`，入口 `knowtune` → `cli:main`
-- **依赖分区**(optional-extras，锁 patch 用 `requirements.lock`)：`extract`(文档抽取) / `local`(本地 torch 嵌入) / `onnx`(ONNX 加速，待实测) / `dev`(测试/lint)
+`pyproject.toml` 写的是「实测可用的最低版本」，没锁 patch；要可复现就装好后 `pip freeze > requirements.lock` 自己留一份（每台机器 CPU/CUDA 组合不同）。`all = knowtune[extract,local,dev]`，**不含 onnx**。
 
-### Web / API（11 个核心依赖，零向量库、零前端框架）
-- `fastapi` —— REST API（`api/app.py`，8000）
-- `uvicorn[standard]` —— ASGI 服务器（8800 由 `config/instances.yaml` 的 `autostart` 拉起）
-- `pydantic` + `pydantic-settings` —— 数据校验 + 配置模型
-- `python-multipart` —— 文件上传
-- 前端：**纯原生 HTML/CSS/JS**，直接调 API
+| 分组 | 依赖 | 版本下限 | 用途 |
+|---|---|---|---|
+| 运行时 | Python | ≥ 3.11 | 语言运行时 |
+| 构建 | hatchling | ≥ 1.25.0 | 构建后端；wheel 打包 `src/knowtune` 与 `src/previsit`，入口 `knowtune = knowtune.cli:main`，MIT |
+| 核心 | fastapi | ≥ 0.115.0 | REST API（`api/app.py`） |
+| 核心 | uvicorn[standard] | ≥ 0.32.0 | ASGI 服务器 |
+| 核心 | pydantic / pydantic-settings | ≥ 2.9.0 / ≥ 2.5.0 | 数据校验与配置模型 |
+| 核心 | PyYAML | ≥ 6.0.2 | 读 `config/*.yaml` |
+| 核心 | httpx | ≥ 0.27.2 | LLM 客户端，`trust_env=False` 绕代理 |
+| 核心 | tenacity | ≥ 9.0.0 | LLM 调用指数退避重试 |
+| 核心 | numpy | ≥ 1.26.4 | 向量矩阵暴力点积检索 |
+| 核心 | jieba | ≥ 0.42.1 | 中文 BM25 预分词 |
+| 核心 | structlog | ≥ 24.4.0 | 结构化日志 |
+| 核心 | python-multipart | ≥ 0.0.9 | 文件上传（含分片） |
+| 核心 | psutil | ≥ 6.0.0 | 端口占用者（PID / 进程名）排查 |
+| extract | pypdf | ≥ 5.1.0 | PDF 抽取 |
+| extract | python-docx | ≥ 1.1.2 | Word 抽取 |
+| extract | openpyxl | ≥ 3.1.5 | Excel 抽取 |
+| extract | python-pptx | ≥ 1.0.2 | PPT 抽取 |
+| extract | beautifulsoup4 | ≥ 4.12.3 | HTML 解析 |
+| extract | trafilatura | ≥ 1.12.0 | 网页正文抽取 |
+| local | sentence-transformers | ≥ 3.3.0 | 本地嵌入（Bi-Encoder）与精排（Cross-Encoder） |
+| onnx | onnxruntime | ≥ 1.20.0 | **未启用**：可选加速路径，待实测 |
+| onnx | fastembed | ≥ 0.4.0 | **未启用**：bge-reranker-v2-m3 在其中的可用性待核实，不必装 |
+| dev | pytest / pytest-asyncio | ≥ 8.3.0 / ≥ 0.24.0 | 单测（本仓库不含 `tests/`，需要时自建） |
+| dev | ruff / mypy | ≥ 0.7.0 / ≥ 1.13.0 | lint / 类型检查 |
 
-### 存储
-- **SQLite**（单文件 `data/library.db`）：三重角色 —— 关系表(`document`/`chunk`/`embedding(content_hash,model,dim,vec BLOB)`)、**FTS5 倒排索引**(`chunk_fts`，中文 BM25 真相源)、元数据/日志(`query_log`)
-- **文件系统**：源文档、`config/*.yaml`、`data/secrets.json`
-- **DPAPI**(Windows 原生)：密钥密文落 `data/secrets.json`，默认持久化，绑当前账户+本机
+`onnx` 组整体**未启用**：没有代码路径加载它，装了也不生效，别当可用加速。
 
-### 导入（Ingest）
-- **多格式 loader**：PDF(`pypdf`)、Word(`python-docx`)、Excel(`openpyxl`)、PPT(`python-pptx`)、HTML(`beautifulsoup4`+`trafilatura`)、Markdown
-- `chunker`(有序切块，`seq` 支撑邻块扩展) / `cleaner`(清洗) / `pipeline`(编排+双写) / `textnorm`(码位归一 `fold_query`，解决 PDF 异体字对齐)
+**另有一项不在 `pyproject.toml`**：CPU 版 `torch` 必须从 PyTorch 官方 index 先装（`pip install torch --index-url https://download.pytorch.org/whl/cpu`），再 `pip install -e ".[extract,local]"`。写进依赖会被解析成 CUDA 版（体积差约 10 倍），顺序反了前面白装。
 
-### 检索（Retrieve）—— 核心算法层
-- **Dense 路**：`BAAI/bge-small-zh-v1.5`(512 维，**Bi-Encoder**) → **numpy 矩阵暴力点积**(`N×512` 常驻 RAM，`@` + `argpartition` top-k)，**精确检索，无向量库**
-- **Sparse 路**：`jieba` 预分词(`cut_for_search`) + **SQLite FTS5** + `bm25()` 排序（中文必须预分词，否则 FTS5 把整句当一个 token）
-- **融合**：`weighted`(min-max 归一化) 或 **RRF**(Reciprocal Rank Fusion) + 保底配额(防某路噪声挤掉真命中)
-- **精排**：`BAAI/bge-reranker-base`(**Cross-Encoder**)
-- **MMR**：`mmr_select`，`λ` 去冗余
-- **拒答判定**：`min_score` + margin + soft 置信度（低置信只提醒不拒）
-- **邻块扩展**：`expand_neighbors`，补回被切分劈开的论点另一半
+## 4. 三个关键架构决策
 
-### 生成（Generate）
-- **LLM 客户端**(`generate/llm.py`)：**OpenAI 兼容协议**，三档后端 —— 云端(硅流/SiliconFlow、DeepSeek、混元)、本地 vLLM、本地 LM Studio
-- `httpx` 同步客户端：显式 `connect/read/write/pool` 超时，`trust_env=False` 绕过公司代理
-- `tenacity`：指数退避重试
-- `think`(推理模型节流) / `cite`(引用覆盖率 `verify()`，形式指标非忠实度) / `evidence` / `prompt`
+### 4.1 不用向量数据库 —— SQLite BLOB + numpy 暴力点积够用
 
-### 评估与可观测
-- `dashboard.py`(运行仪表盘) / `chatctx.py`(会话上下文规则，不依赖 torch 可单测)
-- `structlog` + `logbus`：结构化日志
-
-### 配置体系
-- `config.py`(Pydantic 根) / `settings.py` / `kbconfig`(知识库级覆盖) / `modelcfg`(模型) / `promptcfg`(提示词) / `frontsite/instcfg`(实例)
-- 全部 **YAML 驱动**(`default.yaml`/`models.yaml`/`instances.yaml`)
-- 密钥三级优先级：**本次填写 > 已存密文 > 环境变量**(`api_key_env`)
-
-### 质量保障
-- `pytest` + `pytest-asyncio`：**259 条单测全绿**
-- `ruff`(lint) + `mypy`(类型)
-
-## 4. 三个关键架构决策（为什么这么选）
-
-### 4.1 不用向量数据库 —— 用 numpy 暴力检索
-- 向量存 SQLite `embedding(vec BLOB)`，**查询时全量读进内存做精确矩阵点积**，不建 ANN 索引。
-- 规模 ≤10 万 chunk 时 ANN 是**负资产**：多一层近似误差、多一套序列化、多一个「索引与数据不同步」故障点，换来的只是把 30ms 变 3ms。
-- 切换阈值：**超过 20 万 chunk**（内存先撞墙），那时按库切 `sqlite-vec` / mmap。
-- 实测：1,120 向量 / dim 512 / 2.2MB / 加载 34ms / 单次检索 0.48ms(点积 0.28ms)。
+向量存 `embedding(vec BLOB)`，查询时全量读进内存做精确矩阵点积（`@` + `argpartition` top-k），不建 ANN 索引。当前 28020 条 512 维向量（2026-11-07 采集）就是这个量级：多一层 ANN 只会多一套近似误差、多一个「索引与数据不同步」故障点，换来的只是把 30 ms 级变成 3 ms 级。**什么时候必须换 ANN / `sqlite-vec` 未验证**——本仓库没有更大量级的实测，不给切换阈值。
 
 ### 4.2 Bi-Encoder 召回 + Cross-Encoder 精排（两阶段）
-- **召回用 Bi-Encoder**(`embedder.py` 的 `SentenceTransformer`)：query/doc 独立编码，doc 向量入库常驻，查询只编码一次 → 可预计算，适合全库粗筛。
-- **精排用 Cross-Encoder**(`rerank.py` 的 `CrossEncoder`)：`(query, doc)` 配对同场推理出相关性分 → 不可预计算，只适合少量(top-K)精排。
-- cross-encoder 不能做检索：每对都要跑一次 transformer 前向，全库逐条配对会慢 100~1000 倍。两阶段各司其职是行业标准。
-- 代价：精排是整链最重环节（依赖 torch、单线程执行器、10s 超时降级）。
 
-### 4.3 中文 BM25 必须预分词
-- FTS5 默认 `unicode61` 把整句中文当一个 token、「检索」命中数为 0；`trigram` 要求查询 ≥3 字符、2 字词全失效。
-- 唯一正路：**先 jieba 分词、空格拼串写入** FTS5，查询侧同样分词。虚词在查询侧过滤但不删索引侧（两侧同步重索引成本高，而查询侧改动即时生效）。
+召回用 `BAAI/bge-small-zh-v1.5`（Bi-Encoder）：query / doc 独立编码，doc 向量入库常驻，查询只编码一次，可预计算，适合全库粗筛。精排用 `BAAI/bge-reranker-base`（Cross-Encoder）：`(query, doc)` 配对同场推理出相关性分，不可预计算，只适合少量 top-K。Cross-Encoder 不能做检索——全库逐条配对会慢 100~1000 倍，两阶段各司其职。代价是精排为整链最重环节：维医库 22 道口语题 `10×384` 实测 3.07 s（CPU，2026-11-07），打分有 4096 条进程内 LRU 缓存（键为「模型, 问题摘要, 片段摘要」），换问法不命中、重启即空。
 
-## 5. 启动要点（速记）
-- 必须走 venv：`./.venv/Scripts/knowtune.exe serve --port 8000`（端口自定，系统 Python 无包）
-- 8800 前端由 `instances.yaml` 的 `autostart: true` 自动拉起，不用手动起
-- **冷启动约 93 秒**（嵌入模型 `import torch`+读权重），期间 `embedder.available=false`，只有 BM25 稀疏检索；`/api/status` 的 `warmup.state` 变 `ready` 才算双路齐全，此前别急着提问
-- 后台进程绑定会话，会话结束即关；常驻需另配系统服务
+### 4.3 中文 BM25 必须 jieba 预分词
+
+FTS5 默认 `unicode61` 把整句中文当一个 token，2 字查询命中 0 条；`trigram` 要求查询 ≥3 字符，2 字词同样全失效。唯一正路：**先 jieba 预分词、空格拼串写入 FTS5，查询侧同样分词**（`index/sparse.py`）；`bm25()` 返回负数、越小越相关，排序用 `ORDER BY bm25(chunk_fts) ASC`。这是 `weighted` 融合里稀疏路能起作用的前提。
+
+## 5. 启动要点速记
+
+- **CPU torch 顺序**：`pip install torch --index-url https://download.pytorch.org/whl/cpu` → `pip install -e ".[extract,local]"`。反了会拉 CUDA 版。
+- **两个模型目录名不一样**（都在 `data/models/`）：嵌入 `data/models/bge-small-zh-v1.5`（约 92 MB，**无** `BAAI--` 前缀，与 `embedding.local_path` 字符串一致）；精排 `data/models/BAAI--bge-reranker-base`（约 1.1 GB，**有** `BAAI--` 前缀，由 `model` 里的 `/` 替换而来）。`allow_download: false`，缺权重只降级、不联网补。
+- **8013 / 8800**：`knowtune serve --port 8013`（`cli.py` 默认 `8000`）；后台 `http://127.0.0.1:8013/` 与 `/v1` 网关，前台 `http://127.0.0.1:8800/`（`instances.yaml` 的 `port` + `autostart: true`，进程内 daemon 线程，不另起进程）。`KNOWTUNE_GATEWAY` 由 `cli.py:234` 按实际 `--port` 写入。
+- **前台端口范围 8800–8899**（`instcfg.py` 的 `PORT_MIN/MAX`）；两个后台同时 `serve` 会撞 8800，先关掉多余的那个，别换端口绕。
+- **43–93 秒预热**：16 核 CPU，2026-11-07 实测热盘 43 s / 冷盘首次约 93 s；期间 `embedder.available=false`、只有 BM25 一路，`GET /api/status` 的 `warmup.state=ready` 才算双路齐全。
+
+## 6. 构建号与缓存失效
+
+- **后台统一 `0.9.54`**（`src/knowtune/api/static/`）。
+- **前台本次统一为 `1.7.18`**。2026-11-07 核对时曾记录三处不一致：`index.html` 的 `style.css?v=1.7.18`、`app.js?v=1.7.7`、`index.html:18` 与 `app.js:25` 的 `1.7.17`；按统一口径以 `1.7.18` 为准。
+- 为什么要这个号：HTML 是 no-store 的，但 WebView 可能把旧 JS 留在缓存里。三处要一致（`index.html` 的 `?v=`、`index.html` 的自检常量、`app.js` 的常量），编号对不上时页面会强制换一次，否则出现「新按钮在、点了没反应」。改前端静态资源必须同步升号。
+
+## 与其他文档的分工
+
+本文只给**技术清单、分层、三个关键决策、启动速记、构建号**；按分工不写需求对照（在 [ARCHITECTURE.md](ARCHITECTURE.md) §13，且该处有三套统计口径，别只引一套）、不写操作步骤、不写实测指标全表。
+
+- [README.md](../README.md)：项目入口、事实卡、能力速览、文档地图、已知边界摘要。
+- [RUNBOOK.md](RUNBOOK.md)：从零 clone 到三板块可用、逐条判据、排障、备份。
+- [USER_GUIDE.md](USER_GUIDE.md)：建库导入、读引用与支撑度、参数含义、标定核对、指标现状、使用侧排障与限制、本地 `.gguf`。
+- [ARCHITECTURE.md](ARCHITECTURE.md)：现行架构、数据模型、检索/生成链、关键决策实测推导、需求对照三口径、代码已知不一致、历史归档。
+- [PROJECT_MAP.md](PROJECT_MAP.md)：逐目录逐文件说明、启动顺序、配置优先级、改动落点。
+- [WBS.html](WBS.html)：交付时工作包与范围缺口**快照**，标「历史」，不冒充现行状态表。
+
+状态栏口径、标定现行值、需求三口径这几处最易写歪的事实，以 [ARCHITECTURE.md](ARCHITECTURE.md) 与 [RUNBOOK.md](RUNBOOK.md) 正文为准。
