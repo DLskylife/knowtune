@@ -1,5 +1,9 @@
 # 端点注册表。只记录与 default.yaml 不同的条目。
 #
+# 路径口径：本地 `path` 写**项目根相对路径**（用 / 分隔，基准是仓库根目录），
+# 不写盘符。目录改名/换盘/拷到别的机器时绝对路径会立刻失效。项目外的
+# 模型可以用 `../` 往上走，也可以在界面里改。
+#
 # providers:
 #   <名字>:                     小写字母数字，2-24 字符
 #     kind: local | openai      local 表示模型带 .gguf、本机能起
@@ -9,7 +13,7 @@
 #     api_key_env: <变量名>      可选；密钥也可以只放界面里
 #     models:
 #       - id: <发给接口的 model 字段>
-#         path: D:/models/x.gguf  本地 gguf；有这个才能点「启动」
+#         path: data/models/x.gguf  本地 gguf（相对项目根）；有这个才能点「启动」
 #         port: 8090              本机监听端口；不写就自动挑
 #         context: 4096           上下文长度
 #         max_output: 1024        单次输出上限
@@ -36,12 +40,12 @@ providers:
     - id: Qwen2.5-7B-Instruct-Q4_K_M
       alias: ''
       context: 4096
-      path: D:/llamafactory/models/lmstudio-ai/Qwen2.5-7B-Instruct-GGUF/Qwen2.5-7B-Instruct-Q4_K_M.gguf
+      path: ../../llamafactory/models/lmstudio-ai/Qwen2.5-7B-Instruct-GGUF/Qwen2.5-7B-Instruct-Q4_K_M.gguf
       port: 8097
     - id: Qwen-3b-doctor-weiyi-bf16
       alias: ''
       context: 4096
-      path: D:\llamafactory\models\lmstudio-ai\Qwen-3b-doctor-weiyi-bf16\Qwen-3b-doctor-weiyi-bf16.gguf
+      path: ../../llamafactory/models/lmstudio-ai/Qwen-3b-doctor-weiyi-bf16/Qwen-3b-doctor-weiyi-bf16.gguf
       port: 8090
   deepseek:
     base_url: https://api.deepseek.com

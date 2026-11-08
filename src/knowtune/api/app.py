@@ -2026,14 +2026,14 @@ async def clean_preview(
         await _save_upload(file, target, state.cfg.ingest.max_file_mb)
         title = name
     elif staged:
-        target = Path(staged)
+        target = paths_mod.resolve_source(staged)
         # staged 只认 uploads 里的路径：这是个落盘路径参数，不校验等于把
         # 任意文件读取能力开放出去。
         if not _inside(target, UPLOAD_DIR) or not target.exists():
             raise HTTPException(400, "预览用的文件已失效，请重新选择文件")
         title = display_title(str(target))
     elif path:
-        target = Path(path)
+        target = paths_mod.resolve_source(path)
         if not target.exists():
             raise HTTPException(400, f"路径不存在：{path}")
         title = target.name
@@ -2045,7 +2045,7 @@ async def clean_preview(
             raise HTTPException(404, "文档不存在")
         if row["source_type"] != "file" or _source_missing("file", row["source_uri"] or ""):
             raise HTTPException(400, "这份文档的原始文件已不在，无法预览清洗效果")
-        target = Path(row["source_uri"])
+        target = paths_mod.resolve_source(row["source_uri"])
         title = row["title"] or target.name
     elif url:
         ucfg = state.cfg.ingest.url
@@ -2080,7 +2080,8 @@ async def clean_preview(
     return {
         "ok": True,
         "title": title,
-        "staged": str(target) if target is not None and _inside(target, UPLOAD_DIR) else None,
+        "staged": paths_mod.stored_path(target)
+        if target is not None and _inside(target, UPLOAD_DIR) else None,
         "report": report.as_dict(),
         # 前 6000 字够判断"洗得对不对"了，全量文本回来只会让弹窗卡一下
         "cleaned_text": cleaned.text[:6000],
@@ -2090,7 +2091,7 @@ async def clean_preview(
 
 @app.post("/api/import/path")
 def import_path(req: PathImport) -> dict:
-    p = Path(req.path)
+    p = paths_mod.resolve_source(req.path)
     if not p.exists():
         raise HTTPException(400, f"路径不存在：{req.path}")
     cfg = state.effective_cfg(req.kb_id)  # 分块参数按库生效
@@ -2289,7 +2290,7 @@ def upload_finish(upload_id: str) -> dict:
         _quiet_unlink(tmp)
         raise
     _discard_parts(folder)
-    return {"staged": str(target), "name": name, "size": total}
+    return {"staged": paths_mod.stored_path(target), "name": name, "size": total}
 
 
 @app.delete("/api/upload/{upload_id}")
@@ -2315,7 +2316,7 @@ async def import_upload(
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     if staged:
         # 预览已经把字节收过了，别再传一次
-        dest = Path(staged)
+        dest = paths_mod.resolve_source(staged)
         if not _inside(dest, UPLOAD_DIR) or not dest.exists():
             raise HTTPException(400, "预览用的文件已失效，请重新选择文件")
         title = display_title(str(dest))
@@ -2342,8 +2343,8 @@ async def import_upload(
                 _quiet_unlink(dest)  # 连文档行都没建起来，留个孤儿文件没意义
             raise
         # 标题由流水线按落盘名去前缀生成（见 pipeline.display_title），
-        # 这样重索引时也不会退回带 uuid 的版本。
-        result["source_uri"] = str(dest)
+        # 这样重索引时也不会退回带 uuid 的版本。返回值与库里一样用相对路径。
+        result["source_uri"] = paths_mod.stored_path(dest)
         return result
 
     # 立刻返回 task_id：文件字节已经收完了，剩下的解析/向量化放到后台线程，
@@ -2369,13 +2370,14 @@ async def restore_source(doc_id: int, file: UploadFile) -> dict:
         raise HTTPException(400, "只有文件来源需要补原始文件；粘贴/URL 内容请重新导入")
 
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    target = Path(row["source_uri"] or "")
+    target = paths_mod.resolve_source(row["source_uri"] or "")
     if not target.name or not _inside(target, UPLOAD_DIR):
         # 原路径在 uploads 之外（手工导入的外部文件被挪走了）→ 收进 uploads，
         # 保证以后重索引有个稳定副本，再把 source_uri 改过来。
         target = UPLOAD_DIR / f"{uuid.uuid4().hex[:8]}-{Path(file.filename or 'upload.bin').name}"
         state.conn.execute(
-            "UPDATE document SET source_uri=? WHERE id=?", (str(target), doc_id)
+            "UPDATE document SET source_uri=? WHERE id=?",
+            (paths_mod.stored_path(target), doc_id),
         )
     n_bytes = await _save_upload(file, target, state.cfg.ingest.max_file_mb)
     if n_bytes == 0:
@@ -2391,7 +2393,7 @@ async def restore_source(doc_id: int, file: UploadFile) -> dict:
         result = state.pipeline.import_path(
             kb_id, target, cfg, progress=progress, clean=_stored_plan(row["clean_json"])
         ).as_dict()
-        result["source_uri"] = str(target)
+        result["source_uri"] = paths_mod.stored_path(target)
         logbus.note(
             f"补回原始文件 doc#{doc_id} {target.name}：{result['message']}",
             level="INFO" if result["status"] == "ready" else "ERROR",
@@ -2624,7 +2626,7 @@ def _coverage_report(doc_id: int) -> dict:
 
     try:
         loaded = loader_mod.load_path(
-            doc["source_uri"],
+            paths_mod.resolve_source(doc["source_uri"]),
             min_pdf_text_chars=state.cfg.ingest.pdf.min_text_chars_per_page,
         )
     except Exception as exc:
@@ -2833,7 +2835,7 @@ def delete_doc(doc_id: int) -> dict:
         # 只删 uploads 里的，外部路径（手工导入的源文件）绝对不能碰。
         removed_copy = False
         if row["source_type"] == "file" and row["source_uri"]:
-            p = Path(row["source_uri"])
+            p = paths_mod.resolve_source(row["source_uri"])
             if _inside(p, UPLOAD_DIR):
                 removed_copy = _quiet_unlink(p)
         progress("完成", 1.0)

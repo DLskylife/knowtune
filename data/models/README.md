@@ -32,6 +32,6 @@ hf download BAAI/bge-reranker-base \
 
 ## 本机 7B（可选，只影响预问诊）
 
-`config/models.yaml` 里 `local` 后端的 `path` 是开发机绝对路径（`D:/llamafactory/...gguf`）。要用本机模型，把它改成你自己的 `.gguf` 路径；不用本机模型就走云端 `siliconflow` / `deepseek`，在界面填密钥即可，这个文件不用改。
+`config/models.yaml` 里 `local` 后端的 `path` 写**项目根相对路径**（`/` 分隔，基准是仓库根目录）。仓库里给的是开发机示例 `../../llamafactory/...gguf`；要用本机模型，把它改成你自己的 `.gguf`（推荐放进本目录，写成 `data/models/xxx.gguf`），或删掉这个后端。相对路径按仓库根还原，从哪个工作目录启动服务都一样。不用本机模型就走云端 `siliconflow` / `deepseek`，在界面填密钥即可，这个文件不用改。
 
 `llama-server` 可执行文件放 `tools/llama/`，用 `python scripts/get_llama.py` 下载。

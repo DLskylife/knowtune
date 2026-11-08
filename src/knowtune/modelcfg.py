@@ -23,6 +23,7 @@ from urllib.parse import urlparse
 
 import yaml
 
+from . import paths as paths_mod
 from .config import ROOT, Config, ModelEntry, ProviderCfg, _read_yaml, defaults_config
 
 MODELS_CONFIG = ROOT / "config" / "models.yaml"
@@ -92,7 +93,15 @@ def _spec_of(p: ProviderCfg) -> dict[str, Any]:
     if p.autostart:
         spec["autostart"] = True
     if p.model_list:
-        spec["models"] = [m.model_dump(exclude_none=True) for m in p.model_list]
+        # 界面「扫描模型」给出的是绝对路径。写回配置前统一归一成项目根相对路径，
+        # 否则用户在界面里点一次保存，盘符又悄悄回到 models.yaml 里。
+        items: list[dict[str, Any]] = []
+        for m in p.model_list:
+            d = m.model_dump(exclude_none=True)
+            if d.get("path"):
+                d["path"] = paths_mod.stored_path(d["path"])
+            items.append(d)
+        spec["models"] = items
     if p.api_key_env:
         spec["api_key_env"] = p.api_key_env
     return spec
@@ -125,6 +134,10 @@ def _persist(cfg: Config) -> dict[str, Any]:
     header = (
         "# 端点注册表。只记录与 default.yaml 不同的条目。\n"
         "#\n"
+        "# 路径口径：本地 `path` 写**项目根相对路径**（用 / 分隔，基准是仓库根目录），\n"
+        "# 不写盘符。目录改名/换盘/拷到别的机器时绝对路径会立刻失效。项目外的\n"
+        "# 模型可以用 `../` 往上走，也可以在界面里改。\n"
+        "#\n"
         "# providers:\n"
         "#   <名字>:                     小写字母数字，2-24 字符\n"
         "#     kind: local | openai      local 表示模型带 .gguf、本机能起\n"
@@ -134,7 +147,7 @@ def _persist(cfg: Config) -> dict[str, Any]:
         "#     api_key_env: <变量名>      可选；密钥也可以只放界面里\n"
         "#     models:\n"
         "#       - id: <发给接口的 model 字段>\n"
-        "#         path: D:/models/x.gguf  本地 gguf；有这个才能点「启动」\n"
+        "#         path: data/models/x.gguf  本地 gguf（相对项目根）；有这个才能点「启动」\n"
         "#         port: 8090              本机监听端口；不写就自动挑\n"
         "#         context: 4096           上下文长度\n"
         "#         max_output: 1024        单次输出上限\n"

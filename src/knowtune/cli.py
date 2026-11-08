@@ -16,6 +16,7 @@ import json
 import sys
 from pathlib import Path
 
+from . import paths as paths_mod
 from .config import calibration_of_kb, load_config
 from .db import Database
 from .generate import cite as cite_mod
@@ -114,10 +115,16 @@ def cmd_ingest(args) -> int:
     _, db, _, pipeline = _bootstrap()
     conn = db.conn()
     kb_id = args.kb or _default_kb(conn)
+    # 先按当前工作目录理解（CLI 的习惯语义），找不到再按项目根试一次，
+    # 这样 `knowtune ingest data/uploads/weiyi` 从任何目录跑都能命中。
+    # 交给流水线的必须是绝对路径：否则流水线会再按项目根解析一次，语义打架。
     target = Path(args.path)
     if not target.exists():
-        print(f"路径不存在: {target}", file=sys.stderr)
+        target = paths_mod.resolve_source(args.path)
+    if not target.exists():
+        print(f"路径不存在: {args.path}", file=sys.stderr)
         return 2
+    target = target.resolve()
 
     files = (
         [f for f in target.rglob("*") if f.is_file() and f.suffix.lower() in loader_mod.SUPPORTED_EXTS]

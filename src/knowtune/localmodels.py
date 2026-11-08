@@ -35,6 +35,8 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from . import paths as paths_mod
+
 ROOT = Path(__file__).resolve().parents[2]
 STATE_DIR = ROOT / "data" / "llamacpp"
 
@@ -221,7 +223,7 @@ def scan(dirs: Iterable[str] | None = None, limit: int = 500) -> list[ScannedMod
     out: list[ScannedModel] = []
     seen: set[str] = set()
     for root in roots:
-        base = Path(root)
+        base = paths_mod.resolve_source(root)
         if not base.exists() or not base.is_dir():
             continue
         for dirpath, dirnames, filenames in os.walk(base):
@@ -258,11 +260,11 @@ def scan(dirs: Iterable[str] | None = None, limit: int = 500) -> list[ScannedMod
 
 def find_server(explicit: str = "") -> str:
     """定位 llama-server。找到返回绝对路径，找不到抛 LocalError（带安装指引）。"""
-    if explicit and Path(explicit).exists():
-        return str(Path(explicit))
+    if explicit and paths_mod.resolve_source(explicit).exists():
+        return str(paths_mod.resolve_source(explicit))
     env = (os.environ.get(ENV_SERVER) or "").strip()
-    if env and Path(env).exists():
-        return str(Path(env))
+    if env and paths_mod.resolve_source(env).exists():
+        return str(paths_mod.resolve_source(env))
     for name in SERVER_NAMES:
         hit = shutil.which(name)
         if hit:
@@ -506,10 +508,13 @@ def start(
 ) -> Instance:
     """起一个 llama-server，等它真的能应答再返回。
 
+    模型路径可以是项目根相对路径（models.yaml 里就是这么写的）；这里先还原成
+    绝对路径再交给子进程，避免子进程的工作目录跟服务不一致时找不到 gguf。
+
     失败时一定把子进程杀掉：留一个占了端口但永远不就绪的进程，下次点启动会
     报"端口被占用"，而占用者正是自己上一次失败的那次尝试——这种自我阻塞最难查。
     """
-    p = Path(path)
+    p = paths_mod.resolve_source(path).resolve()
     if not p.exists():
         raise LocalError(f"模型文件不存在：{path}")
     if p.suffix.lower() not in SUFFIXES:

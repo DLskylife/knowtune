@@ -114,7 +114,7 @@ du -sh data/models/bge-small-zh-v1.5 data/models/BAAI--bge-reranker-base
 | 名字 | 类型 | 说明 |
 |---|---|---|
 | `siliconflow` | 云端 OpenAI 兼容 | 当前激活，`Qwen/Qwen2.5-7B-Instruct`，需密钥 |
-| `local` | 本机 llama.cpp | `http://127.0.0.1:8097/v1`，其 `path` 是开发机绝对路径（`D:/llamafactory/...gguf`），clone 后改成你自己的 `.gguf` 或删掉这个后端 |
+| `local` | 本机 llama.cpp | `http://127.0.0.1:8097/v1`；`path` 写**项目根相对路径**（仓库里是开发机示例 `../../llamafactory/...gguf`），clone 后改成你自己的 `.gguf`（推荐放 `data/models/`，写 `data/models/xxx.gguf`）或删掉这个后端 |
 | `deepseek` | 云端 OpenAI 兼容 | `deepseek-flash`，备用 |
 
 **密钥在界面填，不写进 `models.yaml`**：后台「模型」页 → 后端卡片 ✎ → 填 API Key → 保存。密文落 `data/secrets.json`，Windows 用 DPAPI 加密、绑当前账户与本机，拷走解不开；换账户 / 换机器需重填（§10）。服务器场景可在 `models.yaml` 后端下写 `api_key_env: <变量名>` 让程序读环境变量，优先级：本次填写 > 已保存密文 > 环境变量。

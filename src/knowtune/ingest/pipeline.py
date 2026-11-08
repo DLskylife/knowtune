@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
+from .. import paths as paths_mod
 from ..config import Config
 from ..db import Database
 from ..index.embedder import Embedder, EmbedderUnavailable
@@ -92,11 +93,14 @@ class IngestPipeline:
         self, kb_id: int, path: str | Path, cfg: Config | None = None,
         progress: ProgressFn | None = None, clean: dict | CleanPlan | None = None,
     ) -> IngestResult:
-        p = Path(path).resolve()
+        # 解析仍按项目根做基准（从任意 cwd 起服务都一样），但落库只写相对路径：
+        # 绝对路径会把这台机器的盘符和目录名焊死在 source_uri 里，目录一改名
+        # 全部文档立刻变成"源文件缺失"。项目根之外的文件由 stored_path 兜底。
+        p = paths_mod.resolve_source(path).resolve()
         return self._import(
             kb_id=kb_id,
             source_type="file",
-            source_uri=str(p),
+            source_uri=paths_mod.stored_path(p),
             load=lambda: loader_mod.load_path(
                 p, min_pdf_text_chars=(cfg or self.cfg).ingest.pdf.min_text_chars_per_page
             ),
