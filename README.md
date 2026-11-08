@@ -23,7 +23,9 @@ python scripts/setup.py --start
 | 两个本地模型（约 92 MB + 1.1 GB） | 按 [`data/models/README.md`](data/models/README.md) 的两条 `hf download` 命令；国内可设 `HF_ENDPOINT=https://hf-mirror.com` |
 | 生成后端密钥 | 后台「模型」页填写，或复制 `.env.example` 为 `.env`；**密钥不入库**，界面填的走本机 DPAPI 加密 |
 
-起服务后：后台管理台 `http://127.0.0.1:8013/`，前台问答站 `http://127.0.0.1:8800/` 随主服务自动起。首次预热 43–93 秒，看 `GET /api/status` 的 `warmup.state` 变 `ready` 再提问。导入自己的文档：`knowtune ingest <path> --kb <id>`。
+**仓库自带 26 篇公开维医指南**（4.5 MB，新疆卫健委发布），就在 `data/uploads/weiyi/`，按 [`data/uploads/weiyi/README.md`](data/uploads/weiyi/README.md) 三步导入即可有一个能问的库，不用自己找语料。它们按普通上传文件处理，没有单独的语料目录或导入流程。
+
+起服务后：后台管理台 `http://127.0.0.1:8013/`，前台问答站 `http://127.0.0.1:8800/` 随主服务自动起。首次预热 43–93 秒，看 `GET /api/status` 的 `warmup.state` 变 `ready` 再提问。导入自己的文档：`knowtune ingest <path> --kb <id>`；想直接体验样例语料见上一段。
 
 完整逐条判据与排障见 [docs/RUNBOOK.md](docs/RUNBOOK.md)；下面的「装与启」是同一流程的手动口径，想看清每一步再读。
 

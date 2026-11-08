@@ -23,6 +23,7 @@ python scripts/setup.py --start
 | `data/` 各子目录 + `data/README.md` | 目录骨架，程序无需自己建目录 |
 | `data/models/README.md` | 两个模型的目录名、体积、下载命令与校验 |
 | `data/calibration/kb_2.json` | 一份按库标定示例（生效条件见 §9） |
+| `data/uploads/weiyi/` | 26 篇公开维医指南 + 来源清单（4.5 MB），当普通上传文件随仓库发布；按 §5 导入即可建库 |
 | `config/*.yaml`、`.env.example` | 配置模板；密钥留空 |
 | `tools/llama/README.md` | `llama-server` 下载说明 |
 
@@ -32,7 +33,7 @@ python scripts/setup.py --start
 | `data/models/` 权重 | 约 92 MB 嵌入 + 约 1.1 GB 精排 | 按 §2 或 `data/models/README.md` 下载 |
 | `data/secrets.json` | API 密钥密文（Windows DPAPI，绑账户 + 本机） | 界面填写或环境变量（§3） |
 | `tools/llama/` 二进制 | `llama-server` 可执行文件（约 100 MB） | `python scripts/get_llama.py` |
-| `data/uploads/`、源语料 | 个人/第三方文档，部分单文件超 GitHub 100 MB 上限 | 自己导入（§5） |
+| `data/uploads/` 下其余本机上传文件 | 个人 / 第三方文档，部分单文件超 GitHub 100 MB 上限 | 自己导入（§5）；样例语料已在 `data/uploads/weiyi/` |
 
 这么切是刻意的：代码、配置与目录骨架可版本化，数据、密钥和大权重不该进版本库。代价是首次部署要下模型并在界面填密钥，`setup.py` 会把能自动的都自动掉。备份只需整个 `data/` 目录（§11）。
 

@@ -33,6 +33,12 @@ data/models/*
 !data/models/.gitkeep
 data/uploads/*
 !data/uploads/.gitkeep
+# 维医样例语料：26 篇公开指南，当普通上传文件随仓库发布
+!data/uploads/weiyi/
+data/uploads/weiyi/*
+!data/uploads/weiyi/*.pdf
+!data/uploads/weiyi/*.md
+# corpus 只是本机整理目录，仓库保留空骨架，内容一律不入库
 data/corpus/*
 !data/corpus/.gitkeep
 data/vectors/*

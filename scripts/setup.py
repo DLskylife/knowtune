@@ -126,7 +126,11 @@ def main() -> int:
     print("     （或激活 venv 后直接 knowtune serve --port 8013）")
     print("  2. 浏览器开 http://127.0.0.1:8013/ ，在「模型」页填后端密钥；")
     print("     前台问答站 http://127.0.0.1:8800/ 随主服务自动起。")
-    print("  3. 首次启动嵌入模型预热约 43-93 秒，看 /api/status 的 warmup.state=ready 再提问。")
+    print("  3. 想马上有个能问的库（26 篇公开维医指南已在仓库）：")
+    print("       knowtune kb create 维医知识库")
+    print("       knowtune ingest data/uploads/weiyi --kb <上一步的 id>")
+    print("     详见 data/uploads/weiyi/README.md")
+    print("  4. 首次启动嵌入模型预热约 43-93 秒，看 /api/status 的 warmup.state=ready 再提问。")
     print("  完整说明：README.md「快速开始」/ docs/RUNBOOK.md")
     print("=" * 62)
 
