@@ -298,7 +298,7 @@ knowtune debug "问题" [--kb N] [--top-k N]       # 打印两路召回与融合
 knowtune serve [--port 8013] [--host 127.0.0.1]  # 启动 Web UI（默认 8000，实际用 8013）
 ```
 
-`config/models.yaml` 已注册 `siliconflow` / `local` / `deepseek` 三个后端；密钥在界面填，不写进 `models.yaml`。HTTP 侧的 `curl` 核对命令见 §5 与 §8。
+`config/models.yaml` 已注册 `siliconflow` / `local`（7B，8097）/ `local3b`（3B 微调，8098）/ `deepseek` 四个后端；两个本机端点各有独立 `base_url`。密钥在界面填，不写进 `models.yaml`。HTTP 侧的 `curl` 核对命令见 §5 与 §8。
 
 ---
 

@@ -30,8 +30,23 @@ hf download BAAI/bge-reranker-base \
 
 精排默认开启（`retrieval.rerank.enabled: true`、`allow_download: false`），本地缺权重不会联网补下，只会打 `degraded=rerank_model_missing`。看 `GET /api/status` 的 `rerank.last_error` 是否为 `null`。
 
-## 本机 7B（可选，只影响预问诊）
+## 可选的生成后端 GGUF（本机模型）
 
-`config/models.yaml` 里 `local` 后端的 `path` 写**项目根相对路径**（`/` 分隔，基准是仓库根目录）。仓库里给的是开发机示例 `../../llamafactory/...gguf`；要用本机模型，把它改成你自己的 `.gguf`（推荐放进本目录，写成 `data/models/xxx.gguf`），或删掉这个后端。相对路径按仓库根还原，从哪个工作目录启动服务都一样。不用本机模型就走云端 `siliconflow` / `deepseek`，在界面填密钥即可，这个文件不用改。
+这两个跟上面检索用的嵌入 / 精排无关，是给「在本机跑生成模型」用的。仓库不含任何权重，`*.gguf` 全被 gitignore 排除；标准落位**就是本目录**，文件名与 `config/models.yaml` 一一对应：
+
+| 端点 | 文件名 | 体积 | 用途 |
+|---|---|---|---|
+| `local`（8097，`autostart: true`） | `Qwen2.5-7B-Instruct-Q4_K_M.gguf` | 4.68 GB | 官方 7B Q4，预问诊默认走它 |
+| `local3b`（8098，按需启动） | `Qwen-3b-doctor-weiyi-light-Q4_K_M.gguf` | 1.83 GB | 3B 维医微调 Q4_K_M，可选 |
+
+把文件放进本目录即可，配置里已经是 `data/models/xxx.gguf`（项目根相对，从哪个工作目录启动都一样），不用改路径。没有这两个文件也能用：走云端 `siliconflow` / `deepseek` 填密钥即可；不想看 `local` 自启失败，就把 `config/models.yaml` 里它的 `autostart` 删掉。
+
+3B 那份的校验值（本机 2026-11-08 量化产物）：
+
+```
+sha256  9608faa15fef5b218510a6663afdb5867fd1a235f90af5d846e6ffa4da7a9bf2
+```
+
+**怎么拿到**：仓库放不下 1.83 GB 权重（GitHub 单文件上限 100 MB）。两条路——① 手上有 LoRA adapter，按 [`tools/llama/README.md`](../../tools/llama/README.md) 的两条脚本命令自己合并 + 量化，产物直接写进本目录；② 从自己的 Hugging Face / 网盘拷入，用上面的 sha256 校验。别把权重提交进 git。
 
 `llama-server` 可执行文件放 `tools/llama/`，用 `python scripts/get_llama.py` 下载。

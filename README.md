@@ -27,6 +27,8 @@ python scripts/setup.py --start
 
 **路径一律相对项目根**：数据库里的 `source_uri`、`config/models.yaml` 的模型 `path` 都写成 `data/uploads/weiyi/xxx.pdf` 这种相对路径（用 `/` 分隔，基准是仓库根目录，见 [`data/README.md`](data/README.md)）。整个目录改名、换盘符、拷到别的机器，文档都不会突然变成「源文件缺失」；把盘符焊死在库里则会。项目根之外的外部文件无法可移植，仍保留绝对路径。
 
+**本机生成模型也按这套口径**：`config/models.yaml` 的 `local`（7B，8097）与 `local3b`（3B 微调，8098）都指向 `data/models/xxx.gguf`，文件放进该目录就能用。仓库不含任何 `.gguf`——最小的也有 1.83 GB，远超 GitHub 单文件 100 MB 上限；要自己产就跑 `scripts/merge_lora.py` + `scripts/build_gguf.py`（见 [`tools/llama/README.md`](tools/llama/README.md)），或把自己的权重拷进去，放法与校验值见 [`data/models/README.md`](data/models/README.md)。没有这两个文件也能用，走云端后端填密钥即可。
+
 起服务后：后台管理台 `http://127.0.0.1:8013/`，前台问答站 `http://127.0.0.1:8800/` 随主服务自动起。首次预热 43–93 秒，看 `GET /api/status` 的 `warmup.state` 变 `ready` 再提问。导入自己的文档：`knowtune ingest <path> --kb <id>`；想直接体验样例语料见上一段。
 
 完整逐条判据与排障见 [docs/RUNBOOK.md](docs/RUNBOOK.md)；下面的「装与启」是同一流程的手动口径，想看清每一步再读。
@@ -141,7 +143,7 @@ knowtune debug "问题"                  # 打印两路召回与融合排序，�
 knowtune serve [--port 8013]           # 启动 Web UI
 ```
 
-`config/models.yaml` 已注册 `siliconflow` / `local` / `deepseek` 三个后端；密钥在界面填，不写进 `models.yaml`。
+`config/models.yaml` 已注册 `siliconflow` / `local`（7B，8097）/ `local3b`（3B 微调，8098）/ `deepseek` 四个后端；两个本机端点各有独立 `base_url`，启动其中一个不会把另一个切走。密钥在界面填，不写进 `models.yaml`。
 
 ## 架构速览
 
@@ -247,9 +249,9 @@ src/knowtune/            主项目
 src/previsit/            预问诊独立实现（v0.4.0：提示词 + 模型的纯对话壳），零 knowtune 依赖
 config/                   default / local / models / instances / prompts(.yaml) / prompts/*.md
                           previsit.yaml / previsit.overrides.yaml
-data/                    目录骨架 + README 在库；library.db、源语料、模型权重、secrets.json 不进版本库
+data/                    目录骨架 + README 在库；library.db、源语料、模型权重（含 *.gguf）、secrets.json 不进版本库
 docs/                    7 份文档（见下表）
-scripts/                  setup.py（一键部署）/ get_llama.py / verify_docs.py / fake_llm.py / shot_*.py
+scripts/                  setup.py（一键部署）/ merge_lora.py + build_gguf.py（LoRA→GGUF）/ get_llama.py / verify_docs.py / fake_llm.py / shot_*.py
 tools/llama/              骨架在库，llama-server 二进制按 README 下载
 ```
 

@@ -25,12 +25,14 @@ python scripts/setup.py --start
 | `data/calibration/kb_2.json` | 一份按库标定示例（生效条件见 §9） |
 | `data/uploads/weiyi/` | 26 篇公开维医指南 + 来源清单（4.5 MB），当普通上传文件随仓库发布；按 §5 导入即可建库 |
 | `config/*.yaml`、`.env.example` | 配置模板；密钥留空 |
-| `tools/llama/README.md` | `llama-server` 下载说明 |
+| `tools/llama/README.md` | `llama-server` 下载说明、LoRA → GGUF 的复现流程 |
+| `scripts/merge_lora.py`、`scripts/build_gguf.py` | 从 LoRA adapter 合并 HF 权重并量化成 GGUF 的两条脚本 |
 
 | 不在仓库里 | 体积 / 性质 | 谁来生成 |
 |---|---|---|
 | `data/library.db` | SQLite 库、文档、chunk、向量；含本机问答历史 | `knowtune init` / 首次启动自动建表；内容靠你导入（§4、§5） |
 | `data/models/` 权重 | 约 92 MB 嵌入 + 约 1.1 GB 精排 | 按 §2 或 `data/models/README.md` 下载 |
+| `data/models/*.gguf`（本机生成模型） | 7B 约 4.68 GB / 3B 微调 Q4 约 1.83 GB，超 GitHub 单文件 100 MB 上限 | 放进 `data/models/` 即可（`config/models.yaml` 已按此写），或按 `tools/llama/README.md` 从 LoRA 复现 |
 | `data/secrets.json` | API 密钥密文（Windows DPAPI，绑账户 + 本机） | 界面填写或环境变量（§3） |
 | `tools/llama/` 二进制 | `llama-server` 可执行文件（约 100 MB） | `python scripts/get_llama.py` |
 | `data/uploads/` 下其余本机上传文件 | 个人 / 第三方文档，部分单文件超 GitHub 100 MB 上限 | 自己导入（§5）；样例语料已在 `data/uploads/weiyi/` |
@@ -109,12 +111,13 @@ du -sh data/models/bge-small-zh-v1.5 data/models/BAAI--bge-reranker-base
 
 ## 3. 配生成后端（三选一）
 
-`config/models.yaml` **已注册三个 `provider`（后端）**，不需要从零新建：
+`config/models.yaml` **已注册四个 `provider`（后端）**，不需要从零新建：
 
 | 名字 | 类型 | 说明 |
 |---|---|---|
-| `siliconflow` | 云端 OpenAI 兼容 | 当前激活，`Qwen/Qwen2.5-7B-Instruct`，需密钥 |
-| `local` | 本机 llama.cpp | `http://127.0.0.1:8097/v1`；`path` 写**项目根相对路径**（仓库里是开发机示例 `../../llamafactory/...gguf`），clone 后改成你自己的 `.gguf`（推荐放 `data/models/`，写 `data/models/xxx.gguf`）或删掉这个后端 |
+| `siliconflow` | 云端 OpenAI 兼容 | 默认生成后端，`Qwen/Qwen2.5-7B-Instruct`，需密钥 |
+| `local` | 本机 llama.cpp | `http://127.0.0.1:8097/v1`，`autostart: true`；`path` 是标准落位 `data/models/Qwen2.5-7B-Instruct-Q4_K_M.gguf`，把 gguf 放进该目录即可。没有这个文件就把 `autostart` 删掉 |
+| `local3b` | 本机 llama.cpp | `http://127.0.0.1:8098/v1`，按需启动；`path` 是 `data/models/Qwen-3b-doctor-weiyi-light-Q4_K_M.gguf`。**独立端点**：一个端点只有一个 `base_url`，挂在 `local` 下点「启动」会把默认端点改写到 8098，预问诊会被连带切走 |
 | `deepseek` | 云端 OpenAI 兼容 | `deepseek-flash`，备用 |
 
 **密钥在界面填，不写进 `models.yaml`**：后台「模型」页 → 后端卡片 ✎ → 填 API Key → 保存。密文落 `data/secrets.json`，Windows 用 DPAPI 加密、绑当前账户与本机，拷走解不开；换账户 / 换机器需重填（§10）。服务器场景可在 `models.yaml` 后端下写 `api_key_env: <变量名>` 让程序读环境变量，优先级：本次填写 > 已保存密文 > 环境变量。

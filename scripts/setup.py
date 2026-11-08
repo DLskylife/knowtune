@@ -131,6 +131,8 @@ def main() -> int:
     print("       knowtune ingest data/uploads/weiyi --kb <上一步的 id>")
     print("     详见 data/uploads/weiyi/README.md")
     print("  4. 首次启动嵌入模型预热约 43-93 秒，看 /api/status 的 warmup.state=ready 再提问。")
+    print("  5. 可选：本机生成模型的 gguf 放 data/models/（7B / 3B 微调），配置已按此写好；")
+    print("     自己量化跑 scripts/merge_lora.py + build_gguf.py，见 tools/llama/README.md")
     print("  完整说明：README.md「快速开始」/ docs/RUNBOOK.md")
     print("=" * 62)
 

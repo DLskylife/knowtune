@@ -175,8 +175,7 @@ def default_dirs() -> list[str]:
     ]
     # LM Studio 的模型根目录是可改的（装到 D 盘的人几乎都改过），改完只写进
     # 它自己的 settings.json（downloadsFolder）。不去读它，默认列表就永远猜
-    # .lmstudio/models，扫出来一个都没有——实测这台机器模型全在
-    # D:/llamafactory/models，而那个"默认位置"是空目录。
+    # .lmstudio/models；实测模型根目录常被改到别处，默认位置是空的。
     lm_root = _lmstudio_root(home)
     if lm_root:
         cands.insert(0, lm_root)
