@@ -4,6 +4,29 @@
 
 多格式导入 → 分块 → 本地嵌入 + FTS5 双路召回 → 加权融合 → CrossEncoder 精排 → 带引用编号的 LLM 生成 → 引用校验 / 支撑度 → 可检索日志。附带一个面向终端用户的前台问答站和一个预问诊引擎。数据全部落在本地 SQLite，生成模型接任意 OpenAI 兼容后端。
 
+## 快速开始（clone 之后 3 步）
+
+需要 Python ≥ 3.11。**目录骨架、配置模板、模型下载说明都在仓库里**，clone 下来不用手工建目录、不用猜配置。
+
+```bash
+git clone https://github.com/DLskylife/knowtune.git
+cd knowtune
+python scripts/setup.py --start
+```
+
+`setup.py` 一条命令建 `.venv`、按正确顺序装 CPU 版 torch 与本体、初始化空库、检查模型，然后起服务。它是幂等的：已有环境和数据库就跳过，重复跑等价于体检，不会覆盖数据。
+
+**第一次只需补两样**（脚本会打印命令，不会替你下载 1.2 GB）：
+
+| 缺什么 | 怎么办 |
+|---|---|
+| 两个本地模型（约 92 MB + 1.1 GB） | 按 [`data/models/README.md`](data/models/README.md) 的两条 `hf download` 命令；国内可设 `HF_ENDPOINT=https://hf-mirror.com` |
+| 生成后端密钥 | 后台「模型」页填写，或复制 `.env.example` 为 `.env`；**密钥不入库**，界面填的走本机 DPAPI 加密 |
+
+起服务后：后台管理台 `http://127.0.0.1:8013/`，前台问答站 `http://127.0.0.1:8800/` 随主服务自动起。首次预热 43–93 秒，看 `GET /api/status` 的 `warmup.state` 变 `ready` 再提问。导入自己的文档：`knowtune ingest <path> --kb <id>`。
+
+完整逐条判据与排障见 [docs/RUNBOOK.md](docs/RUNBOOK.md)；下面的「装与启」是同一流程的手动口径，想看清每一步再读。
+
 ## 当前事实卡
 
 | 项 | 现行值 | 条件 |
@@ -58,7 +81,7 @@
 
 ## 装与启
 
-本机快速启动的最小清单（Windows Git Bash；Linux/macOS 把 `.venv/Scripts` 换成 `.venv/bin`）。
+本机快速启动的最小清单（Windows Git Bash；Linux/macOS 把 `.venv/Scripts` 换成 `.venv/bin`）。**以上流程已由 `python scripts/setup.py` 自动化**，这一节是脚本内部顺序的人工口径，排障时对照用。
 
 **① 装依赖，顺序不能反。**
 
@@ -164,7 +187,7 @@ knowtune serve [--port 8013]           # 启动 Web UI
 1. **只有 kb 2 有按库标定；kb 3（临床药理）、kb 4（古籍）用出厂 `min_score=0.35`。** 现行生效文件只有 `data/calibration/kb_2.json`：`calibrated_at=2026-11-06T09:01:29Z`、`method=real-questions`、52 组样本、拒答侧 `AUC=1.0` / `min_score=0.581` / `min_margin=0.0` / `mode=calibrated`；支撑度侧 `AUC=0.992` / `threshold=0.665` / 两侧误判 0.0435 / 69 样本。**最隐蔽的是生效条件**（`config.py:495-510`）：kb_id 非空 + 文件存在 + JSON 可读 + **模型指纹等于 `embedding.model@dim`**。换嵌入模型或维度，标定文件会静默失效并退回 0.35，界面只说「本库尚未标定」。核对命令见 [docs/USER_GUIDE.md](docs/USER_GUIDE.md) §5。
 2. **历史标定已失效。** 2026-10 实现期、以及评测台迁出前（2026-11 前）用过另一套全局/按库口径，其阈值、AUC、留一法样本数、误拒/漏拒率都是历史记录；旧 `data/refusal_calibration.json`（全局格式、`reliable:false`）盘上可能还在，但代码读的是 `data/calibration/kb_<id>.json`，**盘上有文件 ≠ 生效**。现行判据只认上一条的 `kb_2.json` 数值。标定工具 `model-eval/calibrate.py` 已随评测台迁出为独立项目，本仓库不自带，主项目只读 `data/calibration/` 结果。
 3. **融合权重与标定只在维医语料上测过**（两套探针 × 两个种子 × n≈300）。换一批文档，BM25 与向量的强弱关系可能反转。影响：`retrieval.fusion.*` 的最优权重随语料变。现在能怎么办：换语料后重跑再定，不沿用维医数字。
-4. **仓库不含运行资产**：`data/` 与 `tools/llama/` 被 `.gitignore` 排除，clone 后必须自行下载两个模型、初始化数据库、绑定库 id。截至 2026-11-07，98 个受版本控制文件，是主体代码 + 文档。完整步骤见 [docs/RUNBOOK.md](docs/RUNBOOK.md)。
+4. **仓库带骨架，不带运行资产内容**：`data/` 与 `tools/llama/` 的目录骨架、模型下载说明、一份示例标定结果 `data/calibration/kb_2.json` 在版本库里；数据库、源语料、模型权重、密钥仍被 `.gitignore` 排除——前者含本机问答历史，后几者体积超过 GitHub 单文件 100 MB 上限。clone 后跑 `python scripts/setup.py` 建环境与空库，模型按 [`data/models/README.md`](data/models/README.md) 下，绑库 id 按 [docs/RUNBOOK.md](docs/RUNBOOK.md) 走。截至 2026-11-08，受版本控制的是主体代码、文档、配置模板与目录骨架。
 
 ### C. 部署与性能取舍：架构决定
 
@@ -220,9 +243,10 @@ src/knowtune/            主项目
 src/previsit/            预问诊独立实现（v0.4.0：提示词 + 模型的纯对话壳），零 knowtune 依赖
 config/                   default / local / models / instances / prompts(.yaml) / prompts/*.md
                           previsit.yaml / previsit.overrides.yaml
-data/                    不进版本库：library.db、uploads/、models/、calibration/、secrets.json
+data/                    目录骨架 + README 在库；library.db、源语料、模型权重、secrets.json 不进版本库
 docs/                    7 份文档（见下表）
-scripts/                  fake_llm.py / get_llama.py / shot_models.py
+scripts/                  setup.py（一键部署）/ get_llama.py / verify_docs.py / fake_llm.py / shot_*.py
+tools/llama/              骨架在库，llama-server 二进制按 README 下载
 ```
 
 ## 文档矩阵

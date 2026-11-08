@@ -6,13 +6,45 @@ __pycache__/
 .idea/workspace.xml
 _pytest_tmp/
 
-# 数据与模型：体积大、可重建，且含个人内容（数据库 / 上传文档 / 向量 /
-# 本地 gguf / 密钥 / 本地实例日志）。整目录不上传，clone 后由程序自建。
-data/
+# 本地密钥与环境变量。密钥只走界面填写或环境变量，绝不入库。
+.env
+.env.*
+!.env.example
+*.key
+data/secrets.json
+
+# 数据目录：只放行「目录骨架 + 可公开的小资产」，其余全部排除。
+# 数据库 / 源语料 / 模型权重体积大且含本机内容，clone 后由脚本与程序自建。
+data/*
+!data/README.md
+!data/calibration/
+!data/models/
+!data/uploads/
+!data/corpus/
+!data/vectors/
+!data/tmp/
+
+data/calibration/*
+!data/calibration/README.md
+!data/calibration/.gitkeep
+!data/calibration/kb_*.json
+data/models/*
+!data/models/README.md
+!data/models/.gitkeep
+data/uploads/*
+!data/uploads/.gitkeep
+data/corpus/*
+!data/corpus/.gitkeep
+data/vectors/*
+!data/vectors/.gitkeep
+data/tmp/*
+!data/tmp/.gitkeep
+
 *.db
 *.db-shm
 *.db-wal
 *.bak-*
+*.gguf
 
 # 开发期截图与工具会话产物
 _shot/
@@ -30,9 +62,12 @@ config/prompts/_history/
 # 本地工作日志（含本机绝对路径与过程记录）
 .workbuddy/
 
-# 与本仓库无关的项目文档（立项/需求分析类 PDF 与渲染图，29 MB）
+# 与本仓库无关的项目文档（立项/需求分析类 PDF 与渲染图）
 # 文件仍在本地，只是不上传；要一起传就把下面这行去掉
 _pm/
 
 # llama.cpp 可执行文件（约 100MB，按需下载：python scripts/get_llama.py）
-tools/llama/
+# 目录骨架保留，二进制不入库
+tools/llama/*
+!tools/llama/README.md
+!tools/llama/.gitkeep

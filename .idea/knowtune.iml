@@ -6,7 +6,7 @@
       <excludeFolder url="file://$MODULE_DIR$/.venv" />
       <excludeFolder url="file://$MODULE_DIR$/evals/.venv" />
     </content>
-    <orderEntry type="jdk" jdkName="D:\PythonProject\sky_agent\.venv" jdkType="Python SDK" />
+    <orderEntry type="jdk" jdkName="D:\PythonProject\knowtune\.venv" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
   </component>
 </module>

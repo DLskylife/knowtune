@@ -8,17 +8,33 @@
 
 ## 0. 仓库里有什么、没有什么
 
-**代码是完整的，缺的是运行期资产。** 截至 2026-11-07，98 个受版本控制文件，是主体代码 + 文档，不含运行资产。clone 之后看起来空，是因为 `.gitignore` 按设计排除了下面这些：
+**目录骨架、配置模板和说明在仓库里，运行资产内容不在。** clone 下来各目录已存在，不会因「目录找不到」报错；缺的是数据库内容、模型权重和密钥。
+
+最省事的路径是一条命令，它把 §1、§4 和启动串起来：
+
+```bash
+python scripts/setup.py --start
+```
+
+脚本幂等、只用标准库：建 `.venv` → 按正确顺序装 CPU 版 torch 与本体 → 初始化空库 → 检查模型 → 起服务。重复跑不会覆盖已有数据。下面 §1–§7 是同一流程的逐步口径与判据，卡住时对照用。
+
+| 仓库里已有 | 说明 |
+|---|---|
+| `data/` 各子目录 + `data/README.md` | 目录骨架，程序无需自己建目录 |
+| `data/models/README.md` | 两个模型的目录名、体积、下载命令与校验 |
+| `data/calibration/kb_2.json` | 一份按库标定示例（生效条件见 §9） |
+| `config/*.yaml`、`.env.example` | 配置模板；密钥留空 |
+| `tools/llama/README.md` | `llama-server` 下载说明 |
 
 | 不在仓库里 | 体积 / 性质 | 谁来生成 |
 |---|---|---|
-| `data/library.db` | SQLite 库、文档、chunk、向量 | 首次启动自动建表；内容靠你导入（§4、§5） |
-| `data/models/` | 约 92 MB 嵌入 + 约 1.1 GB 精排权重 | 按 §2 下载 |
+| `data/library.db` | SQLite 库、文档、chunk、向量；含本机问答历史 | `knowtune init` / 首次启动自动建表；内容靠你导入（§4、§5） |
+| `data/models/` 权重 | 约 92 MB 嵌入 + 约 1.1 GB 精排 | 按 §2 或 `data/models/README.md` 下载 |
 | `data/secrets.json` | API 密钥密文（Windows DPAPI，绑账户 + 本机） | 界面填写或环境变量（§3） |
-| `data/calibration/` | 按库标定结果 `kb_<id>.json` | 评测台产出，非必需（§9） |
-| `tools/llama/` | `llama-server` 可执行文件（约 100 MB） | `python scripts/get_llama.py` |
+| `tools/llama/` 二进制 | `llama-server` 可执行文件（约 100 MB） | `python scripts/get_llama.py` |
+| `data/uploads/`、源语料 | 个人/第三方文档，部分单文件超 GitHub 100 MB 上限 | 自己导入（§5） |
 
-这么切是刻意的：代码与配置可版本化，数据和密钥不该进版本库。代价是 clone 下来是空壳，**必须自己下模型、初始化数据库、绑定库 id**，按 §1–§7 走一遍。备份只需整个 `data/` 目录（§11）。
+这么切是刻意的：代码、配置与目录骨架可版本化，数据、密钥和大权重不该进版本库。代价是首次部署要下模型并在界面填密钥，`setup.py` 会把能自动的都自动掉。备份只需整个 `data/` 目录（§11）。
 
 ---
 
