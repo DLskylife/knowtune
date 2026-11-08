@@ -28,8 +28,10 @@ python <llama.cpp>/convert_hf_to_gguf.py <merged_dir> \
 # 3. 量化（本目录的 llama-quantize.exe，8 线程）
 ./llama-quantize.exe model-f16.gguf model-Q4_K_M.gguf Q4_K_M 8
 
-# 4. 在 config/models.yaml 的 local 后端加一条 id / 相对 path / port，
-#    后台「模型」页点「启动」即可
+# 4. 在 config/models.yaml 里建一个**独立的** local 端点，写 id / 相对 path / port，
+#    后台「模型」页点「启动」。别挂在默认 local 端点下：一个端点只有一个
+#    base_url，点「启动」会把整个默认端点改写到新端口，预问诊等钉在默认
+#    端点上的功能会被连带切走。
 ```
 
 3B 模型 Q4_K_M 约 1.8 GB、4.99 BPW：6 GB 显存可全量 offload（`-ngl 99`），纯 CPU（`-ngl 0`）实测约 16 tok/s。量化只解决「跑得动」，不改善模型本身的能力；上线前仍要按自己的业务场景做质量评测。

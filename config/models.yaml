@@ -42,6 +42,11 @@ providers:
       context: 4096
       path: ../../llamafactory/models/lmstudio-ai/Qwen2.5-7B-Instruct-GGUF/Qwen2.5-7B-Instruct-Q4_K_M.gguf
       port: 8097
+  local3b:
+    base_url: http://127.0.0.1:8098/v1
+    model: Qwen-3b-doctor-weiyi-light-Q4_K_M
+    kind: local
+    models:
     - id: Qwen-3b-doctor-weiyi-light-Q4_K_M
       alias: ''
       context: 4096
