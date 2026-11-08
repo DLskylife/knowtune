@@ -42,11 +42,11 @@ providers:
       context: 4096
       path: ../../llamafactory/models/lmstudio-ai/Qwen2.5-7B-Instruct-GGUF/Qwen2.5-7B-Instruct-Q4_K_M.gguf
       port: 8097
-    - id: Qwen-3b-doctor-weiyi-bf16
+    - id: Qwen-3b-doctor-weiyi-light-Q4_K_M
       alias: ''
       context: 4096
-      path: ../../llamafactory/models/lmstudio-ai/Qwen-3b-doctor-weiyi-bf16/Qwen-3b-doctor-weiyi-bf16.gguf
-      port: 8090
+      path: ../../llamafactory/models/lmstudio-ai/Qwen-3b-doctor-weiyi-light/Qwen-3b-doctor-weiyi-light-Q4_K_M.gguf
+      port: 8098
   deepseek:
     base_url: https://api.deepseek.com
     model: deepseek-flash
