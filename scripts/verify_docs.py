@@ -234,6 +234,78 @@ try:
 except Exception as e:
     errors.append(f"[sql] {e}")
 
+# --- 6b. structure / config / install health -----------------------------
+# 这一节的动机：b5efb48 把 app.py 从 4400 行拆成 274 行 + routes/ 8 模块后，
+# 文档里「约 4400 行，唯一大文件」和一堆 :1271-1303 行号全部失效，而上面
+# 1~6 节一条都没报；同一时期 editable 安装掉了、models.yaml 混进盘符绝对
+# 路径，ALL CHECKS PASSED 照样照常打印。校验器必须能看见代码本身。
+HISTORY_MARKERS = ("历史", "曾", "同日", "已失效", "当时", "旧版", "归档", "快照")
+
+for p in MD:  # WBS.html 是交付时快照，明确豁免
+    for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
+        if any(k in line for k in HISTORY_MARKERS):
+            continue
+        if "4400" in line or "唯一大文件" in line:
+            errors.append(f"[structure] {p.name}:{i} app.py 拆分后仍写 4400 行/唯一大文件")
+        if re.search(r"api/app\.py:\d+", line):
+            errors.append(
+                f"[structure] {p.name}:{i} 已失效的 app.py 行号引用（应写模块/函数名）"
+            )
+
+# 构建号：只校验「现行陈述」，历史演进段（含 曾/同日/历史）整行豁免
+build_versions: dict[str, str] = {}
+for pkg, const in (("api", "window.ADMIN_BUILD"), ("frontsite", "window.SITE_BUILD")):
+    js = (STATIC / pkg / "static/app.js").read_text(encoding="utf-8")
+    m = re.search(rf'{re.escape(const)}\s*=\s*"([^"]+)"', js)
+    if m:
+        build_versions[m.group(1)] = pkg
+for p in MD:
+    for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
+        if any(k in line for k in HISTORY_MARKERS):
+            continue
+        claimed = re.findall(r"(?:构建号|现行|统一)\s*`?((?:0\.9|1\.7)\.\d+)", line)
+        claimed += re.findall(r"\?v=((?:0\.9|1\.7)\.\d+)", line)
+        for v in claimed:
+            if v not in build_versions:
+                errors.append(
+                    f"[build] {p.name}:{i} 构建号 {v} 不是现行源码值 {sorted(build_versions)}"
+                )
+
+# 端点装配：include_router 数量必须等于 routes/ 下的模块数，且文档写明拆分
+app_src = (ROOT / "src/knowtune/api/app.py").read_text(encoding="utf-8")
+route_mods = [p for p in (ROOT / "src/knowtune/api/routes").glob("*.py")
+              if p.name != "__init__.py"]
+n_include = len(re.findall(r"^app\.include_router\(", app_src, re.M))
+if n_include != len(route_mods):
+    errors.append(
+        f"[structure] app.py include_router={n_include} 与 routes 模块数 "
+        f"{len(route_mods)} 不等"
+    )
+if "api/routes/" not in corpus:
+    errors.append("[structure] 文档未写明 api/routes/ 拆分")
+
+# 干净解释器：不注入 sys.path，必须能 import knowtune 并跑 CLI
+clean = subprocess.run(
+    [sys.executable, "-c", "import knowtune, knowtune.cli; print(knowtune.__file__)"],
+    cwd=ROOT, capture_output=True, text=True,
+)
+if clean.returncode or "knowtune" not in clean.stdout:
+    errors.append(f"[install] 干净解释器 import knowtune 失败：{clean.stderr.strip()[-300:]}")
+cli_smoke = subprocess.run(
+    [sys.executable, "-m", "knowtune.cli", "--help"],
+    cwd=ROOT, capture_output=True, text=True,
+)
+if cli_smoke.returncode or "serve" not in cli_smoke.stdout:
+    errors.append(f"[install] CLI 入口不可用：{cli_smoke.stderr.strip()[-300:]}")
+
+# models.yaml 不允许盘符绝对路径（项目外模型用 ../ 相对路径）
+for p in (ROOT / "config").glob("*.yaml"):
+    for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
+        if re.search(r"^\s*path:\s*[A-Za-z]:[\\/]", line):
+            errors.append(
+                f"[paths] {p.name}:{i} 模型 path 写成盘符绝对路径：{line.strip()}"
+            )
+
 # --- 7. report ------------------------------------------------------------
 print(f"docs={len(DOCS)} md={len(MD)} html={len(HTML)}")
 print(f"headings: " + ", ".join(f"{k}={len(v)}" for k, v in head_maps.items()))

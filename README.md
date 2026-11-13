@@ -151,7 +151,7 @@ knowtune serve [--port 8013]           # 启动 Web UI
 
 | 组件 | 是什么 | 在哪 |
 |---|---|---|
-| 后台管理台 | 主服务 FastAPI：建库、导入、调参、看日志、全部 HTTP 接口（`api/app.py`，约 4400 行，唯一大文件） | `http://127.0.0.1:8013/`，`knowtune serve` |
+| 后台管理台 | 主服务 FastAPI：建库、导入、调参、看日志、94 个 HTTP 端点。`api/app.py` 是装配入口，端点按资源域拆到 `api/routes/` 8 个模块 | `http://127.0.0.1:8013/`，`knowtune serve` |
 | 前台问答站 | 面向终端用户的问答站，主服务进程内 daemon 线程，不另起进程；`instances.yaml` 的 `port` + `autostart: true` | `http://127.0.0.1:8800/`，`src/knowtune/frontsite/` |
 | OpenAI 兼容网关 | `/v1` 纯转发到选中的 OpenAI 兼容后端，**不经过 RAG 链路**；RAG 入口只有后台 `/api/ask` 与前台 `/api/ask` | `http://127.0.0.1:8013/v1` |
 | 预问诊 | 挂在前台 `/previsit`，对外全路径 `/previsit/api/previsit/*`，**没有独立站点、没有独立端口**；`section` 开关 `pv` 关闭时按 404 拦截；**推理固定走本机模型**（`previsit.overrides.yaml` 钉 `provider: local`），不把患者原话发给云端。**只有一层壳：一段系统提示词 + 模型本身**——没有槽位、分诊规则、病历或结论卡，问什么、问几轮、何时收尾都由模型决定 | 实现真身 `src/previsit/`（v0.4.0，零 knowtune 依赖），`src/knowtune/previsit/` 是桥接再导出 + 装配层 |
@@ -242,15 +242,17 @@ src/knowtune/            主项目
   index/                 embedder / vectors / sparse
   retrieve/              engine（双路召回、融合、拒答判定）/ rerank（精排 + MMR）
   generate/              prompt / llm / cite / evidence / support / think
-  api/app.py             后台全部 HTTP 接口（约 4400 行）
-  api/static/            后台前端：index.html / app.js / style.css，构建号 0.9.56
+  api/app.py             FastAPI 装配入口：生命周期、中间件、注册 8 个路由模块
+  api/routes/            94 个端点按资源域拆成 8 个模块
+  api/common.py / state.py / coverage.py  分片上传 / 全局 AppState / 引用覆盖率
+  api/static/            后台前端：index.html / app.js / style.css，构建号 0.9.63
   frontsite/             instcfg / runner / site + static（前台前端）
   previsit/app.py        主项目装配层（LLM 适配器 + 参数面板）
 src/previsit/            预问诊独立实现（v0.4.0：提示词 + 模型的纯对话壳），零 knowtune 依赖
 config/                   default / local / models / instances / prompts(.yaml) / prompts/*.md
                           previsit.yaml / previsit.overrides.yaml
 data/                    目录骨架 + README 在库；library.db、源语料、模型权重（含 *.gguf）、secrets.json 不进版本库
-docs/                    7 份文档（见下表）
+docs/                    6 份文档（+ 根 README 共 7 份，见下表）
 scripts/                  setup.py（一键部署）/ merge_lora.py + build_gguf.py（LoRA→GGUF）/ get_llama.py / verify_docs.py / fake_llm.py / shot_*.py
 tools/llama/              骨架在库，llama-server 二进制按 README 下载
 ```

@@ -138,13 +138,13 @@ flowchart TB
 
 ### 2.3 `/v1` 是纯转发网关，不是 RAG 入口
 
-`/v1/chat/completions`（`api/app.py:1271-1303`）只把请求原样转发到选中的 OpenAI 兼容后端：转发 body、透传 stream（`aiter_raw` 逐块透传，不解析不缓冲）、响应带 `X-KnowTune-Upstream` 标明实际端点。**它不经过任何检索、精排、装填、引用校验。** 它的用途是给预问诊、外部脚本、第三方 OpenAI 客户端一个「写死不变」的地址。
+`/v1/chat/completions`（`api/routes/models.py`）只把请求原样转发到选中的 OpenAI 兼容后端：转发 body、透传 stream（`aiter_raw` 逐块透传，不解析不缓冲）、响应带 `X-KnowTune-Upstream` 标明实际端点。**它不经过任何检索、精排、装填、引用校验。** 它的用途是给预问诊、外部脚本、第三方 OpenAI 客户端一个「写死不变」的地址。
 
 **RAG 入口只有两个**：后台 `/api/ask` 与前台 `/api/ask`。把 `/v1` 当成问答入口是常见误读，等于把「能聊天」误当「能检索知识库」。
 
 ### 2.4 两套 previsit 的关系（不是两套预问诊）
 
-- `src/previsit/`：实现**真身**，v0.3.0，零 `knowtune` 依赖，可独立部署。
+- `src/previsit/`：实现**真身**，v0.4.0，零 `knowtune` 依赖，可独立部署。
 - `src/knowtune/previsit/`：**桥接层**，五个同名文件纯再导出 + `app.py` 装配层（注入进程内检索器、LLM 适配器、建 FastAPI app）。
 
 运行时实际跑的是 `src/previsit/` 的代码，由 `frontsite/site.py:331-336` 挂到 `/previsit`，并用 `_SectionGate` 按 `pv` 板块开关做 404 拦截。**这是「一份实现 + 一层装配」，不是重复实现，不要写成「两套预问诊」。**
@@ -165,12 +165,14 @@ src/knowtune/            主项目
   index/                 embedder / vectors / sparse
   retrieve/              engine（双路召回、融合、拒答判定）/ rerank（精排 + MMR）
   generate/              prompt / llm / cite / evidence / support / think
-  api/app.py             后台全部 HTTP 接口（约 4400 行），唯一大文件
-  api/static/            后台前端：index.html / app.js / style.css，构建号 0.9.62
+  api/app.py             FastAPI 装配入口（生命周期 / 中间件 / 注册路由），约 270 行
+  api/routes/           94 个端点按资源域拆成 8 个模块；/v1 网关在 models.py
+  api/common.py / state.py / coverage.py  公共层：分片上传 / AppState / 引用覆盖率
+  api/static/            后台前端：index.html / app.js / style.css，构建号 0.9.63
   frontsite/             instcfg / runner / site
     static/              前台前端：index.html / app.js / style.css
   previsit/app.py        主项目装配层（注入进程内检索器、LLM 适配器、建 FastAPI app）
-src/previsit/            预问诊独立实现（v0.3.0），零 knowtune 依赖
+src/previsit/            预问诊独立实现（v0.4.0），零 knowtune 依赖
   app / engine / config / llm / retriever / kb / kgdb / store / settings
 config/                   default / local / models / instances / prompts(.yaml) / prompts/*.md
                           previsit.yaml / previsit.overrides.yaml
@@ -231,7 +233,7 @@ scripts/                  fake_llm.py / get_llama.py / shot_models.py
 
 `kb.config_json` 存的是**一整套完整值**（`kbconfig.py` 以 `__full__` 标记），不是「与全局不同的差异项」。建库时按预设复制一整套独立值，之后全局与本库互不影响。
 
-这直接决定了「用户手动改过」的判据：**与出厂基线值不同**，而不是「键存在」（`api/app.py:542-543`）。因为全量快照下每个键都存在，若按「键存在」判断，会得出「所有库都手调过」，导致按库标定永不生效。同一条坑在拒答阈值上踩过一次。
+这直接决定了「用户手动改过」的判据：**与出厂基线值不同**，而不是「键存在」（`kbconfig.py` 的 `baseline()` 比对）。因为全量快照下每个键都存在，若按「键存在」判断，会得出「所有库都手调过」，导致按库标定永不生效。同一条坑在拒答阈值上踩过一次。
 
 允许按库覆盖的参数只有「同一问题在不同库里答案不同」的那些：分块、召回宽度、融合权重、精排条数、拒答阈值、生成后端与温度、历史轮数。**嵌入模型故意不在内**：向量矩阵按 `模型@维度` 建，整个进程只驻留一个 embedder；允许按库换模型就得载多份权重、按库分表、给每个库单独标定，代价远大于收益，界面如实写「跟随系统」。
 
@@ -671,9 +673,9 @@ effective_fields(): 逐字段
 - 影响：按「差异存储」理解会误判「键存在 = 手调过」，进而让按库标定永不生效。**已修正**（本次重写中，注释已改为「全量快照，与 `__full__` 标记配套，判据是与出厂基线比对」）。
 
 **④ 前台静态资源构建号三值不一致**
-- 现象：`index.html` 的 `style.css?v=1.7.18` / `app.js?v=1.7.7`，与 `index.html:18`、`app.js:25` 的 `1.7.17` 不一致；后台统一 `0.9.54`。
+- 历史现象：`index.html` 的 `style.css?v=1.7.18` / `app.js?v=1.7.7`，与 `index.html:18`、`app.js:25` 的 `1.7.17` 不一致；后台统一 `0.9.54`。
 - 以什么为准：以前台统一构建号为准。
-- 影响：版本号漂移会让浏览器缓存判断错乱，界面显示与请求版本对不上。**已修正**（2026-11-07 全量重写时，前台 `index.html` 的 css / js 查询串、`SITE_REQ_BUILD`、`app.js` 的 `SITE_BUILD` 曾统一为 `1.7.18`、后台 `0.9.54`；同日补 `progress` 进度事件后，两端前端按规则同步升为前台 `1.7.19`、后台 `0.9.55`；同日站点配置弹窗重排（三页签 + 模型矩阵）再把后台升为 `0.9.56`；同日移除预问诊病历功能、问句改为纯模型生成，前台升为 `1.7.20`；同日预问诊整体退化为「提示词 + 模型」纯对话，前台升为 `1.7.27`；同日修复维语模式下预问诊仍用中文作答（前端补发 `ui_lang`、引擎按界面语言作答，维语会话走`本地 7B 中文推理 + 外部强模型双向翻译`），前台升为 `1.7.28`；同日后台「模型与提示词」矩阵补预问诊的两个模型位（翻译 / 推理），后台升为 `0.9.62`，**这是现行值**）。
+- 影响：版本号漂移会让浏览器缓存判断错乱，界面显示与请求版本对不上。**已修正**（2026-11-07 全量重写时，前台 `index.html` 的 css / js 查询串、`SITE_REQ_BUILD`、`app.js` 的 `SITE_BUILD` 曾统一为 `1.7.18`、后台 `0.9.54`；同日补 `progress` 进度事件后，两端前端按规则同步升为前台 `1.7.19`、后台 `0.9.55`；同日站点配置弹窗重排（三页签 + 模型矩阵）再把后台升为 `0.9.56`；同日移除预问诊病历功能、问句改为纯模型生成，前台升为 `1.7.20`；同日预问诊整体退化为「提示词 + 模型」纯对话，前台升为 `1.7.27`；同日修复维语模式下预问诊仍用中文作答（前端补发 `ui_lang`、引擎按界面语言作答，维语会话走`本地 7B 中文推理 + 外部强模型双向翻译`），前台升为 `1.7.28`；同日后台「模型与提示词」矩阵补预问诊的两个模型位（翻译 / 推理），后台升为 `0.9.62`（后续又升到 `0.9.63`，现行值见 [TECH_STACK.md](TECH_STACK.md) §6））。
 
 **⑤ `config/previsit.yaml:86` 的 `retrieval.url: http://127.0.0.1:8000`**
 - 现象：配置里写死 8000，而主服务默认/示例用 8013。

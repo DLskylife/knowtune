@@ -15,8 +15,8 @@
 
 | 层 | 职责 | 真实文件路径 |
 |---|---|---|
-| **前端层** | 后台管理台 + 前台问答站，纯原生 HTML/CSS/JS，零前端框架、零打包 | `src/knowtune/api/static/{index.html,app.js,style.css}`（后台，构建号 0.9.62）；`src/knowtune/frontsite/static/{index.html,app.js,style.css}`（前台） |
-| **服务层** | 启动装配、全部 HTTP 接口、站点线程、预问诊桥接、配置与角色/提示词解析 | `src/knowtune/cli.py`、`src/knowtune/api/app.py`（约 4400 行，唯一大文件）、`src/knowtune/frontsite/{instcfg,runner,site}.py`、`src/knowtune/{config,kbconfig,roles,promptcfg,modelcfg,settings,secrets}.py`、`src/knowtune/previsit/app.py`（桥接装配）、`src/previsit/`（预问诊实现真身，v0.3.0，零 knowtune 依赖） |
+| **前端层** | 后台管理台 + 前台问答站，纯原生 HTML/CSS/JS，零前端框架、零打包 | `src/knowtune/api/static/{index.html,app.js,style.css}`（后台，构建号 0.9.63）；`src/knowtune/frontsite/static/{index.html,app.js,style.css}`（前台，构建号 1.7.37） |
+| **服务层** | 启动装配、全部 HTTP 接口、站点线程、预问诊桥接、配置与角色/提示词解析 | `src/knowtune/cli.py`、`src/knowtune/api/app.py`（装配入口）+ `src/knowtune/api/routes/` 8 个模块（94 个端点）、`api/common.py` / `state.py` / `coverage.py`、`src/knowtune/frontsite/{instcfg,runner,site}.py`、`src/knowtune/{config,kbconfig,roles,promptcfg,modelcfg,settings,secrets}.py`、`src/knowtune/previsit/app.py`（桥接装配）、`src/previsit/`（预问诊实现真身，v0.4.0，零 knowtune 依赖） |
 | **能力层** | 导入 / 索引 / 检索 / 生成四类算法 | `src/knowtune/ingest/{loader,cleaner,chunker,pipeline}.py`、`src/knowtune/index/{embedder,vectors,sparse}.py`、`src/knowtune/retrieve/{engine,rerank}.py`、`src/knowtune/generate/{prompt,llm,cite,evidence,support,think}.py` |
 | **存储层** | 单文件库 + 密钥密文 + 运行资产（均不进版本库） | `data/library.db`（SQLite WAL，8 表 + 1 张 FTS5 虚表 + 5 张影子表）、`data/secrets.json`（Windows DPAPI）、`data/models/`、`data/calibration/`、`data/uploads/` |
 
@@ -32,7 +32,7 @@
 |---|---|---|---|
 | 运行时 | Python | ≥ 3.11 | 语言运行时 |
 | 构建 | hatchling | ≥ 1.25.0 | 构建后端；wheel 打包 `src/knowtune` 与 `src/previsit`，入口 `knowtune = knowtune.cli:main`，MIT |
-| 核心 | fastapi | ≥ 0.115.0 | REST API（`api/app.py`） |
+| 核心 | fastapi | ≥ 0.115.0 | REST API（`api/app.py` 装配 + `api/routes/` 8 模块，94 端点） |
 | 核心 | uvicorn[standard] | ≥ 0.32.0 | ASGI 服务器 |
 | 核心 | pydantic / pydantic-settings | ≥ 2.9.0 / ≥ 2.5.0 | 数据校验与配置模型 |
 | 核心 | PyYAML | ≥ 6.0.2 | 读 `config/*.yaml` |
@@ -52,7 +52,7 @@
 | local | sentence-transformers | ≥ 3.3.0 | 本地嵌入（Bi-Encoder）与精排（Cross-Encoder） |
 | onnx | onnxruntime | ≥ 1.20.0 | **未启用**：可选加速路径，待实测 |
 | onnx | fastembed | ≥ 0.4.0 | **未启用**：bge-reranker-v2-m3 在其中的可用性待核实，不必装 |
-| dev | pytest / pytest-asyncio | ≥ 8.3.0 / ≥ 0.24.0 | 单测（本仓库不含 `tests/`，需要时自建） |
+| dev | pytest / pytest-asyncio | ≥ 8.3.0 / ≥ 0.24.0 | 单测（仓库自带 `tests/`：相对路径闸门、预问诊语言、包安装冒烟） |
 | dev | ruff / mypy | ≥ 0.7.0 / ≥ 1.13.0 | lint / 类型检查 |
 
 `onnx` 组整体**未启用**：没有代码路径加载它，装了也不生效，别当可用加速。

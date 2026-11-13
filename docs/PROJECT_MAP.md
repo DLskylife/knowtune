@@ -6,7 +6,7 @@
 
 ## 1. 一句话
 
-KnowTune 是本地单机知识库问答系统：一个 FastAPI 进程（`api/app.py`）装下后台全部 HTTP 接口与前台问答站，SQLite + FTS5 存库，本地嵌入模型 + 双路召回 + CrossEncoder 精排，外接 OpenAI 兼容后端生成带引用的答案；预问诊作为第三个板块挂在前台 `/previsit` 下。源码用 `src/knowtune`（主项目）与 `src/previsit`（预问诊独立实现）两个顶层包，由 `pyproject.toml` 一起打进 wheel，入口 `knowtune = knowtune.cli:main`。
+KnowTune 是本地单机知识库问答系统：一个 FastAPI 进程（`api/app.py` 装配 + `api/routes/` 8 个模块）装下后台全部 HTTP 接口与前台问答站，SQLite + FTS5 存库，本地嵌入模型 + 双路召回 + CrossEncoder 精排，外接 OpenAI 兼容后端生成带引用的答案；预问诊作为第三个板块挂在前台 `/previsit` 下。源码用 `src/knowtune`（主项目）与 `src/previsit`（预问诊独立实现）两个顶层包，由 `pyproject.toml` 一起打进 wheel，入口 `knowtune = knowtune.cli:main`。
 
 它不是 Agent：检索链是固定流水线，分支只有若干布尔开关（精排、MMR、拒答、邻块扩展），没有让 LLM 决定下一步调什么工具。
 
@@ -29,13 +29,13 @@ KnowTune 是本地单机知识库问答系统：一个 FastAPI 进程（`api/app
                   ▼                                          │
   ┌───────────────────────────────────────────────────────────┴──┐
   │ uvicorn(127.0.0.1:8013)  knowtune.api.app:app                 │
-  │   导入期 state = AppState()（api/app.py:557）                   │
+  │   导入期 state = AppState()（api/state.py）                   │
   │     cfg / Database / Embedder / VectorStore / SparseIndex /     │
   │     Reranker / RetrievalEngine / IngestPipeline / LLMClient     │
   │     sites = InstanceManager                                     │
-  │   lifespan(app.py:325)：attach 密钥 → 预热线程 → start_autostart │
+  │   lifespan（api/app.py）：attach 密钥 → 预热线程 → start_autostart │
   │   后台接口 /api/*（全部 HTTP）+ /v1/* 转发网关                    │
-  │   后台静态 api/static/*（构建号 0.9.62）                         │
+  │   后台静态 api/static/*（构建号 0.9.63）                         │
   │   /v1/chat/completions = 纯转发，不进 RAG                        │
   └───────────────────┬────────────────────────────────────────────┘
                       │ runner.start()（runner.py:296）
@@ -43,21 +43,21 @@ KnowTune 是本地单机知识库问答系统：一个 FastAPI 进程（`api/app
   ┌──────────────────────────────────────────────────────────────┐
   │ 前台线程：同进程 daemon uvicorn(127.0.0.1:8800)               │
   │   frontsite/site.py：/、/api/info、/api/ask、/api/feedback     │
-  │   frontsite/static/*（构建号 1.7.28）                          │
+  │   frontsite/static/*（构建号 1.7.37）                          │
   │   └─ app.mount("/previsit")                                   │
   │        _SectionGate（pv 开关未开 → 404）                        │
   │        └─ previsit.app（只有 API，没有页面）                     │
   └──────────────────────────────────────────────────────────────┘
 ```
 
-**`/v1/chat/completions` 是纯转发网关**（`api/app.py:1271-1303`）：解析请求体、按选中的 provider 拼上游地址、把 body 原样 POST 出去，流式/非流式都只是转字节，不碰检索、不碰生成链。RAG 入口只有后台 `/api/ask` 与前台 `/api/ask` 两处。
+**`/v1/chat/completions` 是纯转发网关**（`api/routes/models.py`）：解析请求体、按选中的 provider 拼上游地址、把 body 原样 POST 出去，流式/非流式都只是转字节，不碰检索、不碰生成链。RAG 入口只有后台 `/api/ask` 与前台 `/api/ask` 两处。
 
 ## 3. 顶层目录为什么存在
 
 | 目录 / 文件 | 为什么存在 |
 |---|---|
 | `src/knowtune/` | 主项目全部代码：后台接口、检索/生成链、配置与存储、前台站点、预问诊桥接层。 |
-| `src/previsit/` | 预问诊**独立实现**（v0.3.0），刻意零 `knowtune` 依赖，可单独部署；wheel 里与 `knowtune` 并列打包。 |
+| `src/previsit/` | 预问诊**独立实现**（v0.4.0），刻意零 `knowtune` 依赖，可单独部署；wheel 里与 `knowtune` 并列打包。 |
 | `config/` | 出厂配置、本机覆盖、后端注册表、实例/板块、提示词资产与预问诊领域配置，都是随版本库走的文本。 |
 | `scripts/` | 三个开发期辅助脚本（假后端、下载 llama-server、截图），不参与运行时。 |
 | `docs/` | 面向人的文档，`docs/` 下 6 份 + 根 [README](../README.md) 共 7 份，各司其职见末节。 |
@@ -77,7 +77,7 @@ KnowTune 是本地单机知识库问答系统：一个 FastAPI 进程（`api/app
 | `src/knowtune/__init__.py` | 包标记，声明 `__version__ = 0.1.0`。 | 与 `pyproject.toml` 的 `version=0.1.0` 一致。 |
 | `src/knowtune/cli.py` | 命令入口 `init/status/kb/ingest/ask/debug/serve`；`cmd_serve`（:226）注入 `KNOWTUNE_GATEWAY` 后 `uvicorn.run("knowtune.api.app:app")`。 | 网关地址按实际 `--port` 写（:234），不是写死 8000；`cli.py` 默认端口是 8000，现行启动用 `--port 8013`，默认 host `127.0.0.1`。 |
 | `src/knowtune/config.py` | 加载 YAML、按库标定覆盖、模型指纹校验。 | 相对路径一律相对**项目根**，不随 CWD 变；标定生效需 kb_id 非空 + 文件存在 + JSON 可读 + 指纹等于 `embedding.model@dim`（:495-510）。 |
-| `src/knowtune/kbconfig.py` | 库级参数覆盖 + 出厂基线比对。 | `kb.config_json` 存**全量快照**并标 `__full__`；「用户手动改过」判据是与出厂基线值不同，不是「键存在」（`api/app.py:542-543`）。 |
+| `src/knowtune/kbconfig.py` | 库级参数覆盖 + 出厂基线比对。 | `kb.config_json` 存**全量快照**并标 `__full__`；「用户手动改过」判据是与出厂基线值不同，不是「键存在」（`kbconfig.py`）。 |
 | `src/knowtune/settings.py` | 可调参数的声明式注册表（边界/步长/说明/生效方式），供 `/api/settings` 直接渲染。 | 三层取值（高→低）：运行时覆盖 > `config/local.yaml` > `config/default.yaml`；加参数只改此文件，前端自动多一行。 |
 | `src/knowtune/modelcfg.py` | `config/models.yaml` 端点注册表读写。 | 端点只分 `local` / `openai` 两类（历史上八种 kind 已砍）；**密钥不写进 models.yaml**。 |
 | `src/knowtune/promptcfg.py` | 提示词覆盖层（provider / scope），带 history / rollback / preview。 | 解析链以 `effective_fields():337-344` 为准：`by_provider > by_scope > default > 内置`；仅 `generate` / `translate` 两个 role 支持前两层，`copy_ug` / `copy_zh` 只读角色级。 |
@@ -139,10 +139,12 @@ KnowTune 是本地单机知识库问答系统：一个 FastAPI 进程（`api/app
 | 文件 | 职责 | 关键约束 |
 |---|---|---|
 | `src/knowtune/api/__init__.py` | 包标记。 | 空。 |
-| `src/knowtune/api/app.py` | 后台全部 HTTP 接口（状态/看板、模型服务、设置、知识库、导入、分块、检索问答、会话日志、实例/预问诊）+ 静态页 + `/v1` 网关。**约 4400 行，仓库唯一大文件**。 | 模块级 `state = AppState()`（:557）在导入期构造，`app = FastAPI(lifespan=lifespan)`（:558）；`/v1/chat/completions`（:1271-1303）是**纯转发网关**，不是 RAG 入口；「手动改过」判据在 :542-543。 |
-| `src/knowtune/api/static/index.html` | 后台 UI 骨架，构建号 `0.9.62`（`window.ADMIN_REQ_BUILD`）。 | 与前台静态资源完全不共享；资源 URL 带 `?v=0.9.62` 破缓存。 |
-| `src/knowtune/api/static/app.js` | 后台交互逻辑，构建号 `0.9.62`（`window.ADMIN_BUILD`）。 | 参数控件由 `/api/settings` 吐出的注册表渲染，前端不写业务含义。 |
-| `src/knowtune/api/static/style.css` | 后台样式。 | 由 `index.html` 以 `style.css?v=0.9.62` 引用。 |
+| `src/knowtune/api/app.py` | FastAPI 装配入口（约 270 行）：生命周期、静态资源、no-cache 中间件、`include_router` 注册 8 个路由模块、全局异常处理。 | 端点本体不在这里；全局 `state` 由 `api/state.py` 在导入期构造。 |
+| `src/knowtune/api/routes/*.py` | 94 个端点按资源域拆成 8 个模块：meta / models / kb / docs / search / sessions / prompts / sites。 | `/v1/chat/completions` 在 `models.py`，是**纯转发网关**；「手动改过」判据在 `kbconfig.py`。 |
+| `src/knowtune/api/common.py` / `state.py` / `coverage.py` | 公共层：分片上传暂存 / 全局 `AppState` / 引用覆盖率统计。 | 由各路由模块共享，不放端点逻辑。 |
+| `src/knowtune/api/static/index.html` | 后台 UI 骨架，构建号 `0.9.63`（`window.ADMIN_REQ_BUILD`）。 | 与前台静态资源完全不共享；资源 URL 带 `?v=0.9.63` 破缓存。 |
+| `src/knowtune/api/static/app.js` | 后台交互逻辑，构建号 `0.9.63`（`window.ADMIN_BUILD`）。 | 参数控件由 `/api/settings` 吐出的注册表渲染，前端不写业务含义。 |
+| `src/knowtune/api/static/style.css` | 后台样式。 | 由 `index.html` 以 `style.css?v=0.9.63` 引用。 |
 
 ### 4.7 `src/knowtune/frontsite/` 前台问答站
 
@@ -152,13 +154,13 @@ KnowTune 是本地单机知识库问答系统：一个 FastAPI 进程（`api/app
 | `src/knowtune/frontsite/instcfg.py` | 实例配置（一个实例 = 一个独立问答站点），读 `config/instances.yaml`。 | 端口范围 8800–8899（`PORT_MIN/MAX`）；与 `models.yaml` 分开存，避免改模型带出站点配置。 |
 | `src/knowtune/frontsite/runner.py` | `InstanceManager` 启停；`start_autostart()`（:495）。 | 每实例 = 一条 daemon 线程里一个 uvicorn（:360），**同进程、不另起进程**；理由（2026-10-28）：嵌入模型只加载一份、日志/配置/队列集中、Windows 无 fork；代价是单实例崩溃带走后台，靠 uvicorn 异常隔离 + 启动前端口探测压住。 |
 | `src/knowtune/frontsite/site.py` | 前台问答站点：`/`、`/api/info`、`/api/ask`、`/api/feedback`，以及挂载 `/previsit`。 | 问答流程与后台 `/api/ask` 同构但**刻意不共用代码**（不要会话预算/调试面板/审计日志）；`app.mount("/previsit", _SectionGate(...))`（:333），`_SectionGate`（:308）按 `pv` 开关做 404 拦截；挂载失败吞异常但写 ERROR 日志，不拖垮站点。 |
-| `src/knowtune/frontsite/static/index.html` | 前台 UI 骨架，构建号 `1.7.28`（`window.SITE_REQ_BUILD`）。 | 维吾尔语 RTL，与后台静态资源完全隔离；资源 URL 带 `?v=1.7.28`。 |
-| `src/knowtune/frontsite/static/app.js` | 前台交互逻辑，构建号 `1.7.28`（`window.SITE_BUILD`）。 | 切换语言时不允许任何元素换边；引用牌做连续编号区间合并。 |
-| `src/knowtune/frontsite/static/style.css` | 前台样式。 | 由 `index.html` 以 `style.css?v=1.7.28` 引用。 |
+| `src/knowtune/frontsite/static/index.html` | 前台 UI 骨架，构建号 `1.7.37`（`window.SITE_REQ_BUILD`）。 | 维吾尔语 RTL，与后台静态资源完全隔离；资源 URL 带 `?v=1.7.37`。 |
+| `src/knowtune/frontsite/static/app.js` | 前台交互逻辑，构建号 `1.7.37`（`window.SITE_BUILD`）。 | 切换语言时不允许任何元素换边；引用牌做连续编号区间合并。 |
+| `src/knowtune/frontsite/static/style.css` | 前台样式。 | 由 `index.html` 以 `style.css?v=1.7.37` 引用。 |
 
 ### 4.8 两套 previsit 目录的关系（先讲清，再列表）
 
-**不是重复实现，也不是「两套预问诊」**。`src/previsit/` 是实现真身（v0.3.0，零 `knowtune` 依赖，能独立部署）；`src/knowtune/previsit/` 是**桥接 + 装配层**：五个同名文件是纯 `from previsit.xxx import ...` 再导出，`app.py` 只负责把主项目这一侧的东西接上去。运行时实际执行的是 `src/previsit/` 的代码，由 `frontsite/site.py:331-336` 挂到 `/previsit`，并用 `_SectionGate` 按 `pv` 开关做 404 拦截；预问诊**没有独立站点**，对外全路径是 `/previsit/api/previsit/*`。
+**不是重复实现，也不是「两套预问诊」**。`src/previsit/` 是实现真身（v0.4.0，零 `knowtune` 依赖，能独立部署）；`src/knowtune/previsit/` 是**桥接 + 装配层**：五个同名文件是纯 `from previsit.xxx import ...` 再导出，`app.py` 只负责把主项目这一侧的东西接上去。运行时实际执行的是 `src/previsit/` 的代码，由 `frontsite/site.py:331-336` 挂到 `/previsit`，并用 `_SectionGate` 按 `pv` 开关做 404 拦截；预问诊**没有独立站点**，对外全路径是 `/previsit/api/previsit/*`。
 
 | 文件 | 职责 | 关键约束 |
 |---|---|---|
@@ -215,8 +217,8 @@ KnowTune 是本地单机知识库问答系统：一个 FastAPI 进程（`api/app
 下列三类曾被记录为「注释说的」与「代码做的」不一致。文档如实点名，但**一律以代码为准**；这些注释已在本次重写中按代码口径修正，现行源码不再是旧描述：
 
 1. **提示词优先级注释**：`src/knowtune/promptcfg.py` 早期头注释与 `save()` docstring 曾声称 scope（板块）优先于 provider（后端），`config/prompts.yaml` 头注释曾漏写 `by_scope`。以代码为准：`effective_fields():337-344` 是 `by_provider > by_scope > default > 内置`，且仅 `generate` / `translate` 支持前两层。
-2. **`schema.sql` 注释**：`kb` 表 `config_json` 的早期注释曾写「只存与全局不同的项」。以代码为准：`src/knowtune/kbconfig.py` 实现是**全量快照 + `__full__`**，「用户手动改过」的判据是与出厂基线值不同（`api/app.py:542-543`），不是键存在。
-3. **前台构建号**：前台静态资源版本号（`style.css?v` / `app.js?v` / `SITE_REQ_BUILD` / `SITE_BUILD`）曾在多处不一致。以代码为准：当前前台统一 `1.7.28`、后台统一 `0.9.62`；两套静态资源各自独立，互不影响。
+2. **`schema.sql` 注释**：`kb` 表 `config_json` 的早期注释曾写「只存与全局不同的项」。以代码为准：`src/knowtune/kbconfig.py` 实现是**全量快照 + `__full__`**，「用户手动改过」的判据是与出厂基线值不同（`kbconfig.py`），不是键存在。
+3. **前台构建号**：前台静态资源版本号（`style.css?v` / `app.js?v` / `SITE_REQ_BUILD` / `SITE_BUILD`）曾在多处不一致。以代码为准：当前前台统一 `1.7.37`、后台统一 `0.9.63`；两套静态资源各自独立，互不影响。
 
 ## 5. 项目是怎么「构建」起来的
 
@@ -227,7 +229,7 @@ KnowTune 是本地单机知识库问答系统：一个 FastAPI 进程（`api/app
 3. **索引**：`ingest/` 把文件变成 chunk，`index/embedder.py` 出向量、`index/sparse.py` 出 `text_seg`，`index/vectors.py` 在内存拼矩阵。
 4. **检索**：`retrieve/engine.py` 编排双路召回、融合、精排、拒答；`retrieve/rerank.py` 出精排与 MMR。
 5. **生成**：`generate/prompt.py` 装填上下文，`llm.py` 调后端，`cite.py` / `evidence.py` / `support.py` / `think.py` 做校验与后处理。
-6. **接口 / 前端**：`api/app.py` 暴露后台全部 HTTP 与 `/v1` 网关；`frontsite/` 起前台线程并挂 `/previsit`。
+6. **接口 / 前端**：`api/app.py` 做装配，`api/routes/` 8 个模块暴露后台 HTTP 与 `/v1` 网关；`frontsite/` 起前台线程并挂 `/previsit`。
 
 **为什么嵌入模型只加载一次**：前台是主服务**同进程内的 daemon 线程**（`runner.py` 起 uvicorn），`site.py` 直接复用 `AppState` 里已构造好的 `Embedder` / `VectorStore` / `SparseIndex` / `RetrievalEngine` / `LLMClient`。若改成每个前台实例一个子进程，要么每个站点各加载一次（多占几百 MB、还可能加载失败），要么加一套 IPC 让子进程回主进程检索——后者才是真正的冗杂。这是 2026-10-28 定下的取舍，代价是单实例崩溃会带走后台进程。
 
@@ -246,15 +248,15 @@ KnowTune 是本地单机知识库问答系统：一个 FastAPI 进程（`api/app
 ## 7. 启动顺序（`cli.py` → `AppState` → `lifespan` → `start_autostart()`）
 
 1. `src/knowtune/cli.py` 的 `main` → `cmd_serve`（:226）：按实际 `--port` 写 `os.environ["KNOWTUNE_GATEWAY"]`（:234），打印地址，再 `uvicorn.run("knowtune.api.app:app", host, port)`（:244）。
-2. uvicorn 导入 `knowtune.api.app`：**模块导入期**执行 `state = AppState()`（`api/app.py:557`）。`AppState.__init__`（:455）依次 `load_config()` → `Database` → `Embedder` → `VectorStore` → `SparseIndex` → `Reranker` → `RetrievalEngine` → `IngestPipeline` → `LLMClient` → `db.ensure_schema()` → `sites = InstanceManager(self)`（:483）。随后 `app = FastAPI(..., lifespan=lifespan)`（:558）。
-3. `lifespan`（`api/app.py:325`）：`secrets.attach()` 恢复密钥 → 清理孤儿导入与过期分片 → `services.warm_cache()` 读回探测结论 → 起 `_warmup` daemon 线程（:342，嵌入预热）→ `for name in state.sites.start_autostart()`（:345，同步做，启动失败要有反馈）。
+2. uvicorn 导入 `knowtune.api.app`：**模块导入期**由 `api/state.py` 执行 `state = AppState()`。`AppState.__init__` 依次 `load_config()` → `Database` → `Embedder` → `VectorStore` → `SparseIndex` → `Reranker` → `RetrievalEngine` → `IngestPipeline` → `LLMClient` → `db.ensure_schema()` → `sites = InstanceManager(self)`。随后 `api/app.py` 构造 `app = FastAPI(..., lifespan=lifespan)` 并 `include_router` 注册 8 个路由模块。
+3. `lifespan`（`api/app.py`）：`secrets.attach()` 恢复密钥 → 清理孤儿导入与过期分片 → `services.warm_cache()` 读回探测结论 → 起 `_warmup` daemon 线程（嵌入预热）与 `_autostart_local_models` daemon 线程（本地 GGUF 自启）→ `for name in state.sites.start_autostart()`（同步做，启动失败要有反馈）。
 4. `InstanceManager.start_autostart()`（`frontsite/runner.py:495`）对 `autostart` 的实例逐个 `start()`（:296），在 daemon 线程里跑 uvicorn（:360）监听 8800；`frontsite/site.py` 建前台 app 并 `app.mount("/previsit", _SectionGate(...))`（:333）。
 5. `yield` 后服务就绪；关停时 `state.sites.stop_all()`（:358）。前台线程随主进程退出，没有独立子进程要回收。
 
 ## 8. 配置优先级
 
 - **参数**：`config/default.yaml`（唯一权威、带注释）→ `config/local.yaml`（用户改过的差异项）→ 库级 `kb.config_json`（**全量快照**，标 `__full__`）→ 按库标定文件覆盖。
-- **手动判据**：「用户手动改过」是**与出厂基线值不同**，不是「键存在」（`api/app.py:542-543`）；否则全量快照会让标定永不生效。
+- **手动判据**：「用户手动改过」是**与出厂基线值不同**，不是「键存在」（`kbconfig.py`）；否则全量快照会让标定永不生效。
 - **后端与密钥**：注册表在 `config/models.yaml`；密钥在 `data/secrets.json`（Windows DPAPI，绑账户 + 本机，仅本次会话可用 `secrets.off`），**不写进 models.yaml**。
 - **角色解析链**（`roles.py:81-111`）：**板块级 roles → 站点级 roles → 系统级 roles → 实例 provider → 默认 provider**，每级用已知后端名校验，不合法继续下退。当前 `sections.*.roles` 均未配置，所以 `med` 与 `classic` 的解析结果相同。
 - **提示词解析链**（`promptcfg.py:337-344`，以代码为准）：`by_provider`（后端）> `by_scope`（板块）> `default`（角色默认）> 内置（builtin）。仅 `generate` / `translate` 两个 role 支持 `by_provider` 与 `by_scope`；`copy_ug` / `copy_zh` 只读角色级。
