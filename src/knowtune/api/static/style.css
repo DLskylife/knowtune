@@ -2586,6 +2586,36 @@ details.sbk-note-line[open] > summary::before { transform: rotate(90deg); }
 }
 .gateway-card .pick input { accent-color: var(--accent); }
 
+/* 端点切换：一颗 chip 一个端点，点谁就把「默认模型 + curl 示例」换成谁的。
+   有 4 个端点时只给当前那一个示例，想调 local 得自己去猜 model 名。 */
+.gw-chips {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  margin: 10px 0 2px;
+}
+.gw-chips > .hint { min-width: auto; margin-right: 2px; }
+.gw-chip {
+  padding: 3px 10px; border: 1px solid var(--card-line); border-radius: 999px;
+  background: transparent; color: var(--text-2);
+  font: inherit; font-size: 11.5px; cursor: pointer;
+  transition: border-color .13s, color .13s, background .13s;
+}
+.gw-chip:hover { color: var(--text); border-color: #3a4353; }
+.gw-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.gw-chip.active {
+  color: var(--accent); border-color: rgba(91, 140, 255, .55);
+  background: var(--accent-soft);
+}
+.gw-model { margin: 8px 0 0; }
+.gw-model b { color: var(--text); font-weight: 600; }
+
+/* 未启动的直连地址：地址照样给（它就写死在配置里），整行压暗并挂个标记。 */
+.gw-line.is-off code { color: var(--text-3); }
+.gw-off {
+  margin-left: 6px; padding: 0 5px; border-radius: 4px;
+  font-style: normal; font-size: 10.5px;
+  color: var(--text-3); background: var(--surface-3);
+}
+
 /* ---------------------------------------------------------------------------
    统一层（2026-11-04）：五个视图共用的间距 / 颜色 / 卡片零件。
    以前每个 renderXxx 都往模板里塞 style="margin-top:8px" 这类硬编码，

@@ -351,6 +351,28 @@ for gone in ("sbk-grid", "sbk-pagehint", "sbk-rows", ".sbk-row-go", ".sbk-prow",
     if gone in admin_css:
         errors.append(f"[ui] style.css 仍残留已删除的样式：{gone}")
 
+# 模型服务的接入卡：README 写「每个后端一颗 chip，点了就换模型与 curl；直连
+# 连没启动的也列」。这里守三件事，缺一件就说明逻辑退回了「只认当前后端」。
+for token, why in (
+    ("function gwCurl", "按后端拼 curl 示例"),
+    ("function gwPickOf", "选中后端的模型解析"),
+    ('data-gwpick="${esc(x.name)}"', "接入卡的后端切换按钮"),
+    ('class="gw-off"', "直连「未启动」标记"),
+    ("bindGatewayChips(state.gateway)", "切换按钮的事件绑定"),
+):
+    if token not in admin_js:
+        errors.append(f"[ui] app.js 缺少模型服务接入卡的{why}：{token}")
+models_py = (STATIC / "api" / "routes" / "models.py").read_text(encoding="utf-8")
+for token, why in (
+    ('"providers": listed', "网关的端点清单"),
+    ('"running": bool(inst)', "直连条目的运行标记"),
+):
+    if token not in models_py:
+        errors.append(f"[ui] routes/models.py 缺少{why}：{token}")
+# 旧写法：直连只取 running 的实例。回到它就等于让没启动的模型整条消失。
+if 'direct = [v["api"] for v in live.values()' in models_py:
+    errors.append("[ui] routes/models.py 的直连列表退回了「只列运行中实例」")
+
 # 切页性能护栏：README 写了「即点即到」，代码不能退回串行重拉 + 撕卡片。
 # 这条不是性能基准测试，只守结构性前提——真要测耗时用浏览器脚本量。
 for token, why in (

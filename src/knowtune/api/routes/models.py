@@ -401,17 +401,51 @@ def _gateway_timeout() -> float:
 
 @router.get("/api/gateway")
 def gateway_info(request: Request) -> dict:
-    """给界面和文档用：现在有哪些能写死在别处的地址。"""
+    """给界面和文档用：现在有哪些能写死在别处的地址。
+
+    除了「当前活动端点」，这里把**每个**端点都列出来：接入卡上的示例是按
+    端点切换的，只给当前那一个，用户想调 local 就得自己去猜 model 名。
+    """
     from ... import localmodels as local_mod
 
     root = str(request.base_url).rstrip("/")
     v1 = root + "/v1"
+    providers = state.cfg.generation.providers
     active = state.cfg.generation.provider
-    p = state.cfg.generation.providers.get(active)
+    p = providers.get(active)
     model = (p.model if p else "") or ""
-    live = local_mod.running()
-    direct = [v["api"] for v in live.values()
-              if v.get("state") == "running" and v.get("api")]
+    live = {k: v for k, v in local_mod.running().items()
+            if v.get("state") == "running"}
+
+    # 每个端点一份最小信息：名字、默认模型、是否本地。前端据此生成 chips 与
+    # 对应的 curl 示例，切一下就能看到该用哪个 model 字段。
+    listed: list[dict] = []
+    # 本地实例的直连地址从配置里取：端口固定在 models.yaml，**没启动也给**。
+    # 以前只列 running 的实例，3B 没起时整条地址消失，看起来像没配这个模型。
+    direct: list[dict] = []
+    for name, cfg_p in providers.items():
+        listed.append({
+            "name": name,
+            "model": cfg_p.model or "",
+            "local": cfg_p.kind == "local",
+            "base_url": (cfg_p.base_url or "").rstrip("/"),
+        })
+        if cfg_p.kind != "local":
+            continue
+        for entry in cfg_p.model_list:
+            inst = live.get(f"{name}/{entry.id}") or {}
+            api = inst.get("api") or {}
+            base = (api.get("base_url") or (cfg_p.base_url or "")).rstrip("/")
+            if not base:
+                continue
+            direct.append({
+                "endpoint": name,
+                "model": entry.id,
+                "base_url": base,
+                "lan_base_url": api.get("lan_base_url") or "",
+                "running": bool(inst),
+            })
+
     curl = (
         f'curl {v1}/chat/completions -H "Content-Type: application/json" '
         f'-d \'{{"model": "{model}", "messages": [{{"role": "user", '
@@ -422,6 +456,7 @@ def gateway_info(request: Request) -> dict:
         "chat_url": v1 + "/chat/completions",
         "models_url": v1 + "/models",
         "provider": active, "model": model, "curl": curl,
+        "providers": listed,
         "direct": direct,
         "hint": "这个地址不随本地实例端口变化；?provider=<端点名> 或 model 里写"
                 " <端点名>::<模型名> 可指定后端。",

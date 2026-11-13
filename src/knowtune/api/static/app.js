@@ -1,6 +1,6 @@
 /* 构建号：与 index.html 里那份一致，不一致说明浏览器拿到的是旧 JS，
    页面加载完会强制换一次（见 index.html 的自检脚本）。 */
-window.ADMIN_BUILD = "0.9.69";
+window.ADMIN_BUILD = "0.9.70";
 
 const $ = (id) => document.getElementById(id);
 
@@ -5133,7 +5133,13 @@ function modelPick(p) {
 function localModelsRow(p) {
   const models = (p.models || []).filter((m) => m.local);
   if (!models.length) return "";
-  return `<div class="local-models">${models.map((m) => `
+  return `<div class="local-models">${models.map((m) => {
+    // 卡头那行已经是端点地址（models.yaml 里的 base_url）。只有实例实际跑在
+    // 别的端口（配置端口被占时自动让位）才多给一行「直连」，否则同一串地址
+    // 会在卡上出现两遍。没启动时也不必补：地址本来就不随进程变化。
+    const direct = m.running_url && m.running_url !== (p.base_url || "")
+      ? m.running_url : "";
+    return `
     <div class="lm-row">
       <i class="dot ${m.state === "running" ? "ok" : m.state === "starting" ? "warn" : "off"}"></i>
       <b class="ell" title="${esc(m.path || "")}">${esc(m.label)}</b>
@@ -5144,11 +5150,12 @@ function localModelsRow(p) {
         ? `<button class="mini" data-lmact="stop" data-name="${esc(p.name)}" data-model="${esc(m.id)}">停止</button>`
         : `<button class="mini" data-lmact="start" data-name="${esc(p.name)}" data-model="${esc(m.id)}">启动</button>`}
       <span class="hint">${esc(m.state === "running" ? "运行中" : m.state === "starting" ? "启动中" : "未启动")}</span>
-    </div>${m.state === "running" && m.running_url ? `<div class="gw-line">
-      <span class="hint">直连</span>
-      <code>${esc(m.running_url)}</code>
-      <button class="mini" data-copy="${esc(m.running_url)}">复制</button>
-    </div>` : ""}`).join("")}</div>`;
+    </div>${direct ? `<div class="gw-line">
+      <span class="hint">实跑在</span>
+      <code>${esc(direct)}</code>
+      <button class="mini" data-copy="${esc(direct)}">复制</button>
+    </div>` : ""}`;
+  }).join("")}</div>`;
 }
 
 function statusShort(p) {
@@ -5206,17 +5213,51 @@ function modelCards(d) {
 
 /* 固定 API 入口。本地实例一个模型一个端口，让外部程序去记 8090/8091 是不现实
    的——这块卡片给的是主服务自己的 /v1，端口不随实例变化。直连地址也一并列
-   出来：绕过转发少一跳，但只在实例活着时有效。 */
-let gatewayLan = false;   // 「启动时允许局域网调用」；renderModels 重绘不丢
+   出来：绕过转发少一跳，但只在实例活着时有效。
+
+   2026-11-13 更新：示例不再是「当前活动端点」一份。有 4 个端点时，用户想调
+   local 就只能自己猜 model 该写什么。现在每个端点一颗 chip，点谁就把「默认
+   模型 + curl」换成谁的；直连列表也改成按配置列全（含未启动的），没起的标
+   「未启动」而不是整条消失——地址是固定的，消失只会让人以为这个模型没配。 */
+let gatewayLan = false;    // 「启动时允许局域网调用」；renderModels 重绘不丢
+let gatewayPick = "";      // 接入卡上选中的端点；空 = 跟随后端给的活动端点
+
+function gwCurl(chatUrl, model) {
+  if (!model) return "";
+  // 手拼而不是 JSON.stringify 整个对象：示例是给人读的，紧凑序列化会把
+  // 空格全吃掉（{"model":"x","messages":[…]}），抄进终端很难一眼核对。
+  const body = `{"model": ${JSON.stringify(model)}, `
+    + `"messages": [{"role": "user", "content": "你好"}]}`;
+  return `curl ${chatUrl} -H "Content-Type: application/json" -d '${body}'`;
+}
+
+function gwPickOf(g) {
+  const list = (g && g.providers) || [];
+  return list.find((x) => x.name === gatewayPick)
+    || list.find((x) => x.name === g.provider)
+    || list[0] || null;
+}
 
 function gatewayCard(g) {
   if (!g) return "";
+  const provs = g.providers || [];
+  const pick = gwPickOf(g);
   const direct = g.direct || [];
   const line = (label, value) => `<div class="gw-line">
       <span class="hint">${esc(label)}</span>
       <code>${esc(value)}</code>
       <button class="mini" data-copy="${esc(value)}">复制</button>
     </div>`;
+  const chips = provs.length > 1 ? `<div class="gw-chips" id="gwChips">
+      <span class="hint">按后端看示例</span>
+      ${provs.map((x) => `<button type="button"
+        class="gw-chip${pick && x.name === pick.name ? " active" : ""}"
+        data-gwpick="${esc(x.name)}"
+        title="${x.local ? "本地端点" : "云端端点"} · 默认模型 ${esc(x.model || "未选")}"
+        >${esc(x.name)}</button>`).join("")}
+    </div>` : "";
+  const model = pick ? pick.model : g.model;
+  const curl = gwCurl(g.chat_url, model);
   return `<div class="card gateway-card">
     <div class="kb-actions">
       <b>API 接入 · 固定地址</b>
@@ -5225,14 +5266,18 @@ function gatewayCard(g) {
     ${line("Base URL", g.base_url)}
     ${line("对话", g.chat_url)}
     ${line("模型列表", g.models_url)}
-    ${g.model ? `<p class="hint">默认模型 <code>${esc(g.model)}</code>
-        · 指定后端：<code>?provider=${esc(g.provider || "local")}</code>
-        或把 model 写成 <code>端点名::模型名</code></p>` : ""}
-    ${g.curl ? `<pre class="launch">${esc(g.curl)}</pre>
-      <button class="mini u-mt6" data-copy="${esc(g.curl)}">复制 curl 示例</button>` : ""}
-    ${direct.length ? `<p class="hint u-mt10">实例直连（少一跳，但端口会随实例变化）：</p>
-      ${direct.map((a) => `<div class="gw-line">
-        <span class="hint">${esc(a.model || "model")}</span>
+    ${chips}
+    ${model ? `<p class="hint gw-model" id="gwModelLine">
+      <b>${esc(pick ? pick.name : (g.provider || ""))}</b> 的默认模型
+      <code>${esc(model)}</code></p>` : ""}
+    ${curl ? `<pre class="launch" id="gwCurlText">${esc(curl)}</pre>
+      <button class="mini u-mt6" id="gwCurlCopy" data-copy="${esc(curl)}"
+        >复制 curl 示例</button>` : ""}
+    ${direct.length ? `<p class="hint u-mt10">实例直连（少一跳，地址写在
+      <code>config/models.yaml</code>，没启动也列在这里）：</p>
+      ${direct.map((a) => `<div class="gw-line${a.running ? "" : " is-off"}">
+        <span class="hint">${esc(a.endpoint || "")} / ${esc(a.model || "model")}${
+          a.running ? "" : `<em class="gw-off">未启动</em>`}</span>
         <code>${esc(a.base_url)}</code>
         <button class="mini" data-copy="${esc(a.base_url)}">复制</button>
         ${a.lan_base_url ? `<code>${esc(a.lan_base_url)}</code>
@@ -5244,6 +5289,34 @@ function gatewayCard(g) {
     </label>
     <p class="hint u-mt8">${esc(g.hint || "")}</p>
   </div>`;
+}
+
+/* 点 chip 只换「模型名 + curl」两处，不重绘整张卡：重绘会打断用户刚选的
+ * 复制按钮焦点，也会让复选框闪一下。 */
+function bindGatewayChips(g) {
+  const box = $("gwChips");
+  if (!box) return;
+  box.querySelectorAll("[data-gwpick]").forEach((btn) => {
+    btn.onclick = () => {
+      gatewayPick = btn.dataset.gwpick;
+      const pick = gwPickOf(g);
+      if (!pick) return;
+      box.querySelectorAll("[data-gwpick]").forEach((b) => {
+        b.classList.toggle("active", b.dataset.gwpick === pick.name);
+      });
+      const modelLine = $("gwModelLine");
+      if (modelLine) {
+        modelLine.innerHTML = `<b>${esc(pick.name)}</b> 的默认模型
+          <code>${esc(pick.model)}</code>`;
+      }
+      const curl = gwCurl(g.chat_url, pick.model);
+      const pre = $("gwCurlText");
+      if (pre) pre.textContent = curl;
+      // 复制按钮读的是 dataset，改它就够了，不必重绑处理器。
+      const copy = $("gwCurlCopy");
+      if (copy) copy.dataset.copy = curl;
+    };
+  });
 }
 
 async function renderModels() {
@@ -5288,7 +5361,7 @@ async function renderModels() {
       <button class="primary-btn" id="modelsAdd">＋ 新增端点</button>
       <button class="ghost-btn" id="modelsScan">扫描本地模型</button>
       <button class="ghost-btn" id="modelsProbe">全部测试</button>
-      <span class="hint">${d.providers.length} 个端点 · 密钥只存进程内存，勾「记住密钥」才以密文落盘</span>
+      <span class="hint">${d.providers.length} 个后端 · 密钥只存进程内存，勾「记住密钥」才以密文落盘</span>
     </div>
     ${gatewayCard(state.gateway)}
     <div class="svc-grid" id="modelGrid">${modelCards(d)}</div>
@@ -5316,6 +5389,7 @@ async function renderModels() {
   $("modelsAdd").onclick = () => openModelEditor(null);
   $("modelsProbe").onclick = probeAllModels;
   if ($("gwLan")) $("gwLan").onchange = (e) => { gatewayLan = Boolean(e.target.checked); };
+  bindGatewayChips(state.gateway);
   // 不能直接 = openScanPanel：onclick 会把 PointerEvent 当第一参传进去，
   // 函数签名收的是 dirs 字符串，拿到事件对象就会拿它去当目录扫（实测
   // 输入框被填成 "[object PointerEvent]"，扫出 0 个模型）。
