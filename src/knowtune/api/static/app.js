@@ -1,6 +1,6 @@
 /* 构建号：与 index.html 里那份一致，不一致说明浏览器拿到的是旧 JS，
    页面加载完会强制换一次（见 index.html 的自检脚本）。 */
-window.ADMIN_BUILD = "0.9.64";
+window.ADMIN_BUILD = "0.9.65";
 
 const $ = (id) => document.getElementById(id);
 
@@ -6358,36 +6358,52 @@ function siteBlock(i, meta, plan, defProv) {
       </details>`;
   };
 
-  /* 四格同一形态：标签 / 主值 / 辅值。整格是按钮，跳到对应配置页签。
-   * dir=auto 让维吾尔文库名按自身方向排版，不在 LTR 容器里被拉乱。 */
-  const fact = (tab, label, main, sub, cls = "") => `<button type="button"
-      class="sbk-fact${cls ? " " + cls : ""}"
-      data-jumptab="${tab}" title="${esc(main + " · " + sub)}｜打开「${esc(TAB_NAME[tab])}」">
-      <span>${esc(label)}<span class="sbk-fact-go">↗</span></span>
-      <b dir="auto">${esc(main)}</b>
-      <i dir="auto">${esc(sub)}</i>
+  /* 一行参数 = 一个按钮：左侧标签、中间当前值、右侧「改 →」。
+   * 2026-11-13 二次重排：四格横排每格只有 1/4 卡宽，长模型名和维吾尔文
+   * 挤在里面；改成纵向行表后，参数区占整卡右栏、宽一倍，行标签对齐、值不截断。 */
+  const row = (tab, label, main, sub, cls = "") => `<button type="button"
+      class="sbk-row${cls ? " " + cls : ""}" data-jumptab="${tab}"
+      title="${esc(main + " · " + sub)}｜打开「${esc(TAB_NAME[tab])}」">
+      <span class="sbk-row-k">${esc(label)}</span>
+      <span class="sbk-row-v"><b dir="auto">${esc(main)}</b><i dir="auto">${esc(sub)}</i></span>
+      <span class="sbk-row-go">改 <span aria-hidden="true">→</span></span>
     </button>`;
 
   const ugText = i.ug_note
     ? i.ug_note + (i.ug_sample ? `（模型返回：${i.ug_sample.slice(0, 40)}）` : "")
     : "";
+  // 没说明就不渲染底栏，免得留一条没内容的空 padding。
+  const notes = [
+    foldNote("维吾尔语自检", ugText, i.ug_capable === false ? "bad" : "", i.ug_capable === false),
+    foldNote("异常", i.error, "bad", true),
+    foldNote("备注", i.note),
+  ].filter(Boolean).join("");
 
+  /* 整卡两栏：左边是「这是哪个站、怎么操作」，右边是「现在跑的是什么参数」。
+   * 底部自检/异常横跨整卡，不塞进右栏把参数行挤断。 */
   return `<section class="site-block${running || external ? "" : " is-off"}"
       data-name="${esc(i.name)}">
-    <header class="sbk-head">
-      <div class="sbk-id">
-        <span class="sbk-name">${esc(i.name)}</span>
-        ${siteStatusBadge(i.status)}
-        <span class="sbk-meta"><span>端口 ${i.port}</span><span>${stateText}</span>${shown}</span>
-      </div>
-      <div class="sbk-acts">
-        <div class="sbk-act-group">
+    <div class="sbk-grid">
+      <div class="sbk-side">
+        <div class="sbk-id">
+          <span class="sbk-name">${esc(i.name)}</span>
+          ${siteStatusBadge(i.status)}
+        </div>
+        <div class="sbk-meta-col">
+          <span>端口 <b>${i.port}</b></span>
+          <span>${stateText}</span>
+          ${i.public ? `<span>局域网可访问</span>` : ""}
+          ${shown}
+        </div>
+        <a class="sbk-url" href="${esc(i.url)}" target="_blank"
+          rel="noreferrer">${esc(i.url)}</a>
+        <div class="sbk-side-acts is-config">
           <button class="mini is-primary" data-scfg
             title="板块、知识库、端口、模型角色、语言与全部界面文案">模型与参数</button>
           ${secOn("pv") ? `<button class="mini" data-pvcfg
             title="预问诊的模型、轮次、知识图谱追问、语义召回与提示词">预问诊参数</button>` : ""}
         </div>
-        <div class="sbk-act-group is-ops">
+        <div class="sbk-side-acts is-ops">
           <button class="mini" data-sact="copy" data-url="${esc(i.url)}">复制链接</button>
           ${external ? "" : `<button class="mini${running ? " is-danger" : ""}"
             data-sact="${running ? "stop" : "start"}" ${busy ? "disabled" : ""
@@ -6397,34 +6413,26 @@ function siteBlock(i, meta, plan, defProv) {
           <a class="mini loc" href="${esc(i.url)}" target="_blank" rel="noreferrer">打开</a>
         </div>
       </div>
-    </header>
 
-    <div class="sbk-url">
-      <span class="sbk-url-k">访问地址</span>
-      <a href="${esc(i.url)}" target="_blank" rel="noreferrer">${esc(i.url)}</a>
-      ${i.public ? `<span class="sbk-url-tag">局域网可访问</span>` : ""}
-    </div>
-
-    <div class="sbk-sec">
-      <div class="sbk-label">当前生效
-        <span class="sbk-note">点任意一格，直接跳到对应参数</span>
-        <span class="sbk-label-tail">保存后立即生效 · 改端口或监听会重启</span>
-      </div>
-      <div class="sbk-facts">
-        ${fact("sections", "入口", secNames || "全部关闭", `${secCount} / 3 个板块已开启`,
-          secNames ? "" : "is-warn")}
-        ${fact("sections", "知识库", i.kb_name || (kb && kb.name) || `#${i.kb_id}`,
-          `古籍：${classicKb ? classicKb.name : "按标题分流"}`)}
-        ${fact("models", "模型 · 译 / 答", `译 ${roleText(resolved.translate)}`,
-          `答 ${roleText(resolved.generate)}`)}
-        ${fact("site", "语言 / 产出", `${LANG_NAME[i.lang] || i.lang} · ${mode}`,
-          `${KB_LANG_NAME[i.kb_lang] || i.kb_lang || "-"}${i.autostart ? " · 开机自启" : ""}`)}
+      <div class="sbk-main">
+        <div class="sbk-label">当前生效
+          <span class="sbk-note">点任意一行，直接跳到对应参数页</span>
+          <span class="sbk-label-tail">保存后立即生效 · 改端口或监听会重启</span>
+        </div>
+        <div class="sbk-rows">
+          ${row("sections", "入口", secNames || "全部关闭",
+            `${secCount} / 3 个板块已开启`, secNames ? "" : "is-warn")}
+          ${row("sections", "知识库", i.kb_name || (kb && kb.name) || `#${i.kb_id}`,
+            `古籍：${classicKb ? classicKb.name : "按标题分流"}`)}
+          ${row("models", "译 / 答", `译 ${roleText(resolved.translate)}`,
+            `答 ${roleText(resolved.generate)}`)}
+          ${row("site", "语言 / 产出", `${LANG_NAME[i.lang] || i.lang} · ${mode}`,
+            `${KB_LANG_NAME[i.kb_lang] || i.kb_lang || "-"}${i.autostart ? " · 开机自启" : ""}`)}
+        </div>
       </div>
     </div>
 
-    ${foldNote("维吾尔语自检", ugText, i.ug_capable === false ? "bad" : "", i.ug_capable === false)}
-    ${foldNote("异常", i.error, "bad", true)}
-    ${foldNote("备注", i.note)}
+    ${notes ? `<div class="sbk-foot">${notes}</div>` : ""}
   </section>`;
 }
 
@@ -7068,7 +7076,7 @@ function paintSites(d, roles, meta) {
     <p class="sbk-pagehint">
       <span class="sbk-pagehint-k">怎么用</span>
       每张卡都是一个对外入口：点<span class="kbd-inline">模型与参数</span>，
-      或直接点卡片上的任意一格参数，就能跳到对应配置页。保存后立即生效；只有
+      或直接点右侧任意一行参数，就能跳到对应配置页。保存后立即生效；只有
       <span class="kbd-inline">端口</span>和<span class="kbd-inline">局域网可访问</span>
       会动到 socket、重启那个站点。
     </p>

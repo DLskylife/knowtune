@@ -2274,48 +2274,57 @@ input[type=number].num::-webkit-outer-spin-button { -webkit-appearance: none; ma
 }
 .site-block.saving { opacity: .72; }
 
-.sbk-head {
-  display: flex; align-items: center; justify-content: space-between;
-  gap: 12px; padding: 11px var(--card-pad-x);
+/* 站点卡整卡重排（2026-11-13 二次）：左右分栏。
+   左栏 = 这个站是谁、怎么操作；右栏 = 现在生效的参数，纵向行表。
+   四格横排时每格只有 1/4 卡宽，长模型名和维吾尔文都挤成一团；
+   纵向行让参数区占满右栏，标签对齐、值不再被宽度逼着截断。 */
+.sbk-grid {
+  display: grid; grid-template-columns: minmax(230px, 30%) minmax(0, 1fr);
+}
+.sbk-side {
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 15px var(--card-pad-x);
   background: var(--card-head-bg);
-  border-bottom: 1px solid var(--card-line);
+  border-right: 1px solid var(--card-line);
 }
 .sbk-id { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
-.sbk-name { font-size: 14px; font-weight: 600; letter-spacing: .2px; }
+.sbk-name { font-size: 15px; font-weight: 600; letter-spacing: .2px; }
 .sbk-dim { font-size: 11.5px; color: var(--text-3); font-variant-numeric: tabular-nums; }
 /* 下拉说一种语言、文案实际是另一种：这件事必须被看见，否则用户会以为
    自己改的设置没保存。 */
 .sbk-dim.warn { color: var(--warn, #d9a03a); }
-/* 端口 / 运行时长收成一组元数据，和名字、状态徽标分层，不再六个灰字平铺。 */
-.sbk-meta { display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.sbk-meta > span {
-  font-size: 11.5px; color: var(--text-3); white-space: nowrap;
-  font-variant-numeric: tabular-nums;
+.sbk-meta-col {
+  display: flex; flex-direction: column; gap: 3px;
+  font-size: 11.5px; color: var(--text-3); font-variant-numeric: tabular-nums;
 }
-.sbk-meta > span + span { padding-left: 10px; border-left: 1px solid var(--line); }
+.sbk-meta-col b { color: var(--text-2); font-weight: 600; }
+.sbk-url {
+  display: block; width: fit-content; max-width: 100%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: var(--mono); font-size: 11.5px;
+  color: var(--accent); text-decoration: none;
+}
+.sbk-url:hover { text-decoration: underline; }
 
-/* 动作分两组：左边改参数、右边管运行。主操作给淡蓝底，停止只在悬停时变红，
-   一屏上不会同时出现六颗一模一样的灰按钮。 */
-.sbk-acts { display: flex; align-items: center; gap: 10px; flex: none; }
-.sbk-act-group { display: flex; align-items: center; gap: 6px; }
-.sbk-act-group.is-ops { padding-left: 10px; border-left: 1px solid var(--line); }
-.sbk-acts .mini.is-primary {
+/* 操作分两组：改参数 / 管运行。主操作淡蓝底，停止只在悬停时示警。 */
+.sbk-side-acts { display: flex; flex-wrap: wrap; gap: 6px; }
+/* 运维组贴左栏底部：上边是"这个站是谁"、下边是"怎么摆弄它"，
+   空白被收进两组之间，不会在左栏尾巴留一块没来由的空地。 */
+.sbk-side-acts.is-ops {
+  margin-top: auto; padding-top: 10px; border-top: 1px solid var(--line-soft);
+}
+.sbk-side .mini.is-primary {
   color: var(--accent); border-color: rgba(91, 140, 255, .42);
   background: var(--accent-soft);
 }
-.sbk-acts .mini.is-primary:hover {
+.sbk-side .mini.is-primary:hover {
   color: #fff; border-color: var(--accent); background: rgba(91, 140, 255, .24);
 }
-.sbk-acts .mini.is-danger:hover {
+.sbk-side .mini.is-danger:hover {
   color: var(--err); border-color: rgba(242, 85, 90, .5);
   background: rgba(242, 85, 90, .09);
 }
-.sbk-acts .mini.loc { display: inline-flex; align-items: center; text-decoration: none; }
-.sbk-saved {
-  font-size: 11px; color: var(--ok); margin-right: 2px;
-  opacity: 0; transition: opacity .18s;
-}
-.sbk-saved.on { opacity: 1; }
+.sbk-side .mini.loc { display: inline-flex; align-items: center; text-decoration: none; }
 
 /* 页面顶部提示条：比一行灰小字更像"先看这里"，且不影响其它视图的 .hint。 */
 .sbk-pagehint {
@@ -2330,24 +2339,10 @@ input[type=number].num::-webkit-outer-spin-button { -webkit-appearance: none; ma
   color: var(--accent); font-size: 10.5px; letter-spacing: .5px;
 }
 
-.sbk-url {
-  display: flex; align-items: center; gap: 10px;
-  padding: 8px 16px; border-bottom: 1px solid var(--line-soft);
+.sbk-main {
+  min-width: 0; display: flex; flex-direction: column;
+  padding: 15px var(--card-pad-x);
 }
-.sbk-url-k { font-size: 10.5px; letter-spacing: .6px; color: var(--text-3); flex: none; }
-.sbk-url a {
-  font-family: var(--mono); font-size: 11.5px;
-  color: var(--accent); text-decoration: none;
-}
-.sbk-url a:hover { text-decoration: underline; }
-.sbk-url-tag {
-  margin-left: auto; flex: none; padding: 1px 6px;
-  border: 1px solid var(--line); border-radius: 4px;
-  font-size: 10.5px; color: var(--text-3);
-}
-
-.sbk-sec { padding: 12px 16px 14px; }
-.sbk-sec + .sbk-sec { border-top: 1px solid var(--line-soft); }
 .sbk-label {
   display: flex; align-items: baseline; gap: 10px;
   font-size: 11.5px; font-weight: 600; letter-spacing: 1px;
@@ -2363,6 +2358,11 @@ input[type=number].num::-webkit-outer-spin-button { -webkit-appearance: none; ma
   margin-left: auto; font-weight: 400; letter-spacing: 0; text-transform: none;
   font-size: 11px; color: var(--text-3); white-space: nowrap;
 }
+
+/* 自检 / 异常 / 备注横跨整卡，不塞进右栏把参数行挤断。 */
+.sbk-foot { padding: 0 var(--card-pad-x) 13px; }
+.sbk-foot .sbk-note-line { margin: 0 0 8px; }
+.sbk-foot .sbk-note-line:last-child { margin-bottom: 0; }
 
 .sbk-fields {
   display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2441,7 +2441,6 @@ details.sbk-note-line[open] > summary::before { transform: rotate(90deg); }
 
 @media (max-width: 1100px) {
   .sbk-fields { grid-template-columns: minmax(0, 1fr); }
-  .sbk-head { flex-wrap: wrap; }
 }
 
 /* 模型清单：三列输入 + 删除。宽度按"模型名最长、两个数字窄"分配。
@@ -2727,9 +2726,9 @@ details.sbk-note-line[open] > summary::before { transform: rotate(90deg); }
 }
 .gw-inline .hint { font-size: 11px; margin-top: 5px; }
 
-/* 卡片标题行统一：首页 .card-head、站点 .sbk-head 同高、
-   同内边距、同底线，三个视图并排看不再像三个产品。 */
-.card-head, .sbk-head { min-height: 42px; }
+/* 卡片标题行统一：首页 .card-head 的高度基准。站点卡已改成左右分栏，
+   不再有独立标题行，那条同高规则随之撤掉。 */
+.card-head { min-height: 42px; }
 /* 首页日志标题里嵌了一层 .card-head 放两个小按钮，别让它也撑到 42px。 */
 .card-head .card-head { min-height: 0; }
 
@@ -2910,58 +2909,52 @@ details.sbk-note-line[open] > summary::before { transform: rotate(90deg); }
 }
 .scfg-footnote b { color: var(--text-2); }
 
-/* 站点卡事实区：四格既是当前值，也是直通对应配置页的参数入口。
- * 主/辅值允许两行（原来单行 ellipsis，模型名被截成 "…Instruc"），
- * dir=auto 交给 HTML，维吾尔文库名按自身方向排版。 */
-.sbk-facts {
-  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px;
+/* 参数行表：每行一个按钮，标签 / 当前值 / 「改 →」三列。
+ * 值区占满右栏、不截断，长模型名和 RTL 维吾尔文都能整行铺开；
+ * dir=auto 写在 HTML 上，样式不猜文本方向。 */
+.sbk-rows {
+  display: flex; flex-direction: column;
+  border: 1px solid var(--line-soft); border-radius: var(--r);
+  overflow: hidden;
 }
-.sbk-fact {
-  min-width: 0; display: flex; flex-direction: column; gap: 4px;
-  padding: 10px 11px 11px; text-align: left; cursor: pointer;
-  border: 1px solid var(--line-soft); border-radius: 8px;
-  background: var(--surface-2); font: inherit; color: inherit;
-  transition: border-color .14s, background .14s, transform .14s;
+.sbk-row {
+  display: grid; grid-template-columns: 92px minmax(0, 1fr) auto;
+  gap: 12px; align-items: center; width: 100%;
+  padding: 9px 12px; text-align: left; cursor: pointer;
+  border: 0; border-bottom: 1px solid var(--line-soft);
+  background: var(--surface-2); color: inherit; font: inherit;
+  transition: background .13s;
 }
-.sbk-fact:hover {
-  border-color: rgba(91, 140, 255, .45); background: var(--surface-3);
-  transform: translateY(-1px);
-}
-.sbk-fact:active { transform: none; }
-.sbk-fact:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.sbk-fact > span {
-  display: flex; align-items: center; gap: 6px;
-  font-size: 10.5px; letter-spacing: .4px; color: var(--text-3);
-}
-/* 箭头常驻但压暗：四格要"看起来能点"，不能只靠悬停才出现提示。 */
-.sbk-fact-go {
-  margin-left: auto; font-size: 11px; opacity: .45; color: var(--text-3);
-  transition: opacity .14s, color .14s;
-}
-.sbk-fact:hover .sbk-fact-go, .sbk-fact:focus-visible .sbk-fact-go {
-  opacity: 1; color: var(--accent);
-}
-.sbk-fact > b, .sbk-fact > i {
-  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
-  overflow: hidden; white-space: normal;
+.sbk-row:last-child { border-bottom: 0; }
+.sbk-row:hover { background: var(--surface-3); }
+.sbk-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.sbk-row-k { font-size: 11px; color: var(--text-3); white-space: nowrap; }
+.sbk-row-v { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.sbk-row-v b {
+  font-size: 12px; font-weight: 600; line-height: 1.45; color: var(--text);
   overflow-wrap: anywhere; word-break: break-word;
 }
-.sbk-fact > b {
-  font-size: 12px; font-weight: 600; line-height: 1.45; color: var(--text);
-}
-.sbk-fact > i {
+.sbk-row-v i {
   font-style: normal; font-size: 11px; line-height: 1.45; color: var(--text-3);
+  overflow-wrap: anywhere; word-break: break-word;
+}
+.sbk-row-go {
+  font-size: 11px; color: var(--text-2); opacity: .85; white-space: nowrap;
+  transition: color .13s, opacity .13s;
+}
+.sbk-row:hover .sbk-row-go, .sbk-row:focus-visible .sbk-row-go {
+  opacity: 1; color: var(--accent);
 }
 /* 三个板块全关：站点等于没入口，主值要显眼地标黄。 */
-.sbk-fact.is-warn > b { color: var(--warn); }
+.sbk-row.is-warn .sbk-row-v b { color: var(--warn); }
 
-@media (max-width: 1200px) {
-  .sbk-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-}
-@media (max-width: 760px) {
-  .sbk-facts { grid-template-columns: minmax(0, 1fr); }
-  .sbk-act-group.is-ops { padding-left: 0; border-left: 0; }
+@media (max-width: 900px) {
+  .sbk-grid { grid-template-columns: minmax(0, 1fr); }
+  .sbk-side { border-right: 0; border-bottom: 1px solid var(--card-line); }
   .sbk-label-tail { display: none; }
+}
+@media (max-width: 520px) {
+  .sbk-row { grid-template-columns: 76px minmax(0, 1fr) auto; gap: 8px; }
 }
 
 @media (max-width: 900px) {

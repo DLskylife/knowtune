@@ -35,7 +35,7 @@ KnowTune 是本地单机知识库问答系统：一个 FastAPI 进程（`api/app
   │     sites = InstanceManager                                     │
   │   lifespan（api/app.py）：attach 密钥 → 预热线程 → start_autostart │
   │   后台接口 /api/*（全部 HTTP）+ /v1/* 转发网关                    │
-  │   后台静态 api/static/*（构建号 0.9.64）                         │
+  │   后台静态 api/static/*（构建号 0.9.65）                         │
   │   /v1/chat/completions = 纯转发，不进 RAG                        │
   └───────────────────┬────────────────────────────────────────────┘
                       │ runner.start()（runner.py:296）
@@ -142,9 +142,9 @@ KnowTune 是本地单机知识库问答系统：一个 FastAPI 进程（`api/app
 | `src/knowtune/api/app.py` | FastAPI 装配入口（约 270 行）：生命周期、静态资源、no-cache 中间件、`include_router` 注册 8 个路由模块、全局异常处理。 | 端点本体不在这里；全局 `state` 由 `api/state.py` 在导入期构造。 |
 | `src/knowtune/api/routes/*.py` | 94 个端点按资源域拆成 8 个模块：meta / models / kb / docs / search / sessions / prompts / sites。 | `/v1/chat/completions` 在 `models.py`，是**纯转发网关**；「手动改过」判据在 `kbconfig.py`。 |
 | `src/knowtune/api/common.py` / `state.py` / `coverage.py` | 公共层：分片上传暂存 / 全局 `AppState` / 引用覆盖率统计。 | 由各路由模块共享，不放端点逻辑。 |
-| `src/knowtune/api/static/index.html` | 后台 UI 骨架，构建号 `0.9.64`（`window.ADMIN_REQ_BUILD`）。 | 与前台静态资源完全不共享；资源 URL 带 `?v=0.9.64` 破缓存。 |
-| `src/knowtune/api/static/app.js` | 后台交互逻辑，构建号 `0.9.64`（`window.ADMIN_BUILD`）。 | 参数控件由 `/api/settings` 吐出的注册表渲染，前端不写业务含义。 |
-| `src/knowtune/api/static/style.css` | 后台样式。 | 由 `index.html` 以 `style.css?v=0.9.64` 引用。 |
+| `src/knowtune/api/static/index.html` | 后台 UI 骨架，构建号 `0.9.65`（`window.ADMIN_REQ_BUILD`）。 | 与前台静态资源完全不共享；资源 URL 带 `?v=0.9.65` 破缓存。 |
+| `src/knowtune/api/static/app.js` | 后台交互逻辑，构建号 `0.9.65`（`window.ADMIN_BUILD`）。 | 参数控件由 `/api/settings` 吐出的注册表渲染，前端不写业务含义。 |
+| `src/knowtune/api/static/style.css` | 后台样式。 | 由 `index.html` 以 `style.css?v=0.9.65` 引用。 |
 
 ### 4.7 `src/knowtune/frontsite/` 前台问答站
 
@@ -218,7 +218,7 @@ KnowTune 是本地单机知识库问答系统：一个 FastAPI 进程（`api/app
 
 1. **提示词优先级注释**：`src/knowtune/promptcfg.py` 早期头注释与 `save()` docstring 曾声称 scope（板块）优先于 provider（后端），`config/prompts.yaml` 头注释曾漏写 `by_scope`。以代码为准：`effective_fields():337-344` 是 `by_provider > by_scope > default > 内置`，且仅 `generate` / `translate` 支持前两层。
 2. **`schema.sql` 注释**：`kb` 表 `config_json` 的早期注释曾写「只存与全局不同的项」。以代码为准：`src/knowtune/kbconfig.py` 实现是**全量快照 + `__full__`**，「用户手动改过」的判据是与出厂基线值不同（`kbconfig.py`），不是键存在。
-3. **前台构建号**：前台静态资源版本号（`style.css?v` / `app.js?v` / `SITE_REQ_BUILD` / `SITE_BUILD`）曾在多处不一致。以代码为准：当前前台统一 `1.7.37`、后台统一 `0.9.64`；两套静态资源各自独立，互不影响。
+3. **前台构建号**：前台静态资源版本号（`style.css?v` / `app.js?v` / `SITE_REQ_BUILD` / `SITE_BUILD`）曾在多处不一致。以代码为准：当前前台统一 `1.7.37`、后台统一 `0.9.65`；两套静态资源各自独立，互不影响。
 
 ## 5. 项目是怎么「构建」起来的
 
