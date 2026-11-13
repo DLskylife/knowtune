@@ -1,6 +1,6 @@
 /* 构建号：与 index.html 里那份一致，不一致说明浏览器拿到的是旧 JS，
    页面加载完会强制换一次（见 index.html 的自检脚本）。 */
-window.ADMIN_BUILD = "0.9.67";
+window.ADMIN_BUILD = "0.9.68";
 
 const $ = (id) => document.getElementById(id);
 
@@ -45,6 +45,7 @@ const API_CACHEABLE = [
   /^\/api\/gateway$/,
   /^\/api\/instances$/,
   /^\/api\/model-roles$/,
+  /^\/api\/previsit\/config$/,
   /^\/api\/kb$/,
   /^\/api\/kb\/\d+\/detail$/,
 ];
@@ -6354,41 +6355,23 @@ function roleText(v) {
 }
 
 const LANG_NAME = { ug: "维吾尔语（RTL）", zh: "中文", en: "English" };
-const KB_LANG_NAME = { zh: "中文语料", ug: "维吾尔语料", en: "英语语料" };
 
-/* 2026-11-13 三次整理：参数不再缩在右栏那张"卡中卡"行表里，
- * 直接铺成整卡下方一块独立参数区。同一件事只说一遍：
- *   - 板块名和库名原本分两行各写一次 → 合并成「板块 / 知识库」一行；
- *   - 译 / 答两个模型都带同一个 provider 前缀 → 只标一次；
- *   - 顶部提示条、卡内「点任意一行」、四行末尾的「改 →」三层同义 → 全删；
- *   - 正常态维吾尔语自检与模型行信息重复 → 只在自检失败时出现。
- * 结果：四行并三行，每行单行值，整行可点跳对应页签。 */
-const TAB_NAME = {
-  sections: "板块与知识库", models: "模型与提示词", site: "站点设置",
-};
-
-function siteBlock(i, meta, plan, defProv) {
-  const d = state.sites || {};
+/* 2026-11-13 第四次整理：站点页不再「点一下开一层窗」。
+ * 旧形态是卡上三行参数 + 「全部参数」+「预问诊参数」四处入口，点谁都弹一个
+ * modal，modal 里还分三个页签，提示词再叠一层抽屉 —— 改个端口要开两层窗、
+ * 切一次页签。现在三段配置整段铺在卡片下面，预问诊参数与前台预览也在同一页，
+ * 就地改、就地存。窗口只剩「新建站点」和长文本用的提示词抽屉。
+ *
+ * 下面的 siteInlinePanels() 复用原弹窗那套 scfg-* 控件：data-f 字段名一个没动，
+ * readSiteBlock() 照旧全量读，所以后端接口零改动。 */
+function siteBlock(i, meta, plan, defProv, pv) {
   const running = i.status === "running";
   const external = i.status === "external";
   const busy = i.status === "starting" || i.status === "stopping";
-  const kb = (d.kbs || []).find((k) => k.id === i.kb_id);
-  const resolved = (plan && plan.resolved) || {};
-  const mode = i.answer_mode === "direct" ? "直接作答" : "先中后译";
-  // 板块开关：卡上要能一眼看出"这个站点现在有几个入口"。预问诊关掉之后，
-  // 卡上那颗「预问诊参数」也不该留着——配一个看不见的入口只会让人点错。
-  const sec = (k) => (i.sections || {})[k] || {};
-  const secOn = (k) => sec(k).enabled !== false;
-  const secNames = [["med", "维医"], ["classic", "古籍"], ["pv", "预问诊"]]
-    .filter(([k]) => secOn(k))
-    .map(([k, def]) => String(sec(k).name || "").trim() || def)
-    .join(" · ");
-  const classicKb = (d.kbs || []).find((k) => k.id === (i.classic_kb_id || 0));
   const shown = i.content_lang && i.content_lang !== i.lang
     ? `<span class="sbk-dim warn" title="页面语言按文案内容判定，下拉只在判不出时兜底"
         >实际显示：${esc(LANG_NAME[i.content_lang] || i.content_lang)}</span>`
     : "";
-  // uptime() 会换算成「9 分 32 秒」；以前这里直接把秒数拼上去，卡上写 572s。
   const stateText = running
     ? (i.uptime_s ? "已运行 " + uptime(i.uptime_s) : "运行中")
     : external
@@ -6409,61 +6392,16 @@ function siteBlock(i, meta, plan, defProv) {
         ${long ? `<div class="sbk-note-full">${esc(full)}</div>` : ""}
       </details>`;
   };
-
-  /* 一行参数 = 整行按钮：标签 / 单行值（+ 可选次要色补充）/ 悬停才亮的箭头。
-   * 参数区不再套深色内框，值从卡片左边一直铺到右边；「改」字不重复写三遍。 */
-  const prow = (tab, label, value, sub = "", cls = "") => `<button type="button"
-      class="sbk-prow${cls ? " " + cls : ""}" data-jumptab="${tab}"
-      title="${esc(value + (sub ? " · " + sub : ""))}｜打开「${esc(TAB_NAME[tab])}」">
-      <span class="sbk-pk">${esc(label)}</span>
-      <span class="sbk-pv" dir="auto">${esc(value)}${
-        sub ? `<em class="sbk-pv-sub"> · ${esc(sub)}</em>` : ""}</span>
-      <span class="sbk-pgo" aria-hidden="true">→</span>
-    </button>`;
-
-  /* 板块名与绑定的库名经常同名（「维医知识问答」既是入口名又是库名）。
-   * 主值已经写了一遍，库名只在与主值不同时才补，全同名就只留开启数。 */
-  const mainKb = i.kb_name || (kb && kb.name) || `#${i.kb_id}`;
-  const classicName = classicKb ? classicKb.name : "按标题分流";
-  const bind = [
-    secNames.includes(mainKb) ? "" : `主库 ${mainKb}`,
-    secNames.includes(classicName) ? "" : `古籍 ${classicName}`,
-  ].filter(Boolean).join(" · ");
-  // 不再补「3 / 3 开启」：主值已经把开启的板块逐个列出来，计数是重复信息。
-
-  /* 译 / 答两个模型通常挂在同一个后端下，provider 前缀只写一次。 */
-  const splitRole = (v) => {
-    const s = roleText(v);
-    const k = s.indexOf(" / ");
-    return k > 0 ? [s.slice(0, k), s.slice(k + 3)] : ["", s];
-  };
-  const [tp, tm] = splitRole(resolved.translate);
-  const [gp, gm] = splitRole(resolved.generate);
-  const modelLine = (tp && tp === gp)
-    ? `${tp} · 译 ${tm} / 答 ${gm}`
-    : `译 ${roleText(resolved.translate)} / 答 ${roleText(resolved.generate)}`;
-
-  /* 语言、作答方式、语料类型、自启原本被拆成主副两行，合成一行即可。 */
-  const siteLine = [
-    LANG_NAME[i.lang] || i.lang, mode,
-    KB_LANG_NAME[i.kb_lang] || i.kb_lang || "",
-    i.autostart ? "开机自启" : "",
-  ].filter(Boolean).join(" · ");
-
-  /* 正常态的维吾尔语自检和「模型」行说的是同一件事，不再占一行；
-   * 只有自检判定失败（ug_capable === false）才作为异常显示。 */
+  /* 正常态的维吾尔语自检和模型区说的是同一件事，只有失败才占一行。 */
   const ugText = i.ug_capable === false && i.ug_note
     ? i.ug_note + (i.ug_sample ? `（模型返回：${i.ug_sample.slice(0, 40)}）` : "")
     : "";
-  // 没说明就不渲染底栏，免得留一条没内容的空 padding。
   const notes = [
     foldNote("维吾尔语自检", ugText, "bad", true),
     foldNote("异常", i.error, "bad", true),
     foldNote("备注", i.note),
   ].filter(Boolean).join("");
 
-  /* 整卡单列：上面一行是这个站是谁、怎么操作，下面整块是摊开的参数。
-   * 参数不缩在右栏内框里，三行各占满整卡宽度；异常才出现底栏。 */
   return `<section class="site-block${running || external ? "" : " is-off"}"
       data-name="${esc(i.name)}">
     <div class="sbk-top">
@@ -6478,13 +6416,9 @@ function siteBlock(i, meta, plan, defProv) {
           rel="noreferrer">${esc(i.url)}</a>
       </div>
       <div class="sbk-acts">
-        <div class="sbk-act-group is-config">
-          <button class="mini is-primary" data-scfg
-            title="板块、知识库、端口、模型角色、语言与全部界面文案">全部参数</button>
-          ${secOn("pv") ? `<button class="mini" data-pvcfg
-            title="预问诊的模型、轮次、知识图谱追问、语义召回与提示词">预问诊参数</button>` : ""}
-        </div>
         <div class="sbk-act-group is-ops">
+          <button class="mini" data-goto-inline="sitePreview"
+            title="往下滚到本页里的前台预览，不新开窗口">前台预览 ↓</button>
           <button class="mini" data-sact="copy" data-url="${esc(i.url)}">复制链接</button>
           ${external ? "" : `<button class="mini${running ? " is-danger" : ""}"
             data-sact="${running ? "stop" : "start"}" ${busy ? "disabled" : ""
@@ -6496,30 +6430,29 @@ function siteBlock(i, meta, plan, defProv) {
       </div>
     </div>
 
-    <div class="sbk-params">
-      ${prow("sections", "板块 / 知识库", secNames || "全部关闭", bind,
-        secNames ? "" : "is-warn")}
-      ${prow("models", "模型", modelLine)}
-      ${prow("site", "站点", siteLine)}
+    <div class="site-inline" data-sinline>
+      ${siteInlinePanels(i, meta, plan, defProv, pv)}
+      <div class="sif-savebar">
+        <span class="sif-save-hint">改动写进 <code>config/instances.yaml</code>：
+          模型、语言、文案立即生效；<b>端口</b>和<b>局域网可访问</b>动到 socket，保存后会重启这个站点。</span>
+        <button class="primary-btn" data-save-inline>保存并生效</button>
+      </div>
     </div>
 
     ${notes ? `<div class="sbk-foot">${notes}</div>` : ""}
   </section>`;
 }
 
-/* 站点参数弹窗的内容（2026-11-07 重排）。
+/* 站点页的内联配置区（2026-11-13 打平）。
  *
- * 旧的形态是 640px 宽里平铺 6 个分组：三个板块各带两个无列名的模型下拉，
- * 再加一组「模型角色」两个下拉，八个下拉分散在两处，谁覆盖谁只能靠读提示
- * 文字猜。现在按「板块 / 模型 / 站点设置」分三页，模型收敛成一张矩阵：
- * 表的行顺序就是角色的生效顺序（板块 → 站点 → 系统 → 实例 → 默认），
- * 列名写清每个下拉是干什么的，留空代表跟随上一级。
+ * 原来这三段是弹窗里的三个页签，一次只看得到一段；现在三段同时铺在页面上，
+ * 谁都不用点开。模型仍是一张矩阵：行顺序就是角色的生效顺序
+ * （板块 → 站点 → 系统 → 实例 → 默认），留空代表跟随上一级。
  *
- * 关键约束：**所有 data-f 字段名一个都不改**。readSiteBlock() 遍历
- * #modalBody [data-f] 组 payload，隐藏页签里的控件仍在 DOM 里（用 hidden
- * 属性切换，不重建 DOM），所以分不分页对保存完全透明，后端零改动。
+ * 关键约束：**所有 data-f 字段名一个都不改**。readSiteBlock() 遍历站点卡内的
+ * [data-f] 组 payload，三段都在同一个 DOM 里，保存一次全量提交，后端零改动。
  */
-function siteGroups(i, meta, plan, defProv, pv) {
+function siteInlinePanels(i, meta, plan, defProv, pv) {
   const d = state.sites || {};
   const roles = i.roles || {};
   const a = i.alt || {};
@@ -6578,7 +6511,7 @@ function siteGroups(i, meta, plan, defProv, pv) {
 
   const secPanel = `
     <div class="scfg-lead"><b>三个入口，各自独立</b>
-      <span>开关、显示名、绑定的知识库在这一页；模型与提示词统一到下一页，不再混在板块里。</span></div>
+      <span>开关、显示名、绑定的知识库在这一段；模型与提示词统一到下一段，不再混在板块里。</span></div>
     <div class="scfg-cards">
       ${secCard("med", "维医问答", "维医问答",
         field("检索知识库", `<select data-f="kb_id">${kbOpts}</select>`),
@@ -6588,8 +6521,9 @@ function siteGroups(i, meta, plan, defProv, pv) {
           "选「不单独分库」时按文档标题含「古籍」来分流"),
         "只在这个库里检索，与维医问答互不干扰")}
       ${secCard("pv", "预问诊", "预问诊",
-        field("参数", `<button class="mini" type="button" data-open-pvcfg>模型与提示词</button>`,
-          "模型、轮次、追问与提示词在预问诊自己的参数面板里"),
+        field("参数", `<button class="mini" type="button" data-goto-inline="pvInline"
+          >到本页参数 ↓</button>`,
+          "模型、轮次与提示词就在本页最下面，不另开窗口"),
         "不检索知识库，走独立的多轮问诊引擎")}
     </div>`;
 
@@ -6650,7 +6584,7 @@ function siteGroups(i, meta, plan, defProv, pv) {
               "内置默认（DeepSeek-V4.1-Flash）")}</td>
             <td>${sel("pv_role_generate", "generate", pvGenCur,
               "预问诊的推理模型；留空 = 跟随后台当前后端")}</td>
-            <td>${promptBtn("data-open-pvcfg", "模型与提示词")}</td>
+            <td>${promptBtn('data-goto-inline="pvInline"', "本页参数 ↓")}</td>
           </tr>
         </tbody>
       </table>
@@ -6663,10 +6597,10 @@ function siteGroups(i, meta, plan, defProv, pv) {
     </div>`;
 
   /* ---------- 页 3：站点设置 ---------- */
-  const copyField = (lang, label) => field(label,
+  // 说明只写一次：两个语言栏各贴一遍同样的长句纯属重复。
+  const copyField = (lang, label, note = "") => field(label,
     `<button class="mini" type="button" data-open-copy="copy_${esc(lang || "ug")}"
-      >打开提示词配置</button>`,
-    "标题、副标题、欢迎语、示例、免责统一在提示词配置里，保存前自动留快照、可整体回滚");
+      >打开提示词配置</button>`, note);
 
   const sitePanel = `
     <div class="scfg-lead"><b>不常改，但改了要清楚后果</b>
@@ -6687,15 +6621,17 @@ function siteGroups(i, meta, plan, defProv, pv) {
           ${opt("zh", "中文语料（维语提问先译成中文）", i.kb_lang || "zh")}
           ${opt("ug", "维吾尔语语料（直接检索）", i.kb_lang)}
           ${opt("en", "英语语料", i.kb_lang)}</select>`)}
-        ${field("产出方式", `<select data-f="answer_mode">
-          ${opt("translate", "先用中文组织答案，再整段译成维吾尔语（稳，慢一倍）", i.answer_mode || "translate")}
-          ${opt("direct", "模型直接用维吾尔语作答（快，小模型容易跑偏）", i.answer_mode)}</select>`,
+        ${field("产出方式", `<select data-f="answer_mode"
+          title="translate = 先用中文组织答案，再整段译成维吾尔语（稳，慢一倍）；direct = 模型直接用维吾尔语作答（快，小模型容易跑偏）">
+          ${opt("translate", "先中后译（稳 · 慢一倍）", i.answer_mode || "translate")}
+          ${opt("direct", "直接维语作答（快 · 易跑偏）", i.answer_mode)}</select>`,
           "同一份资料，两种产出路径", "wide")}
       `)}
       ${card("界面文案", "这五句话在提示词配置里统一管理，这里只改左侧那块名字", `
         ${field("侧栏库名", text("kb_name", i.kb_name, "留空用知识库名"),
           "主语言界面左侧顶部的标题")}
-        ${copyField(i.lang, "主语言文案")}
+        ${copyField(i.lang, "主语言文案",
+          "标题、副标题、欢迎语、示例、免责统一在提示词配置里，保存前自动留快照、可整体回滚")}
         ${field("另一语言", `<select data-f="alt_lang">
           ${opt("zh", "中文", a.lang)}
           ${opt("ug", "维吾尔语", a.lang)}
@@ -6705,12 +6641,15 @@ function siteGroups(i, meta, plan, defProv, pv) {
       `, "span-all")}
     </div>`;
 
-  const tab = (key, num, label, meta2, active) => `<button type="button" role="tab"
-      class="scfg-tab${active ? " active" : ""}" data-scfg-tab="${key}"
-      aria-selected="${active ? "true" : "false"}">
-      <span class="scfg-tab-n">${num}</span>
-      <span class="scfg-tab-t">${esc(label)}</span>
-      <em>${esc(meta2)}</em></button>`;
+  /* 三段常驻，没有页签、没有 hidden：滚动就能看全，保存一次全量提交。
+   * 标题的副句只写定位，不与下面各自那段 scfg-lead 的说明重复。 */
+  const section = (num, key, title, sub, body) => `<section class="sif-sec" data-sif="${key}">
+      <div class="sif-head">
+        <span class="sif-n">${num}</span>
+        <div class="sif-ht"><b>${esc(title)}</b><span>${esc(sub)}</span></div>
+      </div>
+      <div class="sif-body">${body}</div>
+    </section>`;
 
   return `
     <div class="scfg-summary">
@@ -6720,194 +6659,214 @@ function siteGroups(i, meta, plan, defProv, pv) {
         <span>答 <b>${esc(roleText(resolved.generate))}</b></span>
         <span class="scfg-summary-side">端口 <b>${i.port}</b> · ${esc(LANG_NAME[i.lang] || i.lang)}</span>
       </div>
-      <p class="scfg-save-note">保存即写入 <code>config/instances.yaml</code>：模型、语言、文案立即生效；
-        <b>端口</b>和<b>局域网可访问</b>动到 socket，保存后会重启这个站点。</p>
     </div>
-    <div class="scfg-tabs" role="tablist" aria-label="站点配置分区">
-      ${tab("sections", "01", "板块与知识库", "3 个入口", false)}
-      ${tab("models", "02", "模型与提示词", "8 个模型位", true)}
-      ${tab("site", "03", "站点设置", "端口 · 语言 · 文案", false)}
-    </div>
-    <div class="scfg-panel" data-scfg-panel="sections" hidden>${secPanel}</div>
-    <div class="scfg-panel" data-scfg-panel="models">${modelPanel}</div>
-    <div class="scfg-panel" data-scfg-panel="site" hidden>${sitePanel}</div>`;
+    ${section("01", "sections", "板块与知识库", "开关 · 显示名 · 绑定库", secPanel)}
+    ${section("02", "models", "模型与提示词", "角色矩阵 · 翻译测试 · 提示词入口", modelPanel)}
+    ${section("03", "site", "站点设置", "端口 · 语言 · 界面文案", sitePanel)}`;
 }
 
-/* initialTab：卡片上的四格参数入口会带一个页签名过来，直接停在那一页，
- * 不用用户在三个页签里再找一遍。缺省仍停在「模型与提示词」（siteGroups 的默认值）。 */
-async function openSiteConfig(name, initialTab = "") {
-  const i = (state.sites.items || []).find((x) => x.name === name);
-  if (!i) { toast("这个站点已经不在了，刷新一下", "err"); return; }
-  const plans = (state.rolePlan && state.rolePlan.sites) || [];
-  const plan = plans.find((p) => p.name === name) || null;
-  const defProv = (state.rolePlan && state.rolePlan.default_provider) || "";
-  // 预问诊的模型不在实例 spec 里（配置是全局一份），单独取当前值来渲染那两个
-  // 下拉。取不到就照旧只显示「模型与提示词」入口——参数面板读不出来不该把
-  // 整个站点配置弹窗拦住。
-  let pv = null;
-  try { pv = await api("/api/previsit/config"); } catch (_) { pv = null; }
+/* 内联保存。字段来自站点卡上三段配置区，payload 组装与原来的弹窗回调
+ * 逐字一致（readSiteBlock 全量读 + 预问诊两个模型位拆回 previsit 覆盖层），
+ * 只是提交动作从「弹窗确定」换成「页面上的保存并生效」。 */
+async function saveSiteInline(name, block) {
+  const payload = readSiteBlock(block);
+  // 预问诊的两个模型位是 previsit 的全局覆盖层，不属于这个站点的 spec。
+  const pvTr = payload.pv_role_translate;
+  const pvGen = payload.pv_role_generate;
+  delete payload.pv_role_translate;
+  delete payload.pv_role_generate;
 
-  showModal(`站点 · ${name}`, siteGroups(i, state.modelMeta || [], plan, defProv, pv),
-    async () => {
-      const payload = readSiteBlock($("modalBody"));
-      // 预问诊的两个模型位先摘出来：它们是 previsit 的全局覆盖层，不属于
-      // 这个站点的 spec，混在 PUT 里既存不进去也容易让人以为按站点分了。
-      const pvTr = payload.pv_role_translate;
-      const pvGen = payload.pv_role_generate;
-      delete payload.pv_role_translate;
-      delete payload.pv_role_generate;
+  const r = await jsonSend("PUT", `/api/instances/${encodeURIComponent(name)}`, payload);
 
-      const r = await jsonSend("PUT", `/api/instances/${encodeURIComponent(name)}`, payload);
-
-      // 「后端::模型」拆成 previsit 配置认的 provider / model 两个键。
-      // 没有 `::` 时有两种可能：只选了后端（"local"），或者只写了模型名
-      // （previsit 的翻译模型就是后者，它按模型名路由）。靠后端清单区分，
-      // 否则会把模型名当后端名存进去——配置没报错，但路由头是错的。
-      const provs = (state.sites && state.sites.providers) || [];
-      const split = (v) => {
-        const s = String(v || "").trim();
-        const i = s.indexOf("::");
-        if (i >= 0) return [s.slice(0, i), s.slice(i + 2)];
-        return provs.includes(s) ? [s, ""] : ["", s];
-      };
-      let pvNote = "";
-      if (pvTr !== undefined || pvGen !== undefined) {
-        const values = {};
-        if (pvGen !== undefined) {
-          const [p, m] = split(pvGen);
-          values.provider = p;
-          values.model = m;
-        }
-        if (pvTr !== undefined) {
-          const [p, m] = split(pvTr);
-          values.translator_provider = p;
-          values.translator_model = m;
-        }
-        await jsonSend("PUT", "/api/previsit/config", { values });
-        pvNote = " · 预问诊模型已更新";
-      }
-      await renderSites();
-      toast(r.restarted ? `${name} 已保存并重启${pvNote}`
-                        : `${name} 已保存 · 立即生效${pvNote}`);
-    }, { okLabel: "保存并生效", wide: true, cls: "site" });
-
-  bindTrTest();
-  // 页签切换的处理器挂在 #modalBody 上（bindTrTest），节点一直不换，
-  // 所以这里点一下对应按钮就能复用同一套切换逻辑，不复制第二份状态。
-  if (TAB_NAME[initialTab]) {
-    const tab = $("modalBody").querySelector(`[data-scfg-tab="${initialTab}"]`);
-    if (tab && !tab.classList.contains("active")) tab.click();
+  // 「后端::模型」拆成 previsit 认的 provider / model 两个键。没有 `::` 时
+  // 有可能是只选了后端，也有可能是只写了模型名（翻译模型按名字路由），
+  // 靠后端清单区分，否则配置没报错但路由头是错的。
+  const provs = (state.sites && state.sites.providers) || [];
+  const split = (v) => {
+    const s = String(v || "").trim();
+    const i = s.indexOf("::");
+    if (i >= 0) return [s.slice(0, i), s.slice(i + 2)];
+    return provs.includes(s) ? [s, ""] : ["", s];
+  };
+  let pvNote = "";
+  if (pvTr !== undefined || pvGen !== undefined) {
+    const values = {};
+    if (pvGen !== undefined) {
+      const [p, m] = split(pvGen);
+      values.provider = p;
+      values.model = m;
+    }
+    if (pvTr !== undefined) {
+      const [p, m] = split(pvTr);
+      values.translator_provider = p;
+      values.translator_model = m;
+    }
+    await jsonSend("PUT", "/api/previsit/config", { values });
+    pvNote = " · 预问诊模型已更新";
   }
+  await renderSites();
+  toast(r.restarted ? `${name} 已保存并重启${pvNote}`
+                    : `${name} 已保存 · 立即生效${pvNote}`);
 }
 
-/* 翻译模型单测。按钮在弹窗里（不在卡片上），所以绑在 modalBody 上；
- * 和预问诊的 provider 联动一样，只绑一次，避免每开一次弹窗多挂一个处理器。 */
-function bindTrTest() {
-  const body = $("modalBody");
-  if (body.dataset.trBound) return;
-  body.dataset.trBound = "1";
-  body.addEventListener("click", async (e) => {
-    // 站点配置三页签：隐藏页用 hidden 属性，控件始终留在 DOM 里。
-    // readSiteBlock() 遍历的是全部 [data-f]，所以停在任一页直接保存都不会
-    // 漏掉另外两页的字段——这一点是分栏方案能安全落地的前提。
-    const tab = e.target.closest("[data-scfg-tab]");
-    if (tab) {
-      const key = tab.dataset.scfgTab;
-      body.querySelectorAll("[data-scfg-tab]").forEach((b) => {
-        const on = b === tab;
-        b.classList.toggle("active", on);
-        b.setAttribute("aria-selected", on ? "true" : "false");
-      });
-      body.querySelectorAll("[data-scfg-panel]").forEach((pane) => {
-        pane.hidden = pane.dataset.scfgPanel !== key;
-      });
+/* 站点页所有内联交互都委托给 #viewSite。容器元素本身不随重绘更换（只换
+ * innerHTML），所以这里只绑一次；用 dataset 守卫挡住重复绑定。 */
+function bindSiteInlineEvents() {
+  const box = $("viewSite");
+  if (box.dataset.inlineBound) return;
+  box.dataset.inlineBound = "1";
+
+  box.addEventListener("click", async (e) => {
+    const card = e.target.closest(".site-block");
+
+    // 保存这个站点的三段配置。重绘会换掉整张卡，catch 里只复位按钮即可。
+    const save = e.target.closest("[data-save-inline]");
+    if (save && card) {
+      save.disabled = true;
+      card.classList.add("saving");
+      try {
+        await saveSiteInline(card.dataset.name, card);
+      } catch (err) {
+        toast(err.message, "err");
+        card.classList.remove("saving");
+        save.disabled = false;
+      }
       return;
     }
-    // 站点默认行的提示词：不带板块维度，打开角色级配置。
-    const gp = e.target.closest("[data-open-global-prompt]");
-    if (gp) {
-      $("modalCancel").click();
+
+    // 预问诊参数是全局一份、不属于任何站点，所以它自己有独立的保存条。
+    if (e.target.closest("[data-pv-save]")) {
+      const btn = e.target.closest("[data-pv-save]");
+      btn.disabled = true;
+      try {
+        const out = await jsonSend("PUT", "/api/previsit/config",
+          { values: collectPvValues(box) });
+        state.pvCfg = out;
+        await renderSites();
+        toast(`已保存 ${out.saved.length} 项 · 立即生效`);
+      } catch (err) {
+        toast(err.message, "err");
+        btn.disabled = false;
+      }
+      return;
+    }
+    if (e.target.closest("[data-pv-reset]")) {
+      const btn = e.target.closest("[data-pv-reset]");
+      btn.disabled = true;
+      try {
+        await jsonSend("POST", "/api/previsit/config/reset", {});
+        state.pvCfg = await api("/api/previsit/config");
+        await renderSites();
+        toast("已恢复出厂参数");
+      } catch (err) {
+        toast(err.message, "err");
+        btn.disabled = false;
+      }
+      return;
+    }
+
+    // 页面内锚点：从卡上跳到预问诊参数或前台预览，不开窗、不切页。
+    const jump = e.target.closest("[data-goto-inline]");
+    if (jump) {
+      const target = $(jump.dataset.gotoInline);
+      if (target) {
+        if (target.tagName === "DETAILS") target.open = true;
+        target.scrollIntoView({ behavior: "smooth", block: "start" });
+        target.classList.add("sif-flash");
+        setTimeout(() => target.classList.remove("sif-flash"), 1200);
+      }
+      return;
+    }
+
+    // 长文本仍走提示词抽屉，但入口直接摆在页面上，且不用先关一层弹窗。
+    if (e.target.closest("[data-open-global-prompt]")) {
       await openPromptDrawer("");
       return;
     }
-    // 站点弹窗里的文案入口：关掉本弹窗、打开提示词抽屉，并滚到对应语言那一栏。
-    // 直接叠着开两个遮罩会出现"关掉上面那个、下面那个点不动"——先关再开。
     const cp = e.target.closest("[data-open-copy]");
     if (cp) {
       const role = cp.dataset.openCopy || "";
-      $("modalCancel").click();
       await openPromptDrawer("");
       const sec = [...$("prBody").querySelectorAll(".pr-role")]
         .find((s) => role && s.textContent.includes(role));
       if (sec) sec.scrollIntoView({ block: "start" });
       return;
     }
-    // 板块提示词入口：打开提示词抽屉并预置 scope 维度。provider 传该板块
-    // 当前选中的推理后端（去 ::model），让"板块 + 后端"两层同时生效。
     const op = e.target.closest("[data-open-prompt]");
-    if (op) {
+    if (op && card) {
       const key = op.dataset.openPrompt || "";
-      const gen = body.querySelector(`[data-f="sec_${key}_role_generate"]`);
+      const gen = card.querySelector(`[data-f="sec_${key}_role_generate"]`);
       const base = String(gen && gen.value ? gen.value.split("::")[0] : "");
-      $("modalCancel").click();
       await openPromptDrawer(base, key);
       return;
     }
-    // 预问诊模型/提示词入口：收编进站点弹窗后，点它打开原来的预问诊参数面板。
-    const pv = e.target.closest("[data-open-pvcfg]");
-    if (pv) {
-      $("modalCancel").click();
-      await openPrevisitConfig();
+
+    // 翻译模型单测：输出框与下拉都限在本张卡内，多站点时互不串。
+    const tr = e.target.closest("[data-trtest]");
+    if (tr && card) {
+      const sel = card.querySelector('[data-f="role_translate"]');
+      const out = card.querySelector("[data-trout]");
+      if (!out) return;
+      tr.disabled = true;
+      out.hidden = false;
+      out.innerHTML = `<span class="hint">翻译中…（整段往返一次，云端可能要几秒）</span>`;
+      try {
+        const r = await jsonPost("/api/translate-test", { provider: sel ? sel.value : "" });
+        // 必须写实际模型：本地后端遇到不存在的模型名不报错，只静默回落。
+        const base = String(r.provider || "").split("::")[0];
+        const meta = [base, r.model, `${r.src}→${r.dst}`, `${r.latency_ms}ms`]
+          .filter(Boolean).join(" · ");
+        if (r.warn) {
+          out.innerHTML = `<div class="warn">${esc(r.warn)}</div>
+            <div class="tr-ok" dir="auto">${esc(r.output || "（无输出）")}</div>
+            <div class="hint">${esc(meta)}</div>`;
+        } else if (r.ok) {
+          out.innerHTML = `<div class="tr-ok" dir="auto">${esc(r.output)}</div>
+            <div class="hint">${esc(meta)}</div>`;
+        } else {
+          out.innerHTML = `<div class="warn">翻译失败：${esc(r.error || "输出与原文相同或为空")}</div>
+            <div class="tr-ok" dir="auto">${esc(r.output || "（无输出）")}</div>
+            <div class="hint">${esc(meta)}</div>`;
+        }
+      } catch (err) {
+        out.innerHTML = `<span class="warn">${esc(err.message)}</span>`;
+      } finally {
+        tr.disabled = false;
+      }
+    }
+  });
+
+  box.addEventListener("change", (e) => {
+    // 板块开关不只是改 checkbox：卡片灰化与徽标要跟着变。
+    const m = /^sec_(med|classic|pv)_enabled$/.exec(e.target.dataset.f || "");
+    if (m) {
+      const card = e.target.closest("[data-sec-card]") ||
+        box.querySelector(`[data-sec-card="${m[1]}"]`);
+      if (card) {
+        const on = Boolean(e.target.checked);
+        card.classList.toggle("is-off", !on);
+        const badge = card.querySelector(".scfg-badge");
+        if (badge) {
+          badge.classList.toggle("on", on);
+          badge.textContent = on ? "已显示" : "已隐藏";
+        }
+      }
       return;
     }
-    const tr = e.target.closest("[data-trtest]");
-    if (!tr) return;
-    const sel = body.querySelector('[data-f="role_translate"]');
-    const out = body.querySelector("[data-trout]");
-    if (!out) return;
-    tr.disabled = true;
-    out.hidden = false;
-    out.innerHTML = `<span class="hint">翻译中…（整段往返一次，云端可能要几秒）</span>`;
-    try {
-      const r = await jsonPost("/api/translate-test", { provider: sel ? sel.value : "" });
-      // 这一行必须写**实际**模型：本地后端对不存在的模型名不报错，只静默
-      // 回落到上一个。只显示配置值的话，配错了也看不出来。
-      const base = String(r.provider || "").split("::")[0];
-      const meta = [base, r.model, `${r.src}→${r.dst}`, `${r.latency_ms}ms`]
-        .filter(Boolean).join(" · ");
-      if (r.warn) {
-        out.innerHTML = `<div class="warn">${esc(r.warn)}</div>
-          <div class="tr-ok" dir="auto">${esc(r.output || "（无输出）")}</div>
-          <div class="hint">${esc(meta)}</div>`;
-      } else if (r.ok) {
-        out.innerHTML = `<div class="tr-ok" dir="auto">${esc(r.output)}</div>
-          <div class="hint">${esc(meta)}</div>`;
-      } else {
-        out.innerHTML = `<div class="warn">翻译失败：${esc(r.error || "输出与原文相同或为空")}</div>
-          <div class="tr-ok" dir="auto">${esc(r.output || "（无输出）")}</div>
-          <div class="hint">${esc(meta)}</div>`;
-      }
-    } catch (err) {
-      out.innerHTML = `<span class="warn">${esc(err.message)}</span>`;
-    } finally {
-      tr.disabled = false;
+    // 换后端要同步换模型候选，否则留下一个必然 404 的「后端 + 模型」组合。
+    if (e.target.dataset.pv === "provider") {
+      syncPvModelOptions(e.target.value, box);
     }
   });
-  // 板块开关不只是改一个 checkbox：卡片的灰化与右侧徽标要跟着变，
-  // 否则「关掉了但看起来还开着」比没有开关更误导。
-  body.addEventListener("change", (e) => {
-    const m = /^sec_(med|classic|pv)_enabled$/.exec(e.target.dataset.f || "");
-    if (!m) return;
-    const card = body.querySelector(`[data-sec-card="${m[1]}"]`);
-    if (!card) return;
-    const on = Boolean(e.target.checked);
-    card.classList.toggle("is-off", !on);
-    const badge = card.querySelector(".scfg-badge");
-    if (badge) {
-      badge.classList.toggle("on", on);
-      badge.textContent = on ? "已显示" : "已隐藏";
-    }
-  });
+
+  // 前台预览：iframe 只在展开时挂 src，不拖慢首次切页。toggle 不冒泡，
+  // 所以用捕获阶段监听容器。
+  box.addEventListener("toggle", (e) => {
+    const d = e.target.closest(".site-preview");
+    if (!d || !d.open) return;
+    const frame = d.querySelector("iframe[data-src]");
+    if (frame && !frame.src) frame.src = frame.dataset.src;
+  }, true);
 }
 
 /* 把一张卡上的控件读成一份完整 payload。
@@ -6965,25 +6924,14 @@ function readSiteBlock(block) {
   return out;
 }
 
-/* 预问诊不再有"单独站点"卡：它已经是维医站点里的第三个板块（站点弹窗 → 板块）。
- * 参数入口放在站点卡上那颗「预问诊参数」，打开的还是同一个面板——只是归属
- * 从"一张独立卡"变成"这个站点的一个入口"，和用户在站点上看到的三个板块一致。 */
-
-/* ------------------------------------------------------------ 预问诊参数面板 */
-async function openPrevisitConfig() {
-  let cfg;
-  try {
-    cfg = await api("/api/previsit/config");
-  } catch (err) {
-    toast(`读不到预问诊参数：${err.message}`, "err");
-    return;
-  }
-  state.pvCfg = cfg;
+/* 预问诊参数是全局一份（config/previsit.yaml 的差异层），不属于任何站点：
+ * 所以它单独成段放在站点卡下面，多站点时也只渲染一次。原来它是一个 modal，
+ * 需要「卡上点一下 → 弹窗 → 再关掉」，现在整段表单常驻页面。 */
+function pvGroupsHtml(cfg) {
   const groups = cfg.groups || [];
   const fields = cfg.fields || [];
   const changed = new Set(cfg.overridden || []);
-
-  const groupHTML = (g) => {
+  return groups.map((g) => {
     const own = fields.filter((f) => f.group === g.key);
     if (!own.length) return "";
     return `<div class="pv-group">
@@ -6991,65 +6939,59 @@ async function openPrevisitConfig() {
         ${g.desc ? `<span class="hint">${esc(g.desc)}</span>` : ""}</div>
       <div class="form-grid">${own.map((f) => pvFieldHTML(f, changed, cfg)).join("")}</div>
     </div>`;
-  };
+  }).join("");
+}
 
+function previsitInlineHtml(cfg) {
+  if (!cfg) return `<section class="sif-sec sif-standalone" id="pvInline">
+      <div class="sif-head"><span class="sif-n">04</span>
+        <div class="sif-ht"><b>预问诊参数</b><span>全局配置，不随站点分</span></div></div>
+      <div class="sif-body"><p class="hint">读不到预问诊参数，刷新一下再试。</p></div>
+    </section>`;
   const rt = cfg.runtime || {};
-  // 这行只报"现在真在用什么"。槽位/图谱/召回那套早就删了，继续照旧显示
-  // 「图谱不可用 · 召回关闭」会把真正的故障点（维语翻译没接上）盖住。
+  // 只报"现在真在用什么"。槽位/图谱/召回那套早删了，写回去会把真正的
+  // 故障点（维语翻译没接上）盖住。
   const rtLine = [
     rt.llm ? `模型 ${esc(rt.model || "已接上")}` : "模型未接上",
     rt.translator
       ? `维语翻译 ${esc(rt.translator_model || "已接上")}`
       : "维语翻译未接上（维语会话会报错，不会退回中文）",
   ].join(" · ");
-  // 路径只显示文件名：绝对路径在这里会被弹窗右边裁掉，看起来像排版坏了。
   const file = String(cfg.overrides_path || "").split(/[\\/]/).pop();
 
-  showModal("预问诊 · 模型与参数", `
-    <p class="hint u-mb12-0">
-      改的是 <code title="${esc(cfg.overrides_path || "")}">config/${esc(file)}</code>：
-      只记和 <code>previsit.yaml</code> 不一样的键，改回默认值那一行会自动消失。
-      保存后立即生效——不重启、不打断正在进行的问诊。
-    </p>
-    <div class="pv-rt">${esc(rtLine)}${rt.llm_error ? ` · 上次报错：${esc(rt.llm_error)}` : ""}${rt.translator_error ? ` · 翻译报错：${esc(rt.translator_error)}` : ""}</div>
-    <div class="pv-groups">${groups.map(groupHTML).join("")}</div>
-    <div class="form-actions">
-      <button class="mini" type="button" id="pvReset">全部恢复出厂值</button>
-      <span class="hint">密钥不在这里配：在「模型」页填一次，预问诊跟着用。</span>
-    </div>`,
-    async () => {
-      const values = collectPvValues();
-      const out = await jsonSend("PUT", "/api/previsit/config", { values });
-      state.pvCfg = out;
-      await renderSites();
-      toast(`已保存 ${out.saved.length} 项 · 立即生效`);
-    },
-    { okLabel: "保存并生效", wide: true });
+  return `<section class="sif-sec sif-standalone" id="pvInline">
+    <div class="sif-head">
+      <span class="sif-n">04</span>
+      <div class="sif-ht"><b>预问诊参数</b><span>全局配置，不随站点分</span></div>
+    </div>
+    <div class="sif-body">
+      <p class="hint u-mb12-0">改的是
+        <code title="${esc(cfg.overrides_path || "")}">config/${esc(file)}</code>：
+        只记和 <code>previsit.yaml</code> 不一样的键，改回默认值那一行会自动消失。
+        保存后立即生效——不重启、不打断正在进行的问诊。</p>
+      <div class="pv-rt">${esc(rtLine)}${rt.llm_error ? ` · 上次报错：${esc(rt.llm_error)}` : ""}${rt.translator_error ? ` · 翻译报错：${esc(rt.translator_error)}` : ""}</div>
+      <div class="pv-groups">${pvGroupsHtml(cfg)}</div>
+      <div class="sif-savebar">
+        <span class="sif-save-hint">密钥不在这里配：在「模型」页填一次，预问诊跟着用。</span>
+        <button class="mini" type="button" data-pv-reset>恢复出厂值</button>
+        <button class="primary-btn" type="button" data-pv-save>保存并生效</button>
+      </div>
+    </div>
+  </section>`;
+}
 
-  $("pvReset").onclick = async () => {
-    try {
-      await jsonSend("POST", "/api/previsit/config/reset", {});
-      state.pvCfg = await api("/api/previsit/config");
-      $("modal").hidden = true;
-      await renderSites();
-      toast("已恢复出厂参数");
-    } catch (err) {
-      toast(err.message, "err");
-    }
-  };
-
-  // 换后端要同步换模型候选：留着一个别的后端的模型名，保存后是一个
-  // 必然 404 的组合，而且没人会想到是"下拉没跟着变"。
-  // 只绑一次：modalBody 是同一个元素，每开一次弹窗都 addEventListener 会
-  // 累积一串处理器（虽然幂等，但会一直涨）。
-  const body = $("modalBody");
-  if (!body.dataset.pvBound) {
-    body.dataset.pvBound = "1";
-    body.addEventListener("change", (e) => {
-      if (e.target.dataset.pv === "provider") syncPvModelOptions(e.target.value);
-    });
-  }
-  syncPvModelOptions(($("pv_provider") || {}).value || "");
+/* 前台预览也收进这一页。details 默认折叠、展开才挂 src，免得每次切页
+ * 都白拉一遍 8800 上的前台页面。 */
+function frontPreviewHtml(items) {
+  const first = (items || []).find((i) => i.url);
+  if (!first) return "";
+  return `<details class="site-preview" id="sitePreview">
+      <summary><b>前台预览</b><span>${esc(first.url)} · 展开才加载，不新开窗口</span></summary>
+      <div class="site-preview-body">
+        <iframe data-src="${esc(first.url)}" title="前台问答站预览"
+          loading="lazy" referrerpolicy="no-referrer"></iframe>
+      </div>
+    </details>`;
 }
 
 function pvModelCandidates(cfg, provider) {
@@ -7059,13 +7001,12 @@ function pvModelCandidates(cfg, provider) {
   return (hit && hit.models) || [];
 }
 
-function syncPvModelOptions(provider) {
-  const box = $("pvModelList");
+function syncPvModelOptions(provider, root = document) {
+  const box = root.querySelector("#pvModelList");
   if (!box) return;
   const list = pvModelCandidates(state.pvCfg || {}, provider);
   box.innerHTML = list.map((m) => `<option value="${esc(m)}"></option>`).join("");
-  const input = $("pv_model");
-  if (input && !input.value.trim() && !provider) input.placeholder = "跟随该后端的默认模型";
+  const input = root.querySelector("#pv_model");
   if (input) input.placeholder = provider ? "留空 = 该后端的默认模型" : "跟随后台默认模型";
 }
 
@@ -7112,9 +7053,9 @@ function pvFieldHTML(f, changedSet, cfg) {
   </div>`;
 }
 
-function collectPvValues() {
+function collectPvValues(root = document) {
   const out = {};
-  for (const el of $("modalBody").querySelectorAll("[data-pv]")) {
+  for (const el of root.querySelectorAll("[data-pv]")) {
     const path = el.dataset.pv;
     if (el.type === "checkbox") out[path] = el.checked;
     else if (el.type === "number") out[path] = el.value === "" ? "" : Number(el.value);
@@ -7123,12 +7064,13 @@ function collectPvValues() {
   return out;
 }
 
-function paintSites(d, roles, meta) {
+function paintSites(d, roles, meta, pv) {
   const data = d || state.sites;
   if (!data) return;
   state.sites = data;
   state.rolePlan = roles;
   state.modelMeta = meta || [];
+  state.pvCfg = pv || null;
   const items = data.items || [];
   const running = items.filter((i) => i.status === "running").length;
   // 外部托管的站点是**能访问**的，只是不归这个后台管。把它算成"没在跑"，
@@ -7146,11 +7088,17 @@ function paintSites(d, roles, meta) {
   $("viewSite").innerHTML = `<div class="page">
     ${items.length
       ? items.map((i) => siteBlock(i, meta, plans.find((p) => p.name === i.name),
-        (roles && roles.default_provider) || "")).join("")
+        (roles && roles.default_provider) || "", pv)).join("")
       : `<div class="card"><p class="hint" style="margin:6px 0 12px">还没有前台站点。</p></div>`}
+    ${previsitInlineHtml(pv)}
+    ${frontPreviewHtml(items)}
   </div>`;
 
   $("btnNewSite").onclick = () => openSiteEditor(null);
+  // datalist 里的模型候选要按当前 provider 填一次，否则下拉是空的。
+  const box = $("viewSite");
+  const prov = box.querySelector("#pv_provider");
+  if (prov) syncPvModelOptions(prov.value, box);
 }
 
 /* 切页加速三件事：① 不撕掉上次的卡片（只有从没画过才给骨架）；
@@ -7164,14 +7112,15 @@ async function renderSites() {
     box.innerHTML = `<div class="page"><div class="card">
       <div class="card-head"><h3>正在加载…</h3></div></div></div>`;
   }
-  let d, r, meta;
+  let d, r, meta, pv;
   try {
-    // 角色配置、后端清单和实例列表互不依赖，一起发。/api/models 是三者里
-    // 最慢的那个，不再把它排在最后等。
-    [d, r, meta] = await Promise.all([
+    // 角色配置、后端清单、实例列表、预问诊参数互不依赖，一起发。
+    // /api/models 是四者里最慢的那个，不再把它排在最后等。
+    [d, r, meta, pv] = await Promise.all([
       api("/api/instances"),
       api("/api/model-roles").catch(() => null),
       api("/api/models").then((x) => (x && x.providers) || []).catch(() => []),
+      api("/api/previsit/config").catch(() => null),
     ]);
   } catch (err) {
     if (seq !== _siteRenderSeq) return;
@@ -7183,34 +7132,16 @@ async function renderSites() {
     return;
   }
   if (seq !== _siteRenderSeq) return;
-  paintSites(d, r, meta);
+  paintSites(d, r, meta, pv);
   bindSiteActions();
   box.dataset.ready = "1";
 }
 
 function bindSiteActions() {
   const box = $("viewSite");
-  // 按钮绑在容器上：卡片每次重绘都会换掉 DOM，绑在按钮上就得每次重绑。
+  bindSiteInlineEvents();
+  // 运行类按钮绑在容器上：卡片每次重绘都会换掉 DOM，绑在按钮上就得每次重绑。
   box.onclick = async (e) => {
-    // 预问诊的「模型与参数」：它不是实例，走的是自己那套配置接口。
-    if (e.target.closest("[data-pvcfg]")) {
-      await openPrevisitConfig();
-      return;
-    }
-    // 参数区每一行：点哪行就打开站点配置并停在哪一页。
-    const jump = e.target.closest("[data-jumptab]");
-    if (jump) {
-      const blk = jump.closest(".site-block");
-      if (blk) await openSiteConfig(blk.dataset.name, jump.dataset.jumptab);
-      return;
-    }
-    // 站点的「模型与参数」：字段从卡上收进弹窗，接口还是同一个 PUT。
-    const cfgBtn = e.target.closest("[data-scfg]");
-    if (cfgBtn) {
-      const blk = cfgBtn.closest(".site-block");
-      if (blk) await openSiteConfig(blk.dataset.name);
-      return;
-    }
     const btn = e.target.closest("[data-sact]");
     if (!btn) return;
     const act = btn.dataset.sact;

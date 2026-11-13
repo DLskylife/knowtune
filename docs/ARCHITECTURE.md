@@ -168,7 +168,7 @@ src/knowtune/            主项目
   api/app.py             FastAPI 装配入口（生命周期 / 中间件 / 注册路由），约 270 行
   api/routes/           94 个端点按资源域拆成 8 个模块；/v1 网关在 models.py
   api/common.py / state.py / coverage.py  公共层：分片上传 / AppState / 引用覆盖率
-  api/static/            后台前端：index.html / app.js / style.css，构建号 0.9.67
+  api/static/            后台前端：index.html / app.js / style.css，构建号 0.9.68
   frontsite/             instcfg / runner / site
     static/              前台前端：index.html / app.js / style.css
   previsit/app.py        主项目装配层（注入进程内检索器、LLM 适配器、建 FastAPI app）
@@ -606,7 +606,7 @@ effective_fields(): 逐字段
 | `classic` | 独立库 RAG | kb 4，5 篇文档 / 1120 块 | 开 |
 | `pv` | 预问诊引擎，**不检索知识库** | — | 开 |
 
-三板块可在后台「站点」弹窗里分别配：显示名、开关、`translate`/`generate` 后端、专属提示词（`scope=med|classic`）。**板块切换会换会话、换标题、换绑定库；不是只换皮肤。**
+三板块可在后台「站点」页的内联配置区里分别配：显示名、开关、`translate`/`generate` 后端、专属提示词（`scope=med|classic`）。**板块切换会换会话、换标题、换绑定库；不是只换皮肤。**
 
 ### 9.5 预问诊挂载与 `_SectionGate`
 
