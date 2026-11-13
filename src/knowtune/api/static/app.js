@@ -1,6 +1,6 @@
 /* 构建号：与 index.html 里那份一致，不一致说明浏览器拿到的是旧 JS，
    页面加载完会强制换一次（见 index.html 的自检脚本）。 */
-window.ADMIN_BUILD = "0.9.63";
+window.ADMIN_BUILD = "0.9.64";
 
 const $ = (id) => document.getElementById(id);
 
@@ -6305,6 +6305,14 @@ function roleText(v) {
 const LANG_NAME = { ug: "维吾尔语（RTL）", zh: "中文", en: "English" };
 const KB_LANG_NAME = { zh: "中文语料", ug: "维吾尔语料", en: "英语语料" };
 
+/* 2026-11-13 调整：四格原来是只读摘要，想改参数只能回右上角那颗按钮；
+ * 六颗按钮平铺没主次，运行时长直接甩一个 `572s`，模型名单行截断，
+ * 底部维吾尔语自检长文把一张卡撑到半屏。现在四格就是参数快捷入口，
+ * 点哪格开哪页；长文本两行内可读，自检折起来，异常照旧立刻可见。 */
+const TAB_NAME = {
+  sections: "板块与知识库", models: "模型与提示词", site: "站点设置",
+};
+
 function siteBlock(i, meta, plan, defProv) {
   const d = state.sites || {};
   const running = i.status === "running";
@@ -6328,12 +6336,41 @@ function siteBlock(i, meta, plan, defProv) {
     ? `<span class="sbk-dim warn" title="页面语言按文案内容判定，下拉只在判不出时兜底"
         >实际显示：${esc(LANG_NAME[i.content_lang] || i.content_lang)}</span>`
     : "";
+  // uptime() 会换算成「9 分 32 秒」；以前这里直接把秒数拼上去，卡上写 572s。
   const stateText = running
-    ? (i.uptime_s ? "已运行 " + i.uptime_s + "s" : "运行中")
+    ? (i.uptime_s ? "已运行 " + uptime(i.uptime_s) : "运行中")
     : external
       ? ((i.managed_by && i.managed_by.pid) ? "PID " + i.managed_by.pid
         : "另开的那个后台在跑")
       : "未运行";
+
+  /* 一段说明折成一行，点开看全文。自检/备注是"要看时才看"的信息，
+   * 维吾尔文样本还带 RTL 混排，默认全展开会把一张卡撑成半屏。 */
+  const foldNote = (label, text, cls = "", forceOpen = false) => {
+    const full = String(text || "");
+    if (!full) return "";
+    const long = full.length > 78;
+    const brief = long ? full.slice(0, 78) + "…" : full;
+    return `<details class="sbk-note-line${cls ? " " + cls : ""}"${
+      !long || forceOpen ? " open" : ""}>
+        <summary><span class="sbk-note-tag">${esc(label)}</span>${esc(brief)}</summary>
+        ${long ? `<div class="sbk-note-full">${esc(full)}</div>` : ""}
+      </details>`;
+  };
+
+  /* 四格同一形态：标签 / 主值 / 辅值。整格是按钮，跳到对应配置页签。
+   * dir=auto 让维吾尔文库名按自身方向排版，不在 LTR 容器里被拉乱。 */
+  const fact = (tab, label, main, sub, cls = "") => `<button type="button"
+      class="sbk-fact${cls ? " " + cls : ""}"
+      data-jumptab="${tab}" title="${esc(main + " · " + sub)}｜打开「${esc(TAB_NAME[tab])}」">
+      <span>${esc(label)}<span class="sbk-fact-go">↗</span></span>
+      <b dir="auto">${esc(main)}</b>
+      <i dir="auto">${esc(sub)}</i>
+    </button>`;
+
+  const ugText = i.ug_note
+    ? i.ug_note + (i.ug_sample ? `（模型返回：${i.ug_sample.slice(0, 40)}）` : "")
+    : "";
 
   return `<section class="site-block${running || external ? "" : " is-off"}"
       data-name="${esc(i.name)}">
@@ -6341,61 +6378,53 @@ function siteBlock(i, meta, plan, defProv) {
       <div class="sbk-id">
         <span class="sbk-name">${esc(i.name)}</span>
         ${siteStatusBadge(i.status)}
-        <span class="sbk-dim">端口 ${i.port}</span>
-        <span class="sbk-dim">${stateText}</span>
-        ${i.public ? `<span class="sbk-dim">局域网可访问</span>` : ""}
-        ${shown}
+        <span class="sbk-meta"><span>端口 ${i.port}</span><span>${stateText}</span>${shown}</span>
       </div>
       <div class="sbk-acts">
-        <button class="mini" data-scfg
-          title="板块、知识库、端口、模型角色、语言与全部界面文案">模型与参数</button>
-        ${secOn("pv") ? `<button class="mini" data-pvcfg
-          title="预问诊的模型、轮次、知识图谱追问、语义召回与提示词">预问诊参数</button>` : ""}
-        <button class="mini" data-sact="copy" data-url="${esc(i.url)}">复制链接</button>
-        ${external ? "" : `<button class="mini" data-sact="${running ? "stop" : "start"}"
-          ${busy ? "disabled" : ""}>${running ? "停止" : "启动"}</button>`}
-        ${external ? "" : `<button class="mini" data-sact="restart"
-          ${busy ? "disabled" : ""}>重启</button>`}
-        <a class="mini loc" href="${esc(i.url)}" target="_blank" rel="noreferrer">打开</a>
+        <div class="sbk-act-group">
+          <button class="mini is-primary" data-scfg
+            title="板块、知识库、端口、模型角色、语言与全部界面文案">模型与参数</button>
+          ${secOn("pv") ? `<button class="mini" data-pvcfg
+            title="预问诊的模型、轮次、知识图谱追问、语义召回与提示词">预问诊参数</button>` : ""}
+        </div>
+        <div class="sbk-act-group is-ops">
+          <button class="mini" data-sact="copy" data-url="${esc(i.url)}">复制链接</button>
+          ${external ? "" : `<button class="mini${running ? " is-danger" : ""}"
+            data-sact="${running ? "stop" : "start"}" ${busy ? "disabled" : ""
+            }>${running ? "停止" : "启动"}</button>`}
+          ${external ? "" : `<button class="mini" data-sact="restart"
+            ${busy ? "disabled" : ""}>重启</button>`}
+          <a class="mini loc" href="${esc(i.url)}" target="_blank" rel="noreferrer">打开</a>
+        </div>
       </div>
     </header>
 
-    <div class="sbk-url"><a href="${esc(i.url)}" target="_blank"
-      rel="noreferrer">${esc(i.url)}</a></div>
+    <div class="sbk-url">
+      <span class="sbk-url-k">访问地址</span>
+      <a href="${esc(i.url)}" target="_blank" rel="noreferrer">${esc(i.url)}</a>
+      ${i.public ? `<span class="sbk-url-tag">局域网可访问</span>` : ""}
+    </div>
 
     <div class="sbk-sec">
-      <div class="sbk-label">当前生效<span class="sbk-note">保存后立即生效；改端口或监听会重启</span></div>
+      <div class="sbk-label">当前生效
+        <span class="sbk-note">点任意一格，直接跳到对应参数</span>
+        <span class="sbk-label-tail">保存后立即生效 · 改端口或监听会重启</span>
+      </div>
       <div class="sbk-facts">
-        <div class="sbk-fact">
-          <span>入口</span>
-          <b class="${secNames ? "" : "bad"}" title="${esc(secNames || "全部关闭")}"
-            >${esc(secNames || "全部关闭")}</b>
-          <i>${secCount} / 3 个板块已开启</i>
-        </div>
-        <div class="sbk-fact">
-          <span>知识库</span>
-          <b title="${esc(i.kb_name || (kb && kb.name) || `#${i.kb_id}`)}"
-            >${esc(i.kb_name || (kb && kb.name) || `#${i.kb_id}`)}</b>
-          <i>古籍：${esc(classicKb ? classicKb.name : "按标题分流")}</i>
-        </div>
-        <div class="sbk-fact">
-          <span>模型 · 译 / 答</span>
-          <b title="译 ${esc(roleText(resolved.translate))}">译 ${esc(roleText(resolved.translate))}</b>
-          <i title="答 ${esc(roleText(resolved.generate))}">答 ${esc(roleText(resolved.generate))}</i>
-        </div>
-        <div class="sbk-fact">
-          <span>语言 / 产出</span>
-          <b>${esc(LANG_NAME[i.lang] || i.lang)} · ${esc(mode)}</b>
-          <i>${esc(KB_LANG_NAME[i.kb_lang] || i.kb_lang || "-")}${i.autostart ? " · 开机自启" : ""}</i>
-        </div>
+        ${fact("sections", "入口", secNames || "全部关闭", `${secCount} / 3 个板块已开启`,
+          secNames ? "" : "is-warn")}
+        ${fact("sections", "知识库", i.kb_name || (kb && kb.name) || `#${i.kb_id}`,
+          `古籍：${classicKb ? classicKb.name : "按标题分流"}`)}
+        ${fact("models", "模型 · 译 / 答", `译 ${roleText(resolved.translate)}`,
+          `答 ${roleText(resolved.generate)}`)}
+        ${fact("site", "语言 / 产出", `${LANG_NAME[i.lang] || i.lang} · ${mode}`,
+          `${KB_LANG_NAME[i.kb_lang] || i.kb_lang || "-"}${i.autostart ? " · 开机自启" : ""}`)}
       </div>
     </div>
 
-    ${i.ug_note ? `<div class="sbk-note-line${i.ug_capable === false ? " bad" : ""}"
-      >维吾尔语自检：${esc(i.ug_note)}${i.ug_sample
-        ? `（模型返回：${esc(i.ug_sample.slice(0, 40))}）` : ""}</div>` : ""}
-    ${i.error ? `<div class="sbk-note-line bad">${esc(i.error)}</div>` : ""}
-    ${i.note ? `<div class="sbk-note-line">${esc(i.note)}</div>` : ""}
+    ${foldNote("维吾尔语自检", ugText, i.ug_capable === false ? "bad" : "", i.ug_capable === false)}
+    ${foldNote("异常", i.error, "bad", true)}
+    ${foldNote("备注", i.note)}
   </section>`;
 }
 
@@ -6625,7 +6654,9 @@ function siteGroups(i, meta, plan, defProv, pv) {
     <div class="scfg-panel" data-scfg-panel="site" hidden>${sitePanel}</div>`;
 }
 
-async function openSiteConfig(name) {
+/* initialTab：卡片上的四格参数入口会带一个页签名过来，直接停在那一页，
+ * 不用用户在三个页签里再找一遍。缺省仍停在「模型与提示词」（siteGroups 的默认值）。 */
+async function openSiteConfig(name, initialTab = "") {
   const i = (state.sites.items || []).find((x) => x.name === name);
   if (!i) { toast("这个站点已经不在了，刷新一下", "err"); return; }
   const plans = (state.rolePlan && state.rolePlan.sites) || [];
@@ -6682,6 +6713,12 @@ async function openSiteConfig(name) {
     }, { okLabel: "保存并生效", wide: true, cls: "site" });
 
   bindTrTest();
+  // 页签切换的处理器挂在 #modalBody 上（bindTrTest），节点一直不换，
+  // 所以这里点一下对应按钮就能复用同一套切换逻辑，不复制第二份状态。
+  if (TAB_NAME[initialTab]) {
+    const tab = $("modalBody").querySelector(`[data-scfg-tab="${initialTab}"]`);
+    if (tab && !tab.classList.contains("active")) tab.click();
+  }
 }
 
 /* 翻译模型单测。按钮在弹窗里（不在卡片上），所以绑在 modalBody 上；
@@ -7028,10 +7065,12 @@ function paintSites(d, roles, meta) {
 
   const plans = (roles && roles.sites) || [];
   $("viewSite").innerHTML = `<div class="page">
-    <p class="hint u-mb12">
-      每张卡都是一个对外入口。点<span class="kbd-inline">模型与参数</span>改配置，
-      保存后立即生效；只有<span class="kbd-inline">端口</span>和
-      <span class="kbd-inline">局域网可访问</span>动到 socket，会重启那个站点。
+    <p class="sbk-pagehint">
+      <span class="sbk-pagehint-k">怎么用</span>
+      每张卡都是一个对外入口：点<span class="kbd-inline">模型与参数</span>，
+      或直接点卡片上的任意一格参数，就能跳到对应配置页。保存后立即生效；只有
+      <span class="kbd-inline">端口</span>和<span class="kbd-inline">局域网可访问</span>
+      会动到 socket、重启那个站点。
     </p>
     ${items.length
       ? items.map((i) => siteBlock(i, meta, plans.find((p) => p.name === i.name),
@@ -7072,6 +7111,13 @@ function bindSiteActions() {
     // 预问诊的「模型与参数」：它不是实例，走的是自己那套配置接口。
     if (e.target.closest("[data-pvcfg]")) {
       await openPrevisitConfig();
+      return;
+    }
+    // 卡片事实区的四格：点哪格就打开站点配置并停在哪一页。
+    const jump = e.target.closest("[data-jumptab]");
+    if (jump) {
+      const blk = jump.closest(".site-block");
+      if (blk) await openSiteConfig(blk.dataset.name, jump.dataset.jumptab);
       return;
     }
     // 站点的「模型与参数」：字段从卡上收进弹窗，接口还是同一个 PUT。

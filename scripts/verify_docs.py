@@ -298,6 +298,21 @@ cli_smoke = subprocess.run(
 if cli_smoke.returncode or "serve" not in cli_smoke.stdout:
     errors.append(f"[install] CLI 入口不可用：{cli_smoke.stderr.strip()[-300:]}")
 
+# 站点卡四格参数入口：README 写「四格既是当前值也是按钮」，代码得真接住。
+# 防止有人把事实区改回只读 div，文档却还写着"点哪格开哪页"。
+admin_js = (STATIC / "api" / "static/app.js").read_text(encoding="utf-8")
+for token, why in (
+    ("const TAB_NAME", "页签映射"),
+    ('data-jumptab="${tab}"', "四格按钮的跳转属性"),
+    ("async function openSiteConfig(name, initialTab", "弹窗初始页签参数"),
+    ("jump.dataset.jumptab", "卡片点击分支"),
+):
+    if token not in admin_js:
+        errors.append(f"[ui] app.js 缺少站点卡参数入口的{why}：{token}")
+admin_css = (STATIC / "api" / "static/style.css").read_text(encoding="utf-8")
+if ".sbk-fact:hover" not in admin_css:
+    errors.append("[ui] style.css 缺少 .sbk-fact 的可点样式")
+
 # models.yaml 不允许盘符绝对路径（项目外模型用 ../ 相对路径）
 for p in (ROOT / "config").glob("*.yaml"):
     for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
