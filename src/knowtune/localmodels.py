@@ -25,9 +25,12 @@ import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Iterable
@@ -257,7 +260,7 @@ def scan(dirs: Iterable[str] | None = None, limit: int = 500) -> list[ScannedMod
 # ------------------------------------------------------------------ 可执行
 
 
-def find_server(explicit: str = "") -> str:
+def _find_server_uncached(explicit: str = "") -> str:
     """定位 llama-server。找到返回绝对路径，找不到抛 LocalError（带安装指引）。"""
     if explicit and paths_mod.resolve_source(explicit).exists():
         return str(paths_mod.resolve_source(explicit))
@@ -292,6 +295,22 @@ def find_server(explicit: str = "") -> str:
     )
 
 
+# 可执行文件的位置不会每两秒变一次，但 describe_env() 每次都要问它，
+# which/exists 一圈下来 0.24s。缓存 60 秒；失败不缓存，用户装完能立刻找到。
+_SERVER_CACHE: dict[str, tuple[float, str]] = {}
+_SERVER_CACHE_TTL_S = 60.0
+
+
+def find_server(explicit: str = "") -> str:
+    key = explicit or "__auto__"
+    hit = _SERVER_CACHE.get(key)
+    if hit and time.time() - hit[0] < _SERVER_CACHE_TTL_S:
+        return hit[1]
+    path = _find_server_uncached(explicit)
+    _SERVER_CACHE[key] = (time.time(), path)
+    return path
+
+
 # ------------------------------------------------------------------ 状态
 
 
@@ -304,6 +323,9 @@ def _write_state(inst: Instance) -> None:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     _state_path(inst.name).write_text(
         json.dumps(inst.as_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
+    # 状态刚变过，展示用的快照必须立刻作废：否则刚点完「启动」，界面还会
+    # 拿着两秒前的缓存说「没在跑」。
+    invalidate_running_cache()
 
 
 def _read_state(name: str) -> dict[str, Any] | None:
@@ -344,6 +366,14 @@ def _run_text(cmd: list[str], timeout: float = 8) -> str:
 def _pid_alive(pid: int) -> bool:
     if pid <= 0:
         return False
+    # psutil 直接查进程表：一次系统调用，比起 tasklist 子进程（约 0.35s）快
+    # 两个数量级。切页时每个实例都要问一次，这一步是原先最亏的地方。
+    # 注意不用 os.kill(pid, 0)：Windows 上它对已退出进程也可能返回成功。
+    try:
+        import psutil
+        return bool(psutil.pid_exists(pid))
+    except Exception:
+        pass  # 没装 psutil 就退回原来的 tasklist / os.kill 路径
     if os.name == "nt":
         # tasklist 比 os.kill(pid, 0) 可靠：Windows 上后者对已退出进程也可能
         # 返回成功，导致"明明死了却显示运行中"。
@@ -392,7 +422,23 @@ def _cmdline_of(pid: int) -> str:
         return ""
 
 
+def _port_open(port: int, timeout: float = 0.05) -> bool:
+    """端口有没有人听。本地回环上连接被拒绝是瞬时的，比发一个完整 HTTP
+    请求再等 httpx 报超时快一个数量级——没起服务时这一步尤其值钱。"""
+    if port <= 0:
+        return False
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
 def _alive(port: int, timeout: float = 0.6) -> bool:
+    # 先探 TCP：端口没开就直接判没就绪，别再让 HTTP 客户端走完整的连接超时。
+    # 端口开了才发 /v1/models，确认服务真的能应答（刚启动时进程在、HTTP 还没好）。
+    if not _port_open(port):
+        return False
     try:
         with httpx.Client(timeout=timeout, trust_env=False) as c:
             r = c.get(f"http://127.0.0.1:{port}/v1/models")
@@ -447,19 +493,57 @@ def _api_from_state(st: dict[str, Any]) -> dict[str, Any]:
     return api_info(inst)
 
 
-def running() -> dict[str, dict[str, Any]]:
-    """所有有记录的实例状态，按名字索引。list 页面一次拿全，不必逐个问。"""
-    out: dict[str, dict[str, Any]] = {}
-    if not STATE_DIR.exists():
-        return out
-    for p in STATE_DIR.glob("*.json"):
-        try:
-            st = json.loads(p.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        name = str(st.get("name") or p.stem)
-        out[name] = status(name)
-    return out
+# 所有有记录的实例状态，按名字索引。
+#
+# 这份数据被 /api/models、/api/gateway 等只读接口反复取用，而单个实例的
+# status() 要起一次 tasklist 再探一次端口 —— 四个实例串行下来 1.4s+，直接
+# 把后台切页拖成白屏。结论只用于展示，所以：
+#   1. 各实例并发探测（耗时从「相加」变成「取最慢的一个」）；
+#   2. 五秒内的重复提问复用快照（切页、连点刷新都不再重新探测）；
+#   3. _write_state / forget 一改状态就 invalidate_running_cache()，
+#      启动和停止仍然当次可见，不会被缓存糊住。
+# 需要绕开缓存时用 running(force=True)。
+_RUN_CACHE: tuple[float, dict[str, dict[str, Any]]] | None = None
+_RUN_CACHE_TTL_S = 5.0
+_RUN_CACHE_LOCK = threading.Lock()
+
+
+def invalidate_running_cache() -> None:
+    global _RUN_CACHE
+    with _RUN_CACHE_LOCK:
+        _RUN_CACHE = None
+
+
+def _probe_all_states() -> dict[str, dict[str, Any]]:
+    names: list[str] = []
+    if STATE_DIR.exists():
+        for p in STATE_DIR.glob("*.json"):
+            try:
+                st = json.loads(p.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            names.append(str(st.get("name") or p.stem))
+    if not names:
+        return {}
+    with ThreadPoolExecutor(max_workers=min(8, len(names))) as pool:
+        return dict(zip(names, pool.map(status, names)))
+
+
+def running(force: bool = False) -> dict[str, dict[str, Any]]:
+    """带短 TTL 的实例状态快照；force=True 立即重探。"""
+    global _RUN_CACHE
+    now = time.time()
+    hit = _RUN_CACHE
+    if not force and hit and now - hit[0] < _RUN_CACHE_TTL_S:
+        return hit[1]
+    # 锁内再查一次：并发进来的一批请求只探测一次，其余直接吃快照。
+    with _RUN_CACHE_LOCK:
+        hit = _RUN_CACHE
+        if not force and hit and time.time() - hit[0] < _RUN_CACHE_TTL_S:
+            return hit[1]
+        snap = _probe_all_states()
+        _RUN_CACHE = (time.time(), snap)
+        return snap
 
 
 def _pick_port(preferred: int | None = None, *, strict: bool = False) -> int:
@@ -634,6 +718,7 @@ def forget(name: str) -> None:
         _state_path(name).unlink()
     except OSError:
         pass
+    invalidate_running_cache()
 
 
 def base_url_for(port: int) -> str:

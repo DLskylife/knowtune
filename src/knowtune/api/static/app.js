@@ -1,6 +1,6 @@
 /* 构建号：与 index.html 里那份一致，不一致说明浏览器拿到的是旧 JS，
    页面加载完会强制换一次（见 index.html 的自检脚本）。 */
-window.ADMIN_BUILD = "0.9.65";
+window.ADMIN_BUILD = "0.9.66";
 
 const $ = (id) => document.getElementById(id);
 
@@ -30,7 +30,30 @@ let warmTimer = null;
 
 /* ------------------------------------------------------------------ HTTP */
 
-async function api(path, options = {}) {
+/* 切页为什么以前慢：每次 setView 都会把整页数据重拉一遍，其中
+   /api/models 和 /api/gateway 要探本地模型进程，冷的时候接近 2 秒；站点页
+   还把这三四个请求排成串行、先把卡片清空成「正在加载…」。用户看到的就是
+   「点一下，白两秒」。
+
+   切页是「看一眼」，不是「重新测一遍」。这些纯只读的展示型 GET 在 3 秒内
+   复用上次结果，页面当帧就能画出来；任何写操作自动作废快照，保存完立刻
+   拿到新值。轮询类接口（任务进度、/api/status）不在白名单里，永远实时。 */
+const API_CACHE_TTL_MS = 3000;
+const API_CACHEABLE = [
+  /^\/api\/dashboard$/,
+  /^\/api\/models$/,
+  /^\/api\/gateway$/,
+  /^\/api\/instances$/,
+  /^\/api\/model-roles$/,
+  /^\/api\/kb$/,
+  /^\/api\/kb\/\d+\/detail$/,
+];
+const apiCache = new Map();
+const apiInflight = new Map();
+
+function invalidateApiCache() { apiCache.clear(); }
+
+async function _apiFetch(path, options) {
   const res = await fetch(path, options);
   if (!res.ok) {
     let msg = `${res.status}`;
@@ -46,7 +69,29 @@ async function api(path, options = {}) {
     err.body = body;
     throw err;
   }
-  return res.status === 204 ? null : res.json();
+  return res.status === 204 ? null : await res.json();
+}
+
+async function api(path, options = {}) {
+  const { force, ...fetchOptions } = options;
+  const method = (fetchOptions.method || "GET").toUpperCase();
+  if (method !== "GET") invalidateApiCache();   // 写过了，旧快照一律不信
+  const cacheable = method === "GET" && !force && API_CACHEABLE.some((re) => re.test(path));
+  if (cacheable) {
+    const hit = apiCache.get(path);
+    if (hit && Date.now() - hit.t < API_CACHE_TTL_MS) return hit.v;
+    const running = apiInflight.get(path);
+    if (running) return running;                 // 同一个请求并发只发一次
+    const pending = _apiFetch(path, fetchOptions).then((v) => {
+      apiCache.set(path, { t: Date.now(), v });
+      return v;
+    }).finally(() => {
+      if (apiInflight.get(path) === pending) apiInflight.delete(path);
+    });
+    apiInflight.set(path, pending);
+    return pending;
+  }
+  return _apiFetch(path, fetchOptions);
 }
 
 const jsonPost = (path, data) =>
@@ -3400,6 +3445,8 @@ function syncRunningTasks() {
 }
 
 function refreshCurrentView() {
+  // 这是「配置刚改完 / 后台任务刚跑完」的刷新，必须拿到新值，不吃展示快照。
+  invalidateApiCache();
   if (state.view === "home") renderHome().catch(() => {});
   else if (state.view === "kb") renderKbPage().catch(() => {});
   else if (state.view === "models") renderModels().catch(() => {});
@@ -3591,7 +3638,11 @@ async function renderHome() {
     </section>
   </div>`;
 
-  $("dashRefresh").onclick = () => { state.dash = null; renderHome(); };
+  $("dashRefresh").onclick = () => {
+    state.dash = null;
+    invalidateApiCache();   // 点「刷新」就是要新数据，别拿 3 秒内的快照糊弄
+    renderHome();
+  };
   $("dashProbe").onclick = probeServices;
   $("probeAll").onclick = probeServices;
   box.querySelectorAll("[data-logtab]").forEach((btn) => {
@@ -7089,27 +7140,39 @@ function paintSites(d, roles, meta) {
   $("btnNewSite").onclick = () => openSiteEditor(null);
 }
 
+/* 切页加速三件事：① 不撕掉上次的卡片（只有从没画过才给骨架）；
+   ② 三份数据并发取，原来是 /instances → /model-roles → /models 串成一串；
+   ③ seq 守卫，快速 A→B→A 时先发出的那次回来也不能盖掉后一次的内容。 */
+let _siteRenderSeq = 0;
 async function renderSites() {
-  $("viewSite").innerHTML = `<div class="page"><div class="card">
-    <div class="card-head"><h3>正在加载…</h3></div></div></div>`;
-  let d;
+  const box = $("viewSite");
+  const seq = ++_siteRenderSeq;
+  if (!box.dataset.ready) {
+    box.innerHTML = `<div class="page"><div class="card">
+      <div class="card-head"><h3>正在加载…</h3></div></div></div>`;
+  }
+  let d, r, meta;
   try {
-    d = await api("/api/instances");
+    // 角色配置、后端清单和实例列表互不依赖，一起发。/api/models 是三者里
+    // 最慢的那个，不再把它排在最后等。
+    [d, r, meta] = await Promise.all([
+      api("/api/instances"),
+      api("/api/model-roles").catch(() => null),
+      api("/api/models").then((x) => (x && x.providers) || []).catch(() => []),
+    ]);
   } catch (err) {
-    $("viewSite").innerHTML = `<div class="page"><div class="card">
-      <div class="card-head"><h3>加载失败</h3></div>
-      <p class="hint">${esc(err.message)}</p></div></div>`;
+    if (seq !== _siteRenderSeq) return;
+    if (!box.dataset.ready) {
+      box.innerHTML = `<div class="page"><div class="card">
+        <div class="card-head"><h3>加载失败</h3></div>
+        <p class="hint">${esc(err.message)}</p></div></div>`;
+    }
     return;
   }
-  // 角色配置和实例列表一起取：少一次往返，也让"实际用了谁"和卡片同时到位。
-  // 后端清单（/api/models）也要：角色下拉要标出"本地/云端 · 模型 · 就绪"，
-  // 光有后端名字，用户看不出选完会发生什么。
-  let r = null;
-  let meta = [];
-  try { r = await api("/api/model-roles"); } catch { r = null; }
-  try { meta = (await api("/api/models")).providers || []; } catch { meta = []; }
+  if (seq !== _siteRenderSeq) return;
   paintSites(d, r, meta);
   bindSiteActions();
+  box.dataset.ready = "1";
 }
 
 function bindSiteActions() {

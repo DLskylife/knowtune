@@ -320,6 +320,32 @@ for token, why in (
     if token not in admin_css:
         errors.append(f"[ui] style.css 缺少{why}：{token}")
 
+# 切页性能护栏：README 写了「即点即到」，代码不能退回串行重拉 + 撕卡片。
+# 这条不是性能基准测试，只守结构性前提——真要测耗时用浏览器脚本量。
+for token, why in (
+    ("API_CACHE_TTL_MS", "只读 GET 的短 TTL 快照"),
+    ("function invalidateApiCache()", "写操作后的缓存失效"),
+    ("if (!box.dataset.ready)", "站点卡只在首绘给骨架"),
+    ("invalidateApiCache();   // 点「刷新」", "刷新按钮强制重新取数"),
+):
+    if token not in admin_js:
+        errors.append(f"[perf] app.js 缺少{why}：{token}")
+site_fn = admin_js.split("async function renderSites()", 1)[-1].split(
+    "function bindSiteActions", 1)[0]
+if "Promise.all([" not in site_fn or "_siteRenderSeq" not in site_fn:
+    errors.append("[perf] renderSites 退回串行请求或丢了竞态守卫")
+localmodels_py = (STATIC / "localmodels.py").read_text(encoding="utf-8")
+for token, why in (
+    ("_RUN_CACHE_TTL_S", "实例状态快照的 TTL"),
+    ("ThreadPoolExecutor(max_workers", "各实例并发探测"),
+    ("invalidate_running_cache()", "状态变更后的缓存失效"),
+    ("def _port_open(", "端口 TCP 预检"),
+):
+    if token not in localmodels_py:
+        errors.append(f"[perf] localmodels.py 缺少{why}：{token}")
+if "切页即点即到" not in (ROOT / "README.md").read_text(encoding="utf-8"):
+    errors.append("[perf] README 缺少切页性能说明")
+
 # models.yaml 不允许盘符绝对路径（项目外模型用 ../ 相对路径）
 for p in (ROOT / "config").glob("*.yaml"):
     for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
