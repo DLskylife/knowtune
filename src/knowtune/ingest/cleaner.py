@@ -358,13 +358,13 @@ def clean_loaded(loaded: LoadedDoc, plan: CleanPlan) -> tuple[LoadedDoc, CleanRe
         if doomed:
             stage2 = []
             for b, t in stage1:
-                kept = [ln for ln in t.splitlines()
-                        if _line_key(ln) not in doomed and ln.strip() not in doomed]
-                new = "\n".join(kept)
+                kept_lines = [ln for ln in t.splitlines()
+                              if _line_key(ln) not in doomed and ln.strip() not in doomed]
+                new = "\n".join(kept_lines)
                 if new != t:
                     hit("drop_repeated_lines", "",
                         chars=max(0, len(t) - len(new)),
-                        lines=len(t.splitlines()) - len(kept))
+                        lines=len(t.splitlines()) - len(kept_lines))
                 stage2.append((b, new))
             # 样例给"被判定为页眉页脚的那些行"，比给出被改后的块更能说明删了什么
             stats["drop_repeated_lines"]["samples"] = [_snippet(s) for s in sorted(evidence)[:3]]

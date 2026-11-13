@@ -13,13 +13,12 @@ import json
 import re
 import sqlite3
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
 from .. import paths as paths_mod
 from ..config import Config
-from ..db import Database
+from ..db import Database, utcnow as _utcnow
 from ..index.embedder import Embedder, EmbedderUnavailable
 from ..index.sparse import SparseIndex
 from ..index.vectors import VectorStore
@@ -27,10 +26,6 @@ from ..models import ChunkDraft, LoadedDoc
 from . import loader as loader_mod
 from .chunker import chunk_blocks, repair_chunk_primitives
 from .cleaner import CleanPlan, clean_loaded, plan_from_dict
-
-
-def _utcnow() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 # 进度回调：(阶段名, 0~1, 附注)。附注是给人看的具体数字，比如 "128/300 块"。

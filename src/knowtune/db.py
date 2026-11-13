@@ -1,3 +1,13 @@
+from __future__ import annotations
+
+'''
+Author: DLskylife 3437634066@qq.com
+Date: 2026-11-01 22:24:11
+LastEditors: DLskylife 3437634066@qq.com
+LastEditTime: 2026-11-11 15:09:45
+FilePath: \knowtune\src\knowtune\db.py
+Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
+'''
 """SQLite 连接管理。
 
 sqlite3 的连接默认绑定创建它的线程；FastAPI 的同步路由跑在线程池里，
@@ -5,10 +15,10 @@ sqlite3 的连接默认绑定创建它的线程；FastAPI 的同步路由跑在�
 并发导入时把查询堵死（WAL 模式下读写可以并行）。
 """
 
-from __future__ import annotations
-
+import json
 import sqlite3
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .config import Config
@@ -98,3 +108,49 @@ class _Tx:
         else:
             self.conn.execute("ROLLBACK")
         return False
+
+
+def utcnow() -> str:
+    """数据库统一时间戳（ISO 8601，UTC）。"""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def ensure_session(conn: sqlite3.Connection, session_id: str | None,
+                   kb_id: int, question: str) -> None:
+    """会话不存在则创建。前后台问答共用同一套落库口径。"""
+    if not session_id:
+        return
+    exists = conn.execute(
+        "SELECT id FROM session WHERE id=?", (session_id,)
+    ).fetchone()
+    if not exists:
+        now = utcnow()
+        conn.execute(
+            "INSERT INTO session (id, kb_id, title, created_at, updated_at)"
+            " VALUES (?,?,?,?,?)",
+            (session_id, kb_id, (question or "")[:30], now, now),
+        )
+
+
+def save_message(conn: sqlite3.Connection, session_id: str | None,
+                 question: str, answer: str, trace_id: str,
+                 citations: list[dict]) -> int | None:
+    """落库一轮问答，返回 assistant 消息 id（前端拿它做「有用／无用」反馈）。
+
+    无会话时只返回 None、不落库——session_id 为空说明这轮问答不参与会话管理。
+    """
+    if not session_id:
+        return None
+    now = utcnow()
+    conn.execute(
+        "INSERT INTO message (session_id, role, content, trace_id, created_at)"
+        " VALUES (?,?,?,?,?)", (session_id, "user", question, trace_id, now),
+    )
+    cur = conn.execute(
+        "INSERT INTO message (session_id, role, content, trace_id, citations_json,"
+        " created_at) VALUES (?,?,?,?,?,?)",
+        (session_id, "assistant", answer, trace_id,
+         json.dumps(citations, ensure_ascii=False), now),
+    )
+    conn.execute("UPDATE session SET updated_at=? WHERE id=?", (now, session_id))
+    return cur.lastrowid

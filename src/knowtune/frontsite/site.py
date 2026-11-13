@@ -15,7 +15,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import re
 import time
@@ -31,6 +30,8 @@ from pydantic import BaseModel, Field
 from .. import chatctx
 from .. import lang as lang_mod
 from .. import logbus
+from ..db import ensure_session, save_message as _save, utcnow as _utcnow
+from ..sse import sse as _sse
 from ..generate import cite as cite_mod
 from ..generate import evidence
 from ..generate.prompt import build_context
@@ -132,11 +133,6 @@ class SiteFeedback(BaseModel):
     comment: str = ""
 
 
-def _sse(event: str, data: dict | str) -> str:
-    payload = data if isinstance(data, str) else json.dumps(data, ensure_ascii=False)
-    return f"event: {event}\ndata: {payload}\n\n"
-
-
 def _draft_messages(bundle, question: str, history: list[dict] | None,
                     draft_lang: str) -> list[dict]:
     """两段式里"先用资料语言写草稿"的消息。"""
@@ -231,12 +227,6 @@ def _split_for_translate(text: str, limit: int = 300) -> list[str]:
         if buf.strip():
             out.append(buf)
     return [p for p in out if p.strip()]
-
-
-def _utcnow() -> str:
-    from datetime import datetime, timezone
-
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 def provider_for(role: str, *, spec: Any, kb_cfg: Any, cfg: Any,
@@ -643,15 +633,7 @@ def build_site(spec, state: Any) -> FastAPI:
             answer_lang = site_lang or lang
 
         session_id = req.session_id
-        if session_id:
-            exists = conn0.execute("SELECT id FROM session WHERE id=?", (session_id,)).fetchone()
-            if not exists:
-                now = _utcnow()
-                conn0.execute(
-                    "INSERT INTO session (id, kb_id, title, created_at, updated_at)"
-                    " VALUES (?,?,?,?,?)",
-                    (session_id, scope_kb_id, (req.question or "")[:30], now, now),
-                )
+        ensure_session(conn0, session_id, scope_kb_id, req.question)
 
         def stream() -> Iterator[str]:
             try:
@@ -709,7 +691,6 @@ def build_site(spec, state: Any) -> FastAPI:
                         "بۇ بۆلەكتە تېخى ماتېرىيال يوق."), "trace_id": trace_id})
                     return
 
-            t0 = time.perf_counter()
             # 跨语言检索 + CPU 精排是同步的，期间前端一个事件都收不到。
             # 检索前 / 后各推一条 progress，前端按 UI 语言显示 searching / thinking。
             yield _sse("progress", {"stage": "retrieving", "label": "正在检索与精排…"})
@@ -1026,26 +1007,6 @@ def build_site(spec, state: Any) -> FastAPI:
             headers={"Cache-Control": "no-cache", "X-Trace-Id": trace_id,
                      "X-Accel-Buffering": "no"},
         )
-
-    def _save(conn, session_id: str, question: str, answer: str, trace_id: str,
-              citations: list[dict]) -> int:
-        """落库一轮问答，返回 assistant 消息 id。
-
-        返回 id 是为了让前台也能做「有用／无用」：反馈接口按 message_id 关联，
-        没有它，前台写进 message 表的这批数据就永远标注不上——数据在、入口不在，
-        是这轮补的最亏的一处。
-        """
-        now = _utcnow()
-        conn.execute(
-            "INSERT INTO message (session_id, role, content, trace_id, created_at)"
-            " VALUES (?,?,?,?,?)", (session_id, "user", question, trace_id, now))
-        cur = conn.execute(
-            "INSERT INTO message (session_id, role, content, trace_id, citations_json,"
-            " created_at) VALUES (?,?,?,?,?,?)",
-            (session_id, "assistant", answer, trace_id,
-             json.dumps(citations, ensure_ascii=False), now))
-        conn.execute("UPDATE session SET updated_at=? WHERE id=?", (now, session_id))
-        return int(cur.lastrowid)
 
     @app.post("/api/feedback")
     def feedback(req: SiteFeedback) -> dict:
