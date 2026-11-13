@@ -1,6 +1,6 @@
 /* 构建号：与 index.html 里那份一致，不一致说明浏览器拿到的是旧 JS，
    页面加载完会强制换一次（见 index.html 的自检脚本）。 */
-window.ADMIN_BUILD = "0.9.68";
+window.ADMIN_BUILD = "0.9.69";
 
 const $ = (id) => document.getElementById(id);
 
@@ -6359,7 +6359,7 @@ const LANG_NAME = { ug: "维吾尔语（RTL）", zh: "中文", en: "English" };
 /* 2026-11-13 第四次整理：站点页不再「点一下开一层窗」。
  * 旧形态是卡上三行参数 + 「全部参数」+「预问诊参数」四处入口，点谁都弹一个
  * modal，modal 里还分三个页签，提示词再叠一层抽屉 —— 改个端口要开两层窗、
- * 切一次页签。现在三段配置整段铺在卡片下面，预问诊参数与前台预览也在同一页，
+ * 切一次页签。现在三段配置整段铺在卡片下面，预问诊参数也在同一页，
  * 就地改、就地存。窗口只剩「新建站点」和长文本用的提示词抽屉。
  *
  * 下面的 siteInlinePanels() 复用原弹窗那套 scfg-* 控件：data-f 字段名一个没动，
@@ -6417,8 +6417,6 @@ function siteBlock(i, meta, plan, defProv, pv) {
       </div>
       <div class="sbk-acts">
         <div class="sbk-act-group is-ops">
-          <button class="mini" data-goto-inline="sitePreview"
-            title="往下滚到本页里的前台预览，不新开窗口">前台预览 ↓</button>
           <button class="mini" data-sact="copy" data-url="${esc(i.url)}">复制链接</button>
           ${external ? "" : `<button class="mini${running ? " is-danger" : ""}"
             data-sact="${running ? "stop" : "start"}" ${busy ? "disabled" : ""
@@ -6765,7 +6763,7 @@ function bindSiteInlineEvents() {
       return;
     }
 
-    // 页面内锚点：从卡上跳到预问诊参数或前台预览，不开窗、不切页。
+    // 页面内锚点：从模型矩阵跳到本页的预问诊参数，不开窗、不切页。
     const jump = e.target.closest("[data-goto-inline]");
     if (jump) {
       const target = $(jump.dataset.gotoInline);
@@ -6858,15 +6856,6 @@ function bindSiteInlineEvents() {
       syncPvModelOptions(e.target.value, box);
     }
   });
-
-  // 前台预览：iframe 只在展开时挂 src，不拖慢首次切页。toggle 不冒泡，
-  // 所以用捕获阶段监听容器。
-  box.addEventListener("toggle", (e) => {
-    const d = e.target.closest(".site-preview");
-    if (!d || !d.open) return;
-    const frame = d.querySelector("iframe[data-src]");
-    if (frame && !frame.src) frame.src = frame.dataset.src;
-  }, true);
 }
 
 /* 把一张卡上的控件读成一份完整 payload。
@@ -6980,20 +6969,6 @@ function previsitInlineHtml(cfg) {
   </section>`;
 }
 
-/* 前台预览也收进这一页。details 默认折叠、展开才挂 src，免得每次切页
- * 都白拉一遍 8800 上的前台页面。 */
-function frontPreviewHtml(items) {
-  const first = (items || []).find((i) => i.url);
-  if (!first) return "";
-  return `<details class="site-preview" id="sitePreview">
-      <summary><b>前台预览</b><span>${esc(first.url)} · 展开才加载，不新开窗口</span></summary>
-      <div class="site-preview-body">
-        <iframe data-src="${esc(first.url)}" title="前台问答站预览"
-          loading="lazy" referrerpolicy="no-referrer"></iframe>
-      </div>
-    </details>`;
-}
-
 function pvModelCandidates(cfg, provider) {
   const provs = ((cfg.catalog || {}).providers) || [];
   if (!provider) return [];
@@ -7091,7 +7066,6 @@ function paintSites(d, roles, meta, pv) {
         (roles && roles.default_provider) || "", pv)).join("")
       : `<div class="card"><p class="hint" style="margin:6px 0 12px">还没有前台站点。</p></div>`}
     ${previsitInlineHtml(pv)}
-    ${frontPreviewHtml(items)}
   </div>`;
 
   $("btnNewSite").onclick = () => openSiteEditor(null);

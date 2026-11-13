@@ -2654,8 +2654,8 @@ details.sbk-note-line[open] > summary::before { transform: rotate(90deg); }
    站点页内联配置区 · 2026-11-13 打平
    --------------------------------------------------------------------------
    原来「站点配置」是一个 1020px 弹窗，里面三个页签一次只露一段；卡上还有
-   三行参数 + 两个按钮共五个入口，点谁都开窗。现在三段配置、预问诊参数与
-   前台预览全在同一页，向下滚就能看全、就地保存。scfg-* 控件样式原样复用
+   三行参数 + 两个按钮共五个入口，点谁都开窗。现在三段配置、预问诊参数
+   全在同一页，向下滚就能看全、就地保存。scfg-* 控件样式原样复用
    （data-f 字段名一个没动），这里只加分区骨架与保存条。
    ========================================================================== */
 
@@ -2718,29 +2718,6 @@ details.sbk-note-line[open] > summary::before { transform: rotate(90deg); }
 .scfg-lead code, .scfg-footnote code {
   font-family: var(--mono); font-size: 11px; color: var(--text-2);
   background: var(--surface-3); padding: 1px 5px; border-radius: 4px;
-}
-
-/* 前台预览：默认折叠，展开才挂 iframe（见 app.js 的 toggle 捕获监听）。 */
-.site-preview {
-  margin-top: var(--card-gap); border: 1px solid var(--line);
-  border-radius: var(--card-radius); background: var(--surface);
-  overflow: hidden;
-}
-.site-preview > summary {
-  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
-  padding: 11px var(--card-pad-x); cursor: pointer; list-style: none;
-}
-.site-preview > summary::-webkit-details-marker { display: none; }
-.site-preview > summary::before {
-  content: "▸"; color: var(--text-3); font-size: 11px; transition: transform .14s;
-}
-.site-preview[open] > summary::before { transform: rotate(90deg); }
-.site-preview > summary b { font-size: 13px; font-weight: 600; }
-.site-preview > summary span { font-size: 11.5px; color: var(--text-3); }
-.site-preview-body { border-top: 1px solid var(--line); }
-.site-preview-body iframe {
-  display: block; width: 100%; height: min(68vh, 780px); border: 0;
-  background: var(--surface-2);
 }
 
 .scfg-lead { display: flex; flex-direction: column; gap: 4px; padding: 0 0 12px; }
@@ -2878,6 +2855,5 @@ details.sbk-note-line[open] > summary::before { transform: rotate(90deg); }
 @media (max-width: 520px) {
   .sif-ht { flex-direction: column; align-items: flex-start; gap: 2px; }
   .sif-standalone { padding-left: 12px; padding-right: 12px; }
-  .site-preview-body iframe { height: 70vh; }
 }
 

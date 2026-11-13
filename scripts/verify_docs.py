@@ -308,11 +308,9 @@ for token, why in (
     ("data-save-inline", "站点保存按钮"),
     ("function previsitInlineHtml", "预问诊参数内联渲染"),
     ("data-pv-save", "预问诊就地保存按钮"),
-    ("function frontPreviewHtml", "前台预览内联"),
     ('class="sbk-top"', "身份头部"),
     ("i.ug_capable === false && i.ug_note", "正常态自检不渲染"),
     ("function bindSiteInlineEvents", "内联交互事件委托"),
-    ('data-goto-inline="sitePreview"', "页面内锚点（不开新窗口）"),
 ):
     if token not in admin_js:
         errors.append(f"[ui] app.js 缺少站点页内联配置台的{why}：{token}")
@@ -331,6 +329,12 @@ for gone, why in (
     ("sbk-grid", "左右分栏容器"),
     ("sbk-rows", "卡中卡行表"),
     ("sbk-row-go", "每行重复的「改 →」"),
+    # 2026-11-13 用户要求「删掉预览」：站点页不再嵌前台 iframe。别再以任何
+    # 形式加回来——要开前台就用卡上的「打开」走新标签页。
+    ("frontPreviewHtml", "前台预览内联渲染"),
+    ("sitePreview", "前台预览锚点/容器"),
+    ("site-preview", "前台预览样式钩子"),
+    ("<iframe", "内嵌页面框架"),
 ):
     if gone in admin_js:
         errors.append(f"[ui] app.js 仍残留已删除的{why}：{gone}")
@@ -338,12 +342,12 @@ admin_css = (STATIC / "api" / "static/style.css").read_text(encoding="utf-8")
 for token, why in (
     (".sif-sec", "内联分区样式"),
     (".sif-savebar", "就地保存条样式"),
-    (".site-preview", "前台预览样式"),
     (".sbk-top", "身份头部样式"),
 ):
     if token not in admin_css:
         errors.append(f"[ui] style.css 缺少{why}：{token}")
-for gone in ("sbk-grid", "sbk-pagehint", "sbk-rows", ".sbk-row-go", ".sbk-prow", ".scfg-tab"):
+for gone in ("sbk-grid", "sbk-pagehint", "sbk-rows", ".sbk-row-go", ".sbk-prow",
+             ".scfg-tab", ".site-preview"):
     if gone in admin_css:
         errors.append(f"[ui] style.css 仍残留已删除的样式：{gone}")
 
