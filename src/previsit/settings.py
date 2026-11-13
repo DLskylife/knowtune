@@ -47,13 +47,13 @@ OVERRIDES_NAME = "previsit.overrides.yaml"
 # 目前没有需要重启进程的字段——这是这套面板的前提，破例之前先想清楚。
 GROUPS: list[dict[str, str]] = [
     {"key": "model", "label": "模型与生成",
-     "desc": "预问诊就是这段提示词加模型本身，这一组决定由谁来说、说多长。"},
+     "desc": "这一组决定由谁说、说多长。"},
     {"key": "flow", "label": "开关",
      "desc": "总开关。关掉后入口还在，但不会开新会话。"},
     {"key": "copy", "label": "界面文案",
      "desc": "站点标题、欢迎语、免责声明。改的是患者看到的那一层。"},
     {"key": "prompts", "label": "提示词",
-     "desc": "整场问诊只有这一段系统提示词：怎么问、问几轮、何时收尾，全交给模型。"},
+     "desc": "怎么问、问几轮、何时收尾，全由它决定。"},
 ]
 
 FIELDS: list[dict[str, Any]] = [
@@ -81,8 +81,8 @@ FIELDS: list[dict[str, Any]] = [
      "empty": "跟随后台默认"},
     {"path": "translator_model", "group": "model", "type": "model",
      "label": "维语翻译模型", "maxlen": 120,
-     "help": "留空 = DeepSeek-V4.1-Flash。必须是能写维语的模型；"
-             "本地 7B 翻不出来，维语会话会直接报错（不会退回中文）。"},
+     "help": "留空 = DeepSeek-V4.1-Flash。本地 7B 写不出维语，"
+             "维语会话会直接报错，不退回中文。"},
 
     # ------------------------------------------------------------ 开关
     {"path": "enabled", "group": "flow", "type": "bool", "label": "启用预问诊",

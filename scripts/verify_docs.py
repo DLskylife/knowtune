@@ -399,6 +399,60 @@ for token, why in (
 if "切页即点即到" not in (ROOT / "README.md").read_text(encoding="utf-8"):
     errors.append("[perf] README 缺少切页性能说明")
 
+# --- 6c. 提示文案：一句能读完 -----------------------------------------------
+# 参数说明在 .kb-desc 里是单行省略，写长了界面上只能看到半句——那等于没写。
+# 这里守两件事：单条说明有字数上限；已经删掉的重复说法和写反的顺序不许回流。
+desc_probe = subprocess.run(
+    [sys.executable, "-c", (
+        "import sys; sys.path.insert(0, 'src')\n"
+        "from knowtune.settings import PARAMS, GROUPS\n"
+        "from knowtune.kbconfig import PRESETS\n"
+        "bad = [(p.path, len(p.desc), p.desc) for p in PARAMS if len(p.desc) > 46]\n"
+        "bad += [('group:' + g[0], len(g[2]), g[2]) for g in GROUPS if len(g[2]) > 26]\n"
+        "bad += [('preset:' + p['id'], len(p['desc']), p['desc'])\n"
+        "        for p in PRESETS if len(p['desc']) > 40]\n"
+        "for key, n, text in bad:\n"
+        "    print('%s\\t%d\\t%s' % (key, n, text))\n"
+    )],
+    cwd=str(ROOT), capture_output=True, text=True, timeout=180,
+)
+if desc_probe.returncode != 0:
+    errors.append(f"[hints] 参数说明体检跑不起来：{desc_probe.stderr.strip()[-300:]}")
+else:
+    for line in desc_probe.stdout.strip().splitlines():
+        if not line.strip():
+            continue
+        key, n, text = line.split("\t", 2)
+        errors.append(f"[hints] {key} 的说明 {n} 字，单行放不下：{text}")
+
+# 界面上说两遍同一件事，等于把一句话拆成噪音。这些句子是具体删过的，
+# 谁想"顺手补回来"会被这里挡住。
+for gone, why in (
+    ("检索和问答是两个环节", "无模型提示里的解释性废话"),
+    ("开箱三步", "与三个按钮重复的步骤说明"),
+    ("密钥只存进程内存", "与默认落盘相矛盾的旧话术"),
+    ("越靠上的行越优先", "写反的优先级（板块行在下面才是高优先）"),
+    ("一张表看清谁覆盖谁", "比喻式小标题"),
+    ("真正生效的是上面的「默认模型」", "与「选中的这个才真正用于问答」重复"),
+    ("这是<b>角色默认</b>", "与「没单独配置过的后端都用这一份」重复"),
+):
+    if gone in admin_js:
+        errors.append(f"[hints] app.js 里回流了{why}：{gone}")
+for gone, why in (
+    ("保存到本机（", "与 mKeyTip 重复的密钥存储说明"),
+    ("填地址 + 密钥 + 模型名即可", "表单自己就说明了的废话"),
+    ("模型和端口都跟模型走", "含糊的端点归属说法"),
+):
+    if gone in admin_js or gone in (STATIC / "modelcfg.py").read_text(encoding="utf-8"):
+        errors.append(f"[hints] 回流了{why}：{gone}")
+
+# 标定结果必须是独立标记（it["calib"]），不许拼进 desc——拼进去就会被单行截断。
+kb_route_py = (STATIC / "api" / "routes" / "kb.py").read_text(encoding="utf-8")
+if 'it["desc"] = ' in kb_route_py:
+    errors.append('[hints] routes/kb.py 又把标定统计拼进 desc 了，应写进 it["calib"]')
+if 'it["calib"] = ' not in kb_route_py:
+    errors.append('[hints] routes/kb.py 缺少标定标记 it["calib"]')
+
 # models.yaml 不允许盘符绝对路径（项目外模型用 ../ 相对路径）
 for p in (ROOT / "config").glob("*.yaml"):
     for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):

@@ -257,30 +257,35 @@ def kb_config(kb_id: int) -> dict:
     )
     # 面板里显示的是"这个库存的参数值"，而标定是叠在上面的另一层：存的可能是
     # 出厂 0.35，实际跑的是标定出来的 0.692。两个数不一样却都不显示，用户
-    # 打开面板只会更困惑。所以在这里把"实际生效值"写进参数说明。
+    # 打开面板只会更困惑。所以把"实际生效值"作为独立标记挂上去——参数说明是
+    # 单行省略的，把这段统计拼进 desc 只会被截成半句，等于没写。
     calib = calibration_of_kb(state.cfg, kb_id)
     if calib:
         ref = calib.get("refusal") or {}
         sup = calib.get("support") or {}
         notes = {}
         if ref.get("min_score") is not None and ref.get("verdict") != "invalid":
-            notes["refusal.min_score"] = (
-                f"本库已用留一法标定：实际生效 {ref['min_score']}"
-                f"（AUC {ref.get('auc')}，{ref.get('n_samples')} 组探针，"
-                f"误拒 {ref.get('false_refusal_rate', 0):.1%} / "
-                f"漏拒 {ref.get('missed_refusal_rate', 0):.1%}）。"
-                "改动这里的值会覆盖标定结果。")
+            notes["refusal.min_score"] = {
+                "value": ref["min_score"],
+                "detail": (
+                    f"AUC {ref.get('auc')} · {ref.get('n_samples')} 组探针 · "
+                    f"误拒 {ref.get('false_refusal_rate', 0):.1%} / "
+                    f"漏拒 {ref.get('missed_refusal_rate', 0):.1%}。"
+                    "改动这里的值会覆盖标定结果。"),
+            }
         if sup.get("threshold") is not None and sup.get("verdict") != "invalid":
-            notes["support.threshold"] = (
-                f"本库已标定：实际生效 {sup['threshold']}（AUC {sup.get('auc')}；"
-                f"事实层 AUC {sup.get('auc_fact')}，那一层靠锚点兜）。"
-                "改动这里的值会覆盖标定结果。")
+            notes["support.threshold"] = {
+                "value": sup["threshold"],
+                "detail": (
+                    f"AUC {sup.get('auc')} · 事实层 AUC {sup.get('auc_fact')}"
+                    "（那一层靠锚点兜）。改动这里的值会覆盖标定结果。"),
+            }
         marked = set()
         for g in data.get("groups", []):
             for it in g.get("items", []):
                 extra = notes.get(it.get("key"))
                 if extra:
-                    it["desc"] = (it.get("desc") or "") + " " + extra
+                    it["calib"] = extra
                     it["calibrated"] = True
                     marked.add(it["key"])
         data["calibrated_keys"] = sorted(marked)

@@ -4,12 +4,12 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>KnowTune · 本地知识库</title>
-  <link rel="stylesheet" href="/static/style.css?v=0.9.70">
+  <link rel="stylesheet" href="/static/style.css?v=0.9.71">
   <script>
     /* 同前台那份自检：页面是新的、app.js 被 WebView 留成旧的，就会出现
        "按钮在、点了没反应"（删库那次就这么来的）。编号对不上就强制换一次，
        只换一次，避免死循环。 */
-    window.ADMIN_REQ_BUILD = "0.9.70";
+    window.ADMIN_REQ_BUILD = "0.9.71";
     addEventListener("load", function () {
       if (window.ADMIN_BUILD === window.ADMIN_REQ_BUILD) return;
       if (sessionStorage.getItem("knowtune.admin.reloaded")) return;
@@ -163,12 +163,12 @@
           <div class="cfg-row">
             <label class="field">
               <span class="field-label">生成模型</span>
-              <select id="genModelSel" title="只覆盖这一问用的模型。会列出所有后端上的模型，选哪个就自动用哪个后端"></select>
+              <select id="genModelSel" title="只覆盖这一问；选中的模型自带它的后端"></select>
               <input id="genModelCustom" class="adv-input" hidden placeholder="手打模型 id，如 qwen-plus"
                 autocomplete="off" spellcheck="false">
             </label>
             <button class="mini" id="btnTrTest" style="align-self:flex-end"
-              title="拿上面这个后端单独跑一次翻译（不碰知识库）：前台链路翻译挂了，对话里只表现为「答非所问」，不单独测根本定位不到">测翻译</button>
+              title="单独跑一次翻译，不碰知识库。翻译挂了在问答里只表现为答非所问">测翻译</button>
           </div>
           <div class="cfg-hint" id="trTestOut" hidden></div>
         </div>
@@ -318,7 +318,7 @@
         <p class="hint">发送一次提问后，这里会显示两路召回的原始排序、融合结果与耗时。</p>
       </div>
       <div class="panel-body" id="panelSource" hidden>
-        <p class="hint">点击回答中的引用编号查看对应原文片段。</p>
+        <p class="hint">回答里的引用片段会展示在这里。</p>
       </div>
     </aside>
   </div>
@@ -395,6 +395,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=0.9.70"></script>
+  <script src="/static/app.js?v=0.9.71"></script>
 </body>
 </html>

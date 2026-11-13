@@ -74,7 +74,7 @@ PRESETS: tuple[dict[str, Any], ...] = (
     {
         "id": "general",
         "label": "通用问答",
-        "desc": "平衡型。语义与关键词各占一半，适合大多数中文资料。",
+        "desc": "语义与关键词各一半，适合大多数中文资料。",
         "values": {
             "chunking.strategy": "size",
             "chunking.size": 480,
@@ -87,7 +87,7 @@ PRESETS: tuple[dict[str, Any], ...] = (
     {
         "id": "code",
         "label": "代码 / 故障码",
-        "desc": "偏精确匹配。函数名、错误码、配置项这类词必须原样命中，块切得更碎。",
+        "desc": "函数名、错误码要原样命中，块切得更碎、BM25 权重更高。",
         "values": {
             "chunking.strategy": "paragraph",
             "chunking.size": 400,
@@ -101,7 +101,7 @@ PRESETS: tuple[dict[str, Any], ...] = (
     {
         "id": "precise",
         "label": "合同 / 条款",
-        "desc": "偏窄而准。块更小（便于逐条引用），候选放宽、最终只留 4 条。",
+        "desc": "块更小便于逐条引用，候选放宽、最终只留 4 条。",
         "values": {
             "chunking.strategy": "heading",
             "chunking.size": 320,
@@ -329,8 +329,7 @@ def snapshot(cfg: Config, values: dict[str, Any]) -> dict[str, Any]:
         "embedding": {
             "model": cfg.embedding.model,
             "dim": cfg.embedding.dim,
-            "note": "嵌入模型属于系统级：向量矩阵按「模型@维度」建表，"
-                    "按库换模型需要整库重算并同时驻留多份权重。",
+            "note": "嵌入模型是系统级：按库换要整库重算，还得同时驻留多份权重。",
         },
     }
 

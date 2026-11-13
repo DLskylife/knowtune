@@ -1,6 +1,6 @@
 /* 构建号：与 index.html 里那份一致，不一致说明浏览器拿到的是旧 JS，
    页面加载完会强制换一次（见 index.html 的自检脚本）。 */
-window.ADMIN_BUILD = "0.9.70";
+window.ADMIN_BUILD = "0.9.71";
 
 const $ = (id) => document.getElementById(id);
 
@@ -645,15 +645,14 @@ function noModelCard(reason) {
   return `<div class="empty-state gate" id="emptyState">
     <span class="es-mark">!</span>
     <h2>还没配模型</h2>
-    <p>${esc(reason)}。<b>在配好生成后端之前，这里提问只会返回检索到的片段，不会生成答案</b>——检索和问答是两个环节，后者必须有一个能连上的模型。</p>
-    <p class="hint">开箱三步：① 配后端（云端填密钥 / 本地扫 <code>.gguf</code> 起实例） → ② 建知识库 → ③ 回来提问出答案。</p>
+    <p>${esc(reason)}。<b>没有可用的生成后端，提问只会返回检索片段，不会生成答案。</b></p>
     <div class="gate-actions">
       <button class="primary-btn" data-gate="models">去配置模型</button>
       <button class="ghost-btn" data-gate="mock">先用 Mock 看检索链路</button>
       <button class="ghost-btn" data-gate="kb">先去建知识库</button>
     </div>
     <div class="es-keys">
-      <span>Mock 后端不联网，只验证「检索 → 装填 → 引用」链路，输出不是答案</span>
+      <span>Mock 不联网，只跑检索和装填，输出不是答案</span>
     </div>
   </div>`;
 }
@@ -687,14 +686,14 @@ function maybeWarnNoModel() {
   state.noModelWarned = true;
   const close = showModal("还没有可用的模型", `
     <p class="hint u-mb12">
-      ${esc(c.reason)}。<br>在配好生成后端之前，提问只会返回检索片段、生成不了答案——检索和问答是两个环节，后者必须有一个能连上的模型。
+      ${esc(c.reason)}。<br>没有可用的生成后端，提问只会返回检索片段。
     </p>
     <div class="gate-actions" style="justify-content:flex-start;margin:0">
       <button class="ghost-btn" id="warnMock">用 Mock 看检索链路</button>
       <button class="ghost-btn" id="warnKb">先去建知识库</button>
     </div>
     <p class="hint u-mt12">
-      Mock 不联网，只验证「检索 → 装填 → 引用」链路，输出不是答案。
+      Mock 不联网，只跑检索和装填，输出不是答案。
     </p>`,
     async () => { await setView("models"); },
     { okLabel: "去配置模型" });
@@ -990,7 +989,7 @@ function syncKbOptions() {
   $("kbMountNote").textContent = kb ? `${state.docs.length} 篇文档` : "";
   $("kbSelHint").textContent = kb
     ? (state.docs.length
-        ? `提问只在这一个库的字块里检索。当前 ${state.docs.length} 篇文档。`
+        ? `只在这一个库里检索，当前 ${state.docs.length} 篇文档。`
         : "这个库还没有文档，先去「知识库」页导入。")
     : "不挂载也能问：下面选「直接问模型」就是纯对话，不检索、不带引用编号。";
   syncNoKbRow();
@@ -1153,7 +1152,7 @@ function syncNoKbRow() {
   $("noKbHint").hidden = !off;
   if (!off) return;
   $("noKbHint").textContent = $("noKbMode").value === "direct"
-    ? "完全不检索：模型凭自己的知识回答，没有引用编号，也不会因相关度不足而拒答。"
+    ? "完全不检索：模型凭自身知识作答，无引用编号，也不会因相关度不足而拒答。"
     : "在全部知识库的字块里检索（不限定某一个库），回答仍带引用编号。";
 }
 
@@ -1789,8 +1788,7 @@ function splitChunk(c, chunk) {
   const half = Math.max(1, Math.floor(chunk.text.length / 2));
   showModal(`拆分 chunk ${chunk.id}`,
     `<input type="number" id="off" value="${half}" min="1" max="${chunk.text.length - 1}">
-     <p class="hint">在第 N 个字符处切开（1..${chunk.text.length - 1}），
-       后半段会作为新的 chunk 紧跟其后。</p>`,
+    <p class="hint">在第 N 个字符处切开，后半段成为新 chunk。</p>`,
     async () => {
       const offset = parseInt($("off").value, 10);
       const r = await jsonPost(`/api/chunk/${chunk.id}/split`, { offset });
@@ -3967,6 +3965,8 @@ function kbRowHTML(it) {
   return `<div class="kb-row${dirty ? " dirty" : ""}" data-kbrow="${it.key}">
     <div class="kb-main">
       <div class="kb-label">${esc(it.label)}${
+        it.calib ? `<i class="mark cal" title="已标定，实际生效 ${esc(String(it.calib.value))}。${
+          esc(it.calib.detail || "")}">标定 ${esc(String(it.calib.value))}</i>` : ""}${
         it.effect === "reindex" ? `<i class="mark rebuild" title="改后需要重建本库索引才生效">重建</i>` : ""}</div>
       <div class="kb-desc" title="${esc(it.desc || "")}">${esc(it.desc || "")}</div>
     </div>
@@ -4027,16 +4027,15 @@ function paintKbParams() {
         <span class="aside">独立一套 · 改全局不影响本库</span>
       </div>
       <p class="hint">
-        建库时按预设复制了一套独立参数，改动只影响本库。检索类参数保存后立刻生效；
-        带「重建」标记的分块参数保存后会自动重建本库索引${docs ? `（当前 ${docs} 个文档）` : ""}。
-        嵌入模型是系统级：${esc(data.embedding.model)} @ ${data.embedding.dim}d。
+        带「重建」标记的分块参数保存后重建本库索引${docs ? `（当前 ${docs} 篇）` : ""}；
+        嵌入模型系统级：${esc(data.embedding.model)} @ ${data.embedding.dim}d。
       </p>
       <div class="form-actions">
         <button class="primary-btn" id="kbSave"${dirty.length ? "" : " disabled"}>${
           dirty.length ? `保存（${dirty.length} 项）` : "保存"}</button>
         <button class="ghost-btn" id="kbReset">恢复默认</button>
         <button class="ghost-btn" id="kbToggleAll">${allOpen ? "全部收起" : "全部展开"}</button>
-        <span class="hint">${dirty.length ? `${dirty.length} 项改动还没保存` : "没有未保存的改动"}</span>
+        <span class="hint">${dirty.length ? "" : "没有未保存的改动"}</span>
       </div>
     </div>
     ${groups}`;
@@ -4175,8 +4174,7 @@ async function moveDoc(doc) {
   const others = kbs.filter((k) => k.id !== state.kbId);
   if (!others.length) { toast("还没有别的知识库，先在侧栏新建一个", "err"); return; }
   showModal(`移动「${esc(doc.title || `文档 ${doc.id}`)}」`, `
-    <p class="hint">这篇文档连同它的 chunk、向量、引用编号一起换到目标库，
-      不需要重新索引，问答里的来源也不会断。</p>
+    <p class="hint">连同 chunk、向量、引用编号一起搬，不用重建索引，问答里的来源也不会断。</p>
     <div class="form-row"><label>目标知识库</label>
       <select id="moveKbSel">${others.map((k) =>
         `<option value="${k.id}">${esc(k.name)}（${Number(k.docs || 0)} 篇）</option>`).join("")}</select>
@@ -4318,8 +4316,7 @@ async function renderKbSearch() {
         </select>
         <button class="primary-btn" id="kbQGo">检索</button>
       </div>
-      <p class="hint">跑的是和提问完全相同的检索链路（稠密 + 稀疏 → RRF 融合 → 精排），
-        只是不生成答案。点任意一条可看完整分块文本。</p>
+      <p class="hint">和提问走同一条检索链路，只是不生成答案；点任一条看完整分块。</p>
     </div>
     <div id="kbQOut"></div>`;
 
@@ -4524,8 +4521,7 @@ async function renderKbSessions() {
             data-title="${esc(s.title || "未命名")}" data-n="${Number(s.messages || 0)}">删除</button>
         </span>
       </div>`).join("")}
-    ${capped ? `<p class="hint u-mt10">会话超过 200 条，这里只列最近 200 条，
-      「全选」也只覆盖这 200 条。</p>` : ""}
+    ${capped ? `<p class="hint u-mt10">只列最近 200 条，「全选」也只覆盖这 200 条。</p>` : ""}
   </div>`;
 
   const all = $("sessAll");
@@ -4873,8 +4869,7 @@ function prRender() {
          <button class="mini on" data-scope="__scope__">板块「${esc(prState.scopeLabel)}」</button>
          <button class="mini" data-scope="__default__">全站（不按板块）</button>
        </div>
-       <p class="hint">只对「${esc(prState.scopeLabel)}」这个板块生效。
-         ${p ? `当前后端为 ${esc(p)}，这份板块提示词优先于它的后端级提示词。` : "不按后端区分。"}</p>`
+       <p class="hint">优先于后端级提示词${p ? `；当前后端 ${esc(p)}` : "；不按后端区分"}。</p>`
     : p
     ? `<div class="pr-scope">
          <button class="mini on" data-scope="__model__">仅 ${esc(p)}</button>
@@ -4885,8 +4880,7 @@ function prRender() {
          <button class="mini" data-scope="__model__">仅 ${esc(prState.model)}</button>
          <button class="mini on" data-scope="__default__">所有未单独配置的后端</button>
        </div>
-       <p class="hint">这是<b>角色默认</b>：任何没单独配置过的后端都用它。
-         只想改某一个后端，点左边那一档。</p>`;
+       <p class="hint">没单独配置过的后端都用这一份。</p>`;
 
   const blocks = prState.roles.map((r) => {
     const m = prState.meta[r.role] || {};
@@ -4950,8 +4944,7 @@ function prRender() {
         <b>保存历史</b>
         <button class="icon-btn" data-panel-close title="关闭">×</button>
       </header>
-      <p class="hint">每次保存前自动存一份完整快照，最多留 30 份。回滚是整体替换，
-        不做字段级合并——合并出错时你看到的是半份提示词。</p>
+      <p class="hint">保存前自动留一份快照，最多 30 份。回滚是整体替换，不做字段合并。</p>
       ${items.length ? items.map((it) => `<div class="pr-hist">
         <span class="pr-hist-ts">${esc(it.ts)}</span>
         <span class="pr-hist-why ell">${esc(it.reason)}</span>
@@ -5283,7 +5276,7 @@ function gatewayCard(g) {
         ${a.lan_base_url ? `<code>${esc(a.lan_base_url)}</code>
           <button class="mini" data-copy="${esc(a.lan_base_url)}">复制局域网</button>` : ""}
       </div>`).join("")}` : ""}
-    <label class="pick" title="默认只绑 127.0.0.1（只有这台机器能调）。勾上后本地实例绑 0.0.0.0，同一局域网可用局域网地址调用；主服务也要用 --host 0.0.0.0 启动">
+    <label class="pick" title="勾上后本地实例绑 0.0.0.0，局域网可调（无鉴权）；主服务也要用 --host 0.0.0.0 启动">
       <input type="checkbox" id="gwLan"${gatewayLan ? " checked" : ""}>
       启动时允许局域网调用（0.0.0.0，无鉴权）
     </label>
@@ -5341,7 +5334,7 @@ async function renderModels() {
   // 密钥现在默认落盘了（密文），所以这个按钮的职责是"内存 + 盘上一起抹掉"，
   // 而不是像以前那样只能靠重启进程把内存清空。
   $("pageActions").innerHTML = d.providers.some((p) => p.key_present)
-    ? `<button class="ghost-btn" id="keysClear" title="清空所有 API 密钥：内存里的、以及 data/secrets.json 里的密文">清空密钥</button>`
+    ? `<button class="ghost-btn" id="keysClear" title="清空内存和 data/secrets.json 里的所有密钥">清空密钥</button>`
     : "";
   if ($("keysClear")) {
     $("keysClear").onclick = async () => {
@@ -5354,14 +5347,12 @@ async function renderModels() {
   }
   syncProviderOptions(d);
 
-  const hasAlt = false;
-  const osLabel = () => "";
   box.innerHTML = `<div class="page">
     <div class="kb-actions">
       <button class="primary-btn" id="modelsAdd">＋ 新增端点</button>
       <button class="ghost-btn" id="modelsScan">扫描本地模型</button>
       <button class="ghost-btn" id="modelsProbe">全部测试</button>
-      <span class="hint">${d.providers.length} 个后端 · 密钥只存进程内存，勾「记住密钥」才以密文落盘</span>
+      <span class="hint">${d.providers.length} 个后端 · 密钥默认密文存本机</span>
     </div>
     ${gatewayCard(state.gateway)}
     <div class="svc-grid" id="modelGrid">${modelCards(d)}</div>
@@ -5369,16 +5360,14 @@ async function renderModels() {
     <details class="card launch-fold">
       <summary>本地模型怎么跑起来 · 扫描 .gguf，直接起 llama.cpp</summary>
       <p class="hint u-mb12-top8">
-        点「扫描本地模型」会递归找 <code>.gguf</code>；选中一个加进端点后，卡片上就有
-        「启动 / 停止」。服务跑在本机 <code>127.0.0.1:${esc(String((d.env && d.env.port_range && d.env.port_range[0]) || 8090))}</code>
-        起的一段端口上，模型和端口都跟着模型自己走。
+        「扫描本地模型」会递归找 <code>.gguf</code>；加进端点后卡片上就有「启动 / 停止」，
+        每个模型占 <code>127.0.0.1:${esc(String((d.env && d.env.port_range && d.env.port_range[0]) || 8090))}</code> 起的一段端口。
       </p>
       <p class="hint" style="margin:0 0 8px">
         可执行文件：${d.env && d.env.available
           ? `<code>${esc(d.env.server)}</code>`
-          : `<span class="warn-text">没找到 llama-server</span> —— 设环境变量
-             <code>${esc((d.env && d.env.message || "").includes("KNOWTUNE_LLAMA_SERVER")
-                       ? "KNOWTUNE_LLAMA_SERVER" : "KNOWTUNE_LLAMA_SERVER")}</code> 指向它，或放进 <code>tools/llama</code>`}
+          : `<span class="warn-text">没找到 llama-server</span> —— 用环境变量
+             <code>KNOWTUNE_LLAMA_SERVER</code> 指向它，或放进 <code>tools/llama</code>`}
       </p>
       ${d.env && !d.env.available ? `<pre class="launch">${esc(d.env.message)}</pre>` : ""}
       <p class="hint u-mt8">扫描目录：${(d.env && d.env.dirs || []).map(
@@ -5688,7 +5677,7 @@ async function openModelEditor(name) {
 
   showModal(cur ? `编辑后端 · ${name}` : "新增后端", `
     <div class="form-grid">
-      <div class="form-row"><label>名字（写进配置文件，也是界面上的标识）</label>
+      <div class="form-row"><label>名字</label>
         <input id="mName" value="${cur ? esc(cur.name) : esc(suggest("local"))}"
           placeholder="myserver" autocomplete="off" spellcheck="false">
         <span class="hint" id="mNameTip"></span></div>
@@ -5698,30 +5687,27 @@ async function openModelEditor(name) {
       <div class="form-row u-col2"><label>API 请求地址 base_url</label>
         <input id="mBase" value="${esc(cur?.base_url || "")}" placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1"
           autocomplete="off" spellcheck="false">
-        <span class="hint" id="mBaseTip">地址以厂商官方文档为准，别照抄别家的（OpenAI 的地址套到百炼上必然 404）</span></div>
-      <div class="form-row u-col2"><label>API 密钥（云端才需要，可空）</label>
+        <span class="hint" id="mBaseTip">照厂商文档填，别套别家的（OpenAI 地址配百炼必 404）</span></div>
+      <div class="form-row u-col2"><label>API 密钥（云端才需要）</label>
         <div class="input-row">
           <input id="mKey" type="password" placeholder="${cur && cur.key_present ? "已填写（留空 = 不改）" : "sk-…"}"
             autocomplete="new-password" spellcheck="false">
           <button class="ghost-btn" id="mKeyTest" type="button" title="用上面的地址 + 密钥 + 默认模型发一次真实对话">测试</button>
           ${cur && cur.key_present ? `<button class="ghost-btn" id="mKeyClear" type="button">清空</button>` : ""}
         </div>
-        <span class="hint" id="mKeyTip">${cur && cur.key_present
-          ? "已有密钥。留空保存 = 保持不变。"
-          : "云端后端需要密钥。填完保存即可，<b>默认记到本机</b>，下次启动不用重填。"}</span>
-        <label class="remember-row"><input type="checkbox" id="mRemember"${d.key_autosave === false ? "" : " checked"}><span>保存到本机（<b>密文</b>存 data/secrets.json，用 ${esc(d.key_cipher || "系统级加密")} 保护，换账户或换机器即失效。不勾 = 只保留本次会话，重启后要重填）</span></label></div>
+        <span class="hint" id="mKeyTip"></span>
+        <label class="remember-row"><input type="checkbox" id="mRemember"${d.key_autosave === false ? "" : " checked"}><span>记住密钥（<b>密文</b>存 data/secrets.json，${esc(d.key_cipher || "系统级加密")}；换机器即失效。不勾 = 只在本次会话有效）</span></label></div>
       <div class="form-row u-col2"><label>默认模型</label>
         <div class="input-row">
           <select id="mModel"></select>
           <button class="ghost-btn" id="mProbe" title="验证地址 + 密钥 + 默认模型能不能真的对话">验证</button>
         </div>
-        <span class="hint">从下拉里选；探测过就有候选。<b>这里选的模型才真正用于问答。</b></span></div>
-      <div class="form-row u-col2"><label>模型清单（我打算用哪些；可增删）</label>
+        <span class="hint">选中的这个才真正用于问答</span></div>
+      <div class="form-row u-col2"><label>模型清单（可增删）</label>
         <input id="mPoolFilter" placeholder="筛选候选：输入关键字，如 qwen2.5" autocomplete="off" spellcheck="false">
         <div id="mList" class="model-list"></div>
         <div class="u-mt6"><button class="ghost-btn" id="mListAdd" type="button">＋ 添加模型</button></div>
-        <span class="hint">清单只是候选表，不影响调用；真正生效的是上面的「默认模型」。
-          点「验证」探测出可用模型后，每行都能从下拉里选，并能<b>单独测这一个</b>能不能对话。</span></div>
+        <span class="hint">清单只是候选表，不影响调用；每行可单独测能不能对话。</span></div>
     </div>
     <div class="probe-box" id="mProbeBox" hidden></div>
     <div class="form-row u-mt10">
@@ -6144,7 +6130,7 @@ async function newKbWizard() {
       <div class="form-row"><label>描述（可选）</label>
         <input id="kbDesc" placeholder="这个库里放什么"></div>
     </div>
-    <p class="hint" style="margin:12px 0 6px">参数预设 —— 这个库的初始值（只在建库时套用一次）</p>
+    <p class="hint" style="margin:12px 0 6px">参数预设 · 建库时套一次，之后在「参数」页单独改</p>
     <div class="preset-row" id="presetRow">
       ${presets.map((p, i) => `<button class="mini${i === 0 ? " on" : ""}" data-preset="${p.id}"
         title="${esc(p.desc)}">${esc(p.label)}</button>`).join("")}
@@ -6168,8 +6154,7 @@ async function newKbWizard() {
         </select></div>
     </div>
     <p class="hint u-mt8">
-      建完之后这个库有一套自己的参数，改全局不会影响它；在「参数」页随时改，
-      分块类参数保存后会自动重建本库的索引。
+      分块类参数保存后会自动重建本库索引；改了全局也不会影响这个库。
     </p>`,
     async () => {
       const name = $("kbName").value.trim();
@@ -6582,8 +6567,6 @@ function siteInlinePanels(i, meta, plan, defProv, pv) {
   };
 
   const secPanel = `
-    <div class="scfg-lead"><b>三个入口，各自独立</b>
-      <span>开关、显示名、绑定的知识库在这一段；模型与提示词统一到下一段，不再混在板块里。</span></div>
     <div class="scfg-cards">
       ${secCard("med", "维医问答", "维医问答",
         field("检索知识库", `<select data-f="kb_id">${kbOpts}</select>`),
@@ -6595,7 +6578,7 @@ function siteInlinePanels(i, meta, plan, defProv, pv) {
       ${secCard("pv", "预问诊", "预问诊",
         field("参数", `<button class="mini" type="button" data-goto-inline="pvInline"
           >到本页参数 ↓</button>`,
-          "模型、轮次与提示词就在本页最下面，不另开窗口"),
+          "模型、轮次与提示词在本页最下面"),
         "不检索知识库，走独立的多轮问诊引擎")}
     </div>`;
 
@@ -6620,9 +6603,8 @@ function siteInlinePanels(i, meta, plan, defProv, pv) {
     `<button class="mini" type="button" ${attrs}>${esc(label)}</button>`;
 
   const modelPanel = `
-    <div class="scfg-lead accent"><b>一张表看清谁覆盖谁</b>
-      <span>留空 = 跟随上一级。角色生效顺序
-        <code>板块 → 站点 → 系统 → 实例 → 默认</code>，越靠上的行越优先。</span></div>
+    <div class="scfg-lead accent"><b>留空 = 跟随上一级</b>
+      <span>板块覆盖站点默认，表里越靠下的行越优先。</span></div>
     <div class="scfg-matrix-wrap">
       <table class="scfg-matrix">
         <thead><tr>
@@ -6663,9 +6645,9 @@ function siteInlinePanels(i, meta, plan, defProv, pv) {
     </div>
     <div class="tr-out scfg-tr-out" data-trout hidden></div>
     <div class="scfg-footnote">
-      <b>提示词顺序与模型不同</b>：<code>by_provider（后端） &gt; by_scope（板块） &gt; default（角色默认） &gt; 内置</code>。
-      同名字段两层都配时，后端级会盖过板块级 —— 别把两套顺序记混。
-      当前实际生效：译 <b>${esc(roleText(resolved.translate))}</b> · 答 <b>${esc(roleText(resolved.generate))}</b>。
+      提示词顺序与模型相反：<code>后端 &gt; 板块 &gt; 角色默认 &gt; 内置</code>，
+      同名字段两层都配时后端级胜出。当前生效：译 <b>${esc(roleText(resolved.translate))}</b>
+      · 答 <b>${esc(roleText(resolved.generate))}</b>。
     </div>`;
 
   /* ---------- 页 3：站点设置 ---------- */
@@ -6693,13 +6675,12 @@ function siteInlinePanels(i, meta, plan, defProv, pv) {
           ${opt("zh", "中文语料（维语提问先译成中文）", i.kb_lang || "zh")}
           ${opt("ug", "维吾尔语语料（直接检索）", i.kb_lang)}
           ${opt("en", "英语语料", i.kb_lang)}</select>`)}
-        ${field("产出方式", `<select data-f="answer_mode"
-          title="translate = 先用中文组织答案，再整段译成维吾尔语（稳，慢一倍）；direct = 模型直接用维吾尔语作答（快，小模型容易跑偏）">
+        ${field("产出方式", `<select data-f="answer_mode">
           ${opt("translate", "先中后译（稳 · 慢一倍）", i.answer_mode || "translate")}
           ${opt("direct", "直接维语作答（快 · 易跑偏）", i.answer_mode)}</select>`,
           "同一份资料，两种产出路径", "wide")}
       `)}
-      ${card("界面文案", "这五句话在提示词配置里统一管理，这里只改左侧那块名字", `
+      ${card("界面文案", "标题、欢迎语、免责在「提示词配置」里改", `
         ${field("侧栏库名", text("kb_name", i.kb_name, "留空用知识库名"),
           "主语言界面左侧顶部的标题")}
         ${copyField(i.lang, "主语言文案",
@@ -7028,14 +7009,13 @@ function previsitInlineHtml(cfg) {
       <div class="sif-ht"><b>预问诊参数</b><span>全局配置，不随站点分</span></div>
     </div>
     <div class="sif-body">
-      <p class="hint u-mb12-0">改的是
-        <code title="${esc(cfg.overrides_path || "")}">config/${esc(file)}</code>：
-        只记和 <code>previsit.yaml</code> 不一样的键，改回默认值那一行会自动消失。
-        保存后立即生效——不重启、不打断正在进行的问诊。</p>
+      <p class="hint u-mb12-0">只记与 <code>previsit.yaml</code> 不同的键（存
+        <code title="${esc(cfg.overrides_path || "")}">config/${esc(file)}</code>），
+        改回默认值自动消失；保存立即生效，不打断问诊。</p>
       <div class="pv-rt">${esc(rtLine)}${rt.llm_error ? ` · 上次报错：${esc(rt.llm_error)}` : ""}${rt.translator_error ? ` · 翻译报错：${esc(rt.translator_error)}` : ""}</div>
       <div class="pv-groups">${pvGroupsHtml(cfg)}</div>
       <div class="sif-savebar">
-        <span class="sif-save-hint">密钥不在这里配：在「模型」页填一次，预问诊跟着用。</span>
+        <span class="sif-save-hint">密钥在「模型」页填一次，这里跟着用。</span>
         <button class="mini" type="button" data-pv-reset>恢复出厂值</button>
         <button class="primary-btn" type="button" data-pv-save>保存并生效</button>
       </div>
@@ -7277,8 +7257,7 @@ async function openSiteEditor(cur) {
         <select id="sKb">${kbOptions}</select></div>
       <div class="form-row"><label>古籍问答用的知识库（可选）</label>
         <select id="sClassicKb">${classicOptions}</select>
-        <span class="hint">选了独立库，古籍问答就只在这个库里检索；选「不单独分库」
-          则仍按主库里文档标题是否含「古籍」来分。</span></div>
+        <span class="hint">独立库时古籍问答只在这里检索；不分库则按主库标题是否含「古籍」分流。</span></div>
       <div class="form-row"><label>端口</label>
         <input id="sPort" type="number" value="${suggested}"></div>
       <div class="form-row"><label>界面与回答语言</label>
@@ -7305,11 +7284,10 @@ async function openSiteEditor(cur) {
       <div class="form-row"><label>输出（作答）用哪个模型</label>
         <select id="sRoleGen">${roleOptions(cur, "generate", d.providers || [])}</select></div>
       <div class="form-row"><label>界面文案</label>
-        <span class="hint">标题、副标题、欢迎语、示例问题、免责声明在「提示词配置 · 界面文案」
-          里统一改${copy && copy.title ? `；当前：${esc(String(copy.title).slice(0, 24))}` : ""}。</span></div>
+        <span class="hint">标题、副标题、欢迎语、示例、免责在「提示词配置 · 界面文案」里改${
+          copy && copy.title ? `；当前：${esc(String(copy.title).slice(0, 24))}` : ""}。</span></div>
       <div class="form-row"><label>板块</label>
-        <span class="hint">新建的站点三个板块（维医问答 / 古籍问答 / 预问诊）默认全开；
-          建好后到「模型与参数」→ 板块里改名或关掉。</span></div>
+        <span class="hint">三个板块默认全开，建好后到「模型与参数」→ 板块里改名或关掉。</span></div>
       <div class="form-row"><label class="toggle">
         <input type="checkbox" id="sAuto" ${cur && cur.autostart ? "checked" : ""}>
         <span class="sw" aria-hidden="true"></span><span class="toggle-label">后台启动时自动拉起</span>

@@ -36,14 +36,14 @@ KINDS: tuple[dict[str, Any], ...] = (
         "label": "本地（llama.cpp）",
         "local": True,
         "default_base": "http://127.0.0.1:8090/v1",
-        "hint": "选一个本地 .gguf，点「启动」就会起一个 OpenAI 兼容端点；模型和端口都跟模型走。",
+        "hint": "选一个本地 .gguf 点「启动」，就会起一个 OpenAI 兼容端点。",
     },
     {
         "id": "openai",
         "label": "自定义 OpenAI 兼容",
         "local": False,
         "default_base": "https://api.openai.com/v1",
-        "hint": "填地址 + 密钥 + 模型名即可。任何实现 /v1/chat/completions 的服务都算。",
+        "hint": "只要实现 /v1/chat/completions 就能用。",
     },
 )
 KIND_MAP = {k["id"]: k for k in KINDS}
