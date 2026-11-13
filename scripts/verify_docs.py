@@ -298,27 +298,45 @@ cli_smoke = subprocess.run(
 if cli_smoke.returncode or "serve" not in cli_smoke.stdout:
     errors.append(f"[install] CLI 入口不可用：{cli_smoke.stderr.strip()[-300:]}")
 
-# 站点卡参数行入口：README 写「四行参数表整行可点」，代码得真接住；
-# 同时守住左右分栏，防止有人又把参数区塞回四格横排。
+# 站点卡参数区：README 写「参数外移、四行并三行、冗余说明全砍」，
+# 代码得真接住。既守新结构，也守"别把删掉的东西加回来"。
 admin_js = (STATIC / "api" / "static/app.js").read_text(encoding="utf-8")
 for token, why in (
     ("const TAB_NAME", "页签映射"),
     ('data-jumptab="${tab}"', "参数行的跳转属性"),
     ("async function openSiteConfig(name, initialTab", "弹窗初始页签参数"),
     ("jump.dataset.jumptab", "卡片点击分支"),
-    ('class="sbk-grid"', "左右分栏容器"),
-    ('class="sbk-rows"', "纵向参数行表"),
+    ('class="sbk-top"', "身份头部"),
+    ('class="sbk-params"', "平铺参数区"),
+    ('class="sbk-prow', "整行可点的参数行"),
+    ("const bind = [", "板块与知识库合并去重"),
+    ("const modelLine", "译答模型去重合并"),
+    ("i.ug_capable === false && i.ug_note", "正常态自检不渲染"),
 ):
     if token not in admin_js:
-        errors.append(f"[ui] app.js 缺少站点卡参数入口的{why}：{token}")
+        errors.append(f"[ui] app.js 缺少站点卡参数区的{why}：{token}")
+# 三行就是三行：板块/知识库、模型、站点。退回四行等于把重复加回来。
+if admin_js.count("${prow(") != 3:
+    errors.append(f"[ui] 参数行应为合并后的 3 行，实为 {admin_js.count('${prow(')} 行")
+for gone, why in (
+    ("sbk-pagehint", "顶部「怎么用」提示条"),
+    ("sbk-grid", "左右分栏容器"),
+    ("sbk-rows", "卡中卡行表"),
+    ("sbk-row-go", "每行重复的「改 →」"),
+):
+    if gone in admin_js:
+        errors.append(f"[ui] app.js 仍残留已删除的{why}：{gone}")
 admin_css = (STATIC / "api" / "static/style.css").read_text(encoding="utf-8")
 for token, why in (
-    (".sbk-row:hover", "参数行可点样式"),
-    (".sbk-grid", "左右分栏样式"),
-    (".sbk-side", "左栏样式"),
+    (".sbk-params", "平铺参数区样式"),
+    (".sbk-prow:hover", "参数行可点样式"),
+    (".sbk-top", "身份头部样式"),
 ):
     if token not in admin_css:
         errors.append(f"[ui] style.css 缺少{why}：{token}")
+for gone in ("sbk-grid", "sbk-pagehint", "sbk-rows", ".sbk-row-go"):
+    if gone in admin_css:
+        errors.append(f"[ui] style.css 仍残留已删除的样式：{gone}")
 
 # 切页性能护栏：README 写了「即点即到」，代码不能退回串行重拉 + 撕卡片。
 # 这条不是性能基准测试，只守结构性前提——真要测耗时用浏览器脚本量。

@@ -1,6 +1,6 @@
 /* 构建号：与 index.html 里那份一致，不一致说明浏览器拿到的是旧 JS，
    页面加载完会强制换一次（见 index.html 的自检脚本）。 */
-window.ADMIN_BUILD = "0.9.66";
+window.ADMIN_BUILD = "0.9.67";
 
 const $ = (id) => document.getElementById(id);
 
@@ -6356,10 +6356,13 @@ function roleText(v) {
 const LANG_NAME = { ug: "维吾尔语（RTL）", zh: "中文", en: "English" };
 const KB_LANG_NAME = { zh: "中文语料", ug: "维吾尔语料", en: "英语语料" };
 
-/* 2026-11-13 调整：四格原来是只读摘要，想改参数只能回右上角那颗按钮；
- * 六颗按钮平铺没主次，运行时长直接甩一个 `572s`，模型名单行截断，
- * 底部维吾尔语自检长文把一张卡撑到半屏。现在四格就是参数快捷入口，
- * 点哪格开哪页；长文本两行内可读，自检折起来，异常照旧立刻可见。 */
+/* 2026-11-13 三次整理：参数不再缩在右栏那张"卡中卡"行表里，
+ * 直接铺成整卡下方一块独立参数区。同一件事只说一遍：
+ *   - 板块名和库名原本分两行各写一次 → 合并成「板块 / 知识库」一行；
+ *   - 译 / 答两个模型都带同一个 provider 前缀 → 只标一次；
+ *   - 顶部提示条、卡内「点任意一行」、四行末尾的「改 →」三层同义 → 全删；
+ *   - 正常态维吾尔语自检与模型行信息重复 → 只在自检失败时出现。
+ * 结果：四行并三行，每行单行值，整行可点跳对应页签。 */
 const TAB_NAME = {
   sections: "板块与知识库", models: "模型与提示词", site: "站点设置",
 };
@@ -6380,8 +6383,6 @@ function siteBlock(i, meta, plan, defProv) {
     .filter(([k]) => secOn(k))
     .map(([k, def]) => String(sec(k).name || "").trim() || def)
     .join(" · ");
-  const secCount = [["med", "维医"], ["classic", "古籍"], ["pv", "预问诊"]]
-    .filter(([k]) => secOn(k)).length;
   const classicKb = (d.kbs || []).find((k) => k.id === (i.classic_kb_id || 0));
   const shown = i.content_lang && i.content_lang !== i.lang
     ? `<span class="sbk-dim warn" title="页面语言按文案内容判定，下拉只在判不出时兜底"
@@ -6409,52 +6410,81 @@ function siteBlock(i, meta, plan, defProv) {
       </details>`;
   };
 
-  /* 一行参数 = 一个按钮：左侧标签、中间当前值、右侧「改 →」。
-   * 2026-11-13 二次重排：四格横排每格只有 1/4 卡宽，长模型名和维吾尔文
-   * 挤在里面；改成纵向行表后，参数区占整卡右栏、宽一倍，行标签对齐、值不截断。 */
-  const row = (tab, label, main, sub, cls = "") => `<button type="button"
-      class="sbk-row${cls ? " " + cls : ""}" data-jumptab="${tab}"
-      title="${esc(main + " · " + sub)}｜打开「${esc(TAB_NAME[tab])}」">
-      <span class="sbk-row-k">${esc(label)}</span>
-      <span class="sbk-row-v"><b dir="auto">${esc(main)}</b><i dir="auto">${esc(sub)}</i></span>
-      <span class="sbk-row-go">改 <span aria-hidden="true">→</span></span>
+  /* 一行参数 = 整行按钮：标签 / 单行值（+ 可选次要色补充）/ 悬停才亮的箭头。
+   * 参数区不再套深色内框，值从卡片左边一直铺到右边；「改」字不重复写三遍。 */
+  const prow = (tab, label, value, sub = "", cls = "") => `<button type="button"
+      class="sbk-prow${cls ? " " + cls : ""}" data-jumptab="${tab}"
+      title="${esc(value + (sub ? " · " + sub : ""))}｜打开「${esc(TAB_NAME[tab])}」">
+      <span class="sbk-pk">${esc(label)}</span>
+      <span class="sbk-pv" dir="auto">${esc(value)}${
+        sub ? `<em class="sbk-pv-sub"> · ${esc(sub)}</em>` : ""}</span>
+      <span class="sbk-pgo" aria-hidden="true">→</span>
     </button>`;
 
-  const ugText = i.ug_note
+  /* 板块名与绑定的库名经常同名（「维医知识问答」既是入口名又是库名）。
+   * 主值已经写了一遍，库名只在与主值不同时才补，全同名就只留开启数。 */
+  const mainKb = i.kb_name || (kb && kb.name) || `#${i.kb_id}`;
+  const classicName = classicKb ? classicKb.name : "按标题分流";
+  const bind = [
+    secNames.includes(mainKb) ? "" : `主库 ${mainKb}`,
+    secNames.includes(classicName) ? "" : `古籍 ${classicName}`,
+  ].filter(Boolean).join(" · ");
+  // 不再补「3 / 3 开启」：主值已经把开启的板块逐个列出来，计数是重复信息。
+
+  /* 译 / 答两个模型通常挂在同一个后端下，provider 前缀只写一次。 */
+  const splitRole = (v) => {
+    const s = roleText(v);
+    const k = s.indexOf(" / ");
+    return k > 0 ? [s.slice(0, k), s.slice(k + 3)] : ["", s];
+  };
+  const [tp, tm] = splitRole(resolved.translate);
+  const [gp, gm] = splitRole(resolved.generate);
+  const modelLine = (tp && tp === gp)
+    ? `${tp} · 译 ${tm} / 答 ${gm}`
+    : `译 ${roleText(resolved.translate)} / 答 ${roleText(resolved.generate)}`;
+
+  /* 语言、作答方式、语料类型、自启原本被拆成主副两行，合成一行即可。 */
+  const siteLine = [
+    LANG_NAME[i.lang] || i.lang, mode,
+    KB_LANG_NAME[i.kb_lang] || i.kb_lang || "",
+    i.autostart ? "开机自启" : "",
+  ].filter(Boolean).join(" · ");
+
+  /* 正常态的维吾尔语自检和「模型」行说的是同一件事，不再占一行；
+   * 只有自检判定失败（ug_capable === false）才作为异常显示。 */
+  const ugText = i.ug_capable === false && i.ug_note
     ? i.ug_note + (i.ug_sample ? `（模型返回：${i.ug_sample.slice(0, 40)}）` : "")
     : "";
   // 没说明就不渲染底栏，免得留一条没内容的空 padding。
   const notes = [
-    foldNote("维吾尔语自检", ugText, i.ug_capable === false ? "bad" : "", i.ug_capable === false),
+    foldNote("维吾尔语自检", ugText, "bad", true),
     foldNote("异常", i.error, "bad", true),
     foldNote("备注", i.note),
   ].filter(Boolean).join("");
 
-  /* 整卡两栏：左边是「这是哪个站、怎么操作」，右边是「现在跑的是什么参数」。
-   * 底部自检/异常横跨整卡，不塞进右栏把参数行挤断。 */
+  /* 整卡单列：上面一行是这个站是谁、怎么操作，下面整块是摊开的参数。
+   * 参数不缩在右栏内框里，三行各占满整卡宽度；异常才出现底栏。 */
   return `<section class="site-block${running || external ? "" : " is-off"}"
       data-name="${esc(i.name)}">
-    <div class="sbk-grid">
-      <div class="sbk-side">
+    <div class="sbk-top">
+      <div class="sbk-idblock">
         <div class="sbk-id">
           <span class="sbk-name">${esc(i.name)}</span>
           ${siteStatusBadge(i.status)}
-        </div>
-        <div class="sbk-meta-col">
-          <span>端口 <b>${i.port}</b></span>
-          <span>${stateText}</span>
-          ${i.public ? `<span>局域网可访问</span>` : ""}
-          ${shown}
+          <span class="sbk-meta">端口 ${i.port} · ${stateText}${
+            i.public ? " · 局域网可访问" : ""}${shown}</span>
         </div>
         <a class="sbk-url" href="${esc(i.url)}" target="_blank"
           rel="noreferrer">${esc(i.url)}</a>
-        <div class="sbk-side-acts is-config">
+      </div>
+      <div class="sbk-acts">
+        <div class="sbk-act-group is-config">
           <button class="mini is-primary" data-scfg
-            title="板块、知识库、端口、模型角色、语言与全部界面文案">模型与参数</button>
+            title="板块、知识库、端口、模型角色、语言与全部界面文案">全部参数</button>
           ${secOn("pv") ? `<button class="mini" data-pvcfg
             title="预问诊的模型、轮次、知识图谱追问、语义召回与提示词">预问诊参数</button>` : ""}
         </div>
-        <div class="sbk-side-acts is-ops">
+        <div class="sbk-act-group is-ops">
           <button class="mini" data-sact="copy" data-url="${esc(i.url)}">复制链接</button>
           ${external ? "" : `<button class="mini${running ? " is-danger" : ""}"
             data-sact="${running ? "stop" : "start"}" ${busy ? "disabled" : ""
@@ -6464,23 +6494,13 @@ function siteBlock(i, meta, plan, defProv) {
           <a class="mini loc" href="${esc(i.url)}" target="_blank" rel="noreferrer">打开</a>
         </div>
       </div>
+    </div>
 
-      <div class="sbk-main">
-        <div class="sbk-label">当前生效
-          <span class="sbk-note">点任意一行，直接跳到对应参数页</span>
-          <span class="sbk-label-tail">保存后立即生效 · 改端口或监听会重启</span>
-        </div>
-        <div class="sbk-rows">
-          ${row("sections", "入口", secNames || "全部关闭",
-            `${secCount} / 3 个板块已开启`, secNames ? "" : "is-warn")}
-          ${row("sections", "知识库", i.kb_name || (kb && kb.name) || `#${i.kb_id}`,
-            `古籍：${classicKb ? classicKb.name : "按标题分流"}`)}
-          ${row("models", "译 / 答", `译 ${roleText(resolved.translate)}`,
-            `答 ${roleText(resolved.generate)}`)}
-          ${row("site", "语言 / 产出", `${LANG_NAME[i.lang] || i.lang} · ${mode}`,
-            `${KB_LANG_NAME[i.kb_lang] || i.kb_lang || "-"}${i.autostart ? " · 开机自启" : ""}`)}
-        </div>
-      </div>
+    <div class="sbk-params">
+      ${prow("sections", "板块 / 知识库", secNames || "全部关闭", bind,
+        secNames ? "" : "is-warn")}
+      ${prow("models", "模型", modelLine)}
+      ${prow("site", "站点", siteLine)}
     </div>
 
     ${notes ? `<div class="sbk-foot">${notes}</div>` : ""}
@@ -7124,13 +7144,6 @@ function paintSites(d, roles, meta) {
 
   const plans = (roles && roles.sites) || [];
   $("viewSite").innerHTML = `<div class="page">
-    <p class="sbk-pagehint">
-      <span class="sbk-pagehint-k">怎么用</span>
-      每张卡都是一个对外入口：点<span class="kbd-inline">模型与参数</span>，
-      或直接点右侧任意一行参数，就能跳到对应配置页。保存后立即生效；只有
-      <span class="kbd-inline">端口</span>和<span class="kbd-inline">局域网可访问</span>
-      会动到 socket、重启那个站点。
-    </p>
     ${items.length
       ? items.map((i) => siteBlock(i, meta, plans.find((p) => p.name === i.name),
         (roles && roles.default_provider) || "")).join("")
@@ -7184,7 +7197,7 @@ function bindSiteActions() {
       await openPrevisitConfig();
       return;
     }
-    // 卡片事实区的四格：点哪格就打开站点配置并停在哪一页。
+    // 参数区每一行：点哪行就打开站点配置并停在哪一页。
     const jump = e.target.closest("[data-jumptab]");
     if (jump) {
       const blk = jump.closest(".site-block");
