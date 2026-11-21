@@ -41,7 +41,6 @@ class Param:
     step: float | None = None
     unit: str = ""
     options: tuple[str, ...] = ()
-    options_from: str = ""         # "providers" = 从 generation.providers 取
     effect: str = "runtime"        # runtime | reindex
     yaml_key: str = ""             # YAML 里的别名（如 mmr.lambda_ 写成 lambda）
 
@@ -61,6 +60,20 @@ GROUPS: tuple[tuple[str, str, str], ...] = (
     ("chat", "会话", "多轮对话带几轮历史。"),
     ("ingest", "导入", "只影响之后新导入的文档。"),
 )
+
+# 面板默认只展示日常调参项。完整注册表仍参与校验、落盘和运行时读取，
+# 这里只控制界面认知负担。
+BASIC_PARAMS = frozenset({
+    "retrieval.dense.enabled", "retrieval.dense.top_k",
+    "retrieval.sparse.enabled", "retrieval.sparse.top_k",
+    "retrieval.fusion.method", "retrieval.fusion.top_k",
+    "retrieval.fusion.w_dense", "retrieval.fusion.w_sparse",
+    "retrieval.rerank.enabled", "retrieval.rerank.top_k",
+    "refusal.enabled", "refusal.min_score",
+    "generation.temperature", "generation.max_tokens",
+    "chat.history_turns", "chat.history_token_budget", "ingest.max_file_mb",
+    "chunking.strategy", "chunking.size", "chunking.overlap", "chunking.min_chunk",
+})
 
 PARAMS: tuple[Param, ...] = (
     # ---------------------------------------------------------------- 召回
@@ -169,9 +182,6 @@ PARAMS: tuple[Param, ...] = (
           lo=0.0, hi=1.0, step=0.05),
 
     # ---------------------------------------------------------------- 生成
-    Param("generation.provider", "后端", "generation", "enum",
-          "都走 OpenAI 兼容协议，切换不影响已入库数据。",
-          options_from="providers"),
     Param("generation.temperature", "温度", "generation", "float",
           "问答 0.1 够用，调高会让引用编号更不稳。",
           lo=0.0, hi=2.0, step=0.05),
@@ -223,6 +233,8 @@ PARAMS: tuple[Param, ...] = (
           lo=0, hi=200, step=5, unit="字"),
 )
 
+# 完整注册表保留全部参数：校验、落盘与运行时读取都依赖它。
+# BASIC_PARAMS 只决定界面上哪些默认展开、哪些归入「高级参数」折叠区。
 PARAM_MAP: dict[str, Param] = {p.path: p for p in PARAMS}
 
 
@@ -254,8 +266,6 @@ def write_value(cfg: Config, path: str, value: Any) -> None:
 
 
 def options_of(p: Param, cfg: Config) -> list[str]:
-    if p.options_from == "providers":
-        return list(cfg.generation.providers)
     return list(p.options)
 
 
@@ -273,16 +283,6 @@ def coerce(p: Param, cfg: Config, value: Any) -> Any:
     if p.kind == "enum":
         opts = options_of(p, cfg)
         if value not in opts:
-            # 还没配任何端点时，`generation.provider` 只能是空串。这是全新安装
-            # 的合法状态，不该逼用户"先去配个端点"才能改别的参数。
-            if value == "" and not opts:
-                return ""
-            # 注册表为空时没法校验端点名。此时若库里还存着旧端点（比如端点是
-            # 后来被删掉的），整份配置重校验会把"改检索权重"这种无关操作一起
-            # 挡死，报出来还是句看不懂的"只能是 ，收到 'siliconflow'"。
-            # 放行并交给运行时判空降级：端点确实不存在时，生成那一步会自己报错。
-            if not opts and p.options_from == "providers":
-                return value
             raise ValueError(f"{p.label} 只能是 {' / '.join(opts)}，收到 {value!r}")
         return value
 
@@ -522,6 +522,7 @@ def snapshot(cfg: Config) -> dict[str, Any]:
                 "saved": is_saved,
                 "from_calibration": p.path in persisted_by_calibration
                 and is_saved and cal_score is not None,
+                "advanced": p.path not in BASIC_PARAMS,
             })
         if items:
             groups.append({"id": gid, "label": label, "note": note, "items": items})

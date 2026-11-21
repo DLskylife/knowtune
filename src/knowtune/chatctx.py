@@ -22,14 +22,20 @@ from __future__ import annotations
 MIN_CONTEXT_CHARS = 200
 
 
-def trim_history(history: list[dict], *, budget: int) -> list[dict]:
-    """按 chat.history_token_budget 从最早一轮开始整轮丢弃。
+def trim_history(
+    history: list[dict], *, budget: int, turns: int = 0
+) -> list[dict]:
+    """先按 chat.history_turns 留最近几轮，再按 history_token_budget 裁。
+
+    以前轮数这道闸在调用方用 SQL `LIMIT turns*2` 实现——那要求 history 来自
+    数据库。现在后台和前台一样由请求带 history（会话历史归前端），没有 SQL
+    可依赖，两道闸就都收进这里。
 
     与 build_context 一样按**字符**计（中文场景下字符≈token 的粗糙近似，
     两边口径必须一致，否则前端说的"还能带几轮"和实际装进去的对不上）。
 
     `budget <= 0` 表示不带历史，返回空列表——这是"设 0 即单轮问答"的实现，
-    比在调用方散落 `if budget:` 更好查。
+    比在调用方散落 `if budget:` 更好查。`turns <= 0` 表示不限轮数，只按预算裁。
 
     三条规则：
     1. **按轮丢，不按条丢。** 只丢 assistant 会留下一串没有提问的回答，
@@ -54,6 +60,11 @@ def trim_history(history: list[dict], *, budget: int) -> list[dict]:
             pairs.append(history[i - 1 : i])
             i -= 1
     pairs.reverse()
+
+    # 轮数闸：只留最近 N 轮。N<=0 不限。
+    limit = int(turns)
+    if limit > 0:
+        pairs = pairs[-limit:]
 
     kept_pairs: list[list[dict]] = []
     spent = 0

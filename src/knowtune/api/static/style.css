@@ -290,31 +290,6 @@ kbd {
   padding: 4px 8px 2px;
 }
 
-/* --- 侧栏底部：状态压缩成两行，模型名一律省略号。 */
-
-.sidebar-foot {
-  flex: none;
-  border-top: 1px solid var(--line-soft);
-  padding: 12px 14px 14px;
-  display: grid;
-  gap: 7px;
-  /* 侧栏内容高度随当前页变化（模型页没有文档列表，中间能空出 300px），
-     底部这块要自己浮起来，不能像被内容甩在下面的残片。 */
-  background: var(--surface);
-  box-shadow: 0 -10px 18px -12px rgba(0, 0, 0, .65);
-}
-.foot-line {
-  display: flex; align-items: center; gap: 6px;
-  font-size: 11.5px;
-  color: var(--text-3);
-  min-width: 0;
-}
-/* 状态行做成两列：左标签、右数值。原来 "精排 bge-reranker-base" 是一句
-   左对齐的连续文字，读起来像日志而不是状态面板；两端一分开，眼睛能竖着扫。 */
-.foot-line b:last-of-type { margin-left: auto; font-weight: 400; color: var(--text-2);
-  font-variant-numeric: tabular-nums; }
-.foot-line .k { color: var(--text-3); flex: none; }
-.foot-line .sep { display: none; }
 
 .dot {
   width: 6px; height: 6px; border-radius: 50%;
@@ -324,29 +299,7 @@ kbd {
 }
 .dot.ok { background: var(--ok); box-shadow: 0 0 0 2px rgba(62, 207, 142, .13); }
 .dot.err { background: var(--err); box-shadow: 0 0 0 2px rgba(242, 85, 90, .13); }
-/* 光晕是往外扩的，不补这 2px 就会压到后面第一个字 */
-.foot-line .dot { margin-right: 2px; }
 
-.foot-btn {
-  width: 100%;
-  min-height: 34px;
-  margin-top: 3px;
-  border: 1px solid var(--line);
-  background: var(--surface-2);
-  border-radius: 8px;
-  font-size: 12.5px;
-  letter-spacing: .2px;
-  color: var(--text-2);
-  display: flex; align-items: center; justify-content: center; gap: 7px;
-  transition: background .12s, color .12s, border-color .12s;
-}
-.foot-btn svg { width: 14px; height: 14px; flex: none; opacity: .75; }
-/* 滑块图标的圆心里要"挖空"，线条才不会从中间穿过去糊成一坨。
-   填充色必须跟着按钮底色走，所以放在这里而不是写进 SVG 属性。 */
-.foot-btn .fb-knob { fill: var(--surface-2); }
-.foot-btn:hover .fb-knob { fill: var(--surface-3); }
-.foot-btn:hover { color: var(--text); border-color: #333b4a; background: var(--surface-3); }
-.foot-btn:hover svg { opacity: 1; }
 
 /* ================================================================= 主区 */
 
@@ -425,7 +378,7 @@ option:checked { color: var(--text); }
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface-2);
-  /* 参数行里 .set-val 是等宽字体，开关不要被带进去 */
+  /* 开关旁边可能挨着等宽字体的数值，别让它继承过去 */
   font-family: system-ui, "Segoe UI", "Microsoft YaHei", sans-serif;
   font-size: 12.5px; color: var(--text-2);
   cursor: pointer; user-select: none;
@@ -472,6 +425,9 @@ option:checked { color: var(--text); }
   transition: background .12s, color .12s, border-color .12s;
 }
 .ghost-btn:hover { color: var(--text); border-color: #333b4a; background: var(--surface-3); }
+/* 按不了的时候得看得出来：cursor 还是手型的话，人会一直去点 */
+.ghost-btn:disabled { opacity: .45; cursor: default; }
+.ghost-btn:disabled:hover { color: var(--text-2); border-color: var(--line); background: var(--surface-2); }
 
 /* 知识库页的操作按钮行：从顶栏挪下来后落在内容区顶部。 */
 .kb-actions {
@@ -882,69 +838,7 @@ option:checked { color: var(--text); }
 .dirty-note.warn { color: var(--warn); }
 .dirty-note.ok { color: var(--ok); }
 
-/* 分段标题：不加边框，靠刻度与字重分节。抽屉里线一多就像表格。 */
-.set-group { padding: 2px 0 6px; }
-.set-group + .set-group { border-top: 1px solid var(--line-soft); }
-
-.set-nav {
-  position: sticky; top: 0; z-index: 1;
-  display: flex; flex-wrap: wrap; gap: 6px;
-  padding: 12px 0;
-  background: var(--surface);
-  border-bottom: 1px solid var(--line-soft);
-}
-.nav-chip {
-  height: 26px;
-  padding: 0 10px;
-  border-radius: 20px;
-  border: 1px solid var(--line);
-  background: var(--surface-2);
-  font-size: 11.5px;
-  color: var(--text-2);
-  transition: background .12s, color .12s, border-color .12s;
-}
-.nav-chip:hover { color: var(--text); border-color: #333b4a; background: var(--surface-3); }
-
-.set-group-head {
-  width: 100%;
-  display: flex; align-items: center; gap: 8px;
-  padding: 16px 0 8px;
-  text-align: left;
-  font-size: 11.5px; font-weight: 600;
-  letter-spacing: 1px; text-transform: uppercase;
-  color: var(--text-3);
-  min-height: 34px;
-}
-.set-group-head:hover { color: var(--text-2); }
-.set-group-head .chev {
-  font-size: 9px;
-  color: var(--text-3);
-  transition: transform .15s;
-  transform: rotate(90deg);
-  width: 10px;
-  display: inline-block;
-}
-.set-group.closed .chev { transform: rotate(0deg); }
-.set-group-head .cnt { margin-left: auto; font-size: 11.5px; letter-spacing: 0; font-weight: 400; }
-
-.set-group-note {
-  font-size: 11.5px; color: var(--text-3); line-height: 1.7;
-  padding: 0 0 10px;
-}
-.set-group.closed .set-group-note,
-.set-group.closed .set-row { display: none; }
-
-.set-row { padding: 12px 0 13px; border-top: 1px solid var(--line-soft); }
-.set-row-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.set-name { font-size: 12.5px; color: var(--text); line-height: 1.4; }
-.set-val {
-  font-family: var(--mono); font-size: 12px; color: var(--text-2);
-  display: flex; align-items: center; gap: 6px; flex: none;
-}
-.set-val .unit { font-family: inherit; font-size: 11px; color: var(--text-3); }
-.marks { display: flex; align-items: center; gap: 4px; }
-.set-row.is-unsaved .set-val { color: var(--warn); }
-.set-row.is-unsaved input.num { border-color: rgba(232, 163, 61, .45); color: var(--warn); }
+.model-usage { margin-top: 8px; color: var(--text-2); font-size: 11px; }
 .mark {
   font-style: normal; font-size: 10.5px; letter-spacing: .2px;
   padding: 1px 5px; border-radius: 4px;
@@ -953,20 +847,6 @@ option:checked { color: var(--text); }
 .mark.cal { background: rgba(91, 140, 255, .14); color: #9dc0ff; }
 .mark.rebuild { background: rgba(242, 85, 90, .12); color: var(--err); }
 
-.set-desc { font-size: 11.5px; color: var(--text-3); line-height: 1.7; margin-top: 3px; }
-.set-ctl { margin-top: 9px; display: flex; align-items: center; gap: 10px; }
-.set-ctl select {
-  flex: 1; min-width: 0;
-  height: var(--ctl);
-  background: var(--surface-2);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 0 9px;
-  font-size: 12.5px;
-  color: var(--text-2);
-  cursor: pointer;
-}
-.set-ctl select:hover { border-color: #333b4a; }
 
 .mini {
   font-size: 11.5px; color: var(--text-2);
@@ -1009,7 +889,6 @@ option:checked { color: var(--text); }
 }
 .pick-chip:hover { color: var(--text); border-color: #333b4a; background: var(--surface-2); }
 .pick-chip:disabled { opacity: .4; cursor: not-allowed; }
-.set-row .set-cur { font-family: var(--mono); font-size: 12.5px; color: var(--text); }
 
 input[type=number].num {
   width: 84px; height: var(--ctl);
@@ -1369,8 +1248,6 @@ input[type=number].num::-webkit-outer-spin-button { -webkit-appearance: none; ma
   font-size: 11.5px; background: var(--surface-3); color: var(--text-2);
   white-space: nowrap;
 }
-.badge.local { background: rgba(62, 207, 142, .12); color: var(--ok); }
-.badge.cloud { background: rgba(91, 140, 255, .13); color: var(--accent); }
 .badge.warn { background: rgba(232, 163, 61, .13); color: var(--warn); }
 .badge.err { background: rgba(242, 85, 90, .13); color: var(--err); }
 
@@ -1399,10 +1276,121 @@ input[type=number].num::-webkit-outer-spin-button { -webkit-appearance: none; ma
 
 /* ------------------------------------------------------------- 模型服务页 */
 
+/* 密钥记没记住：一行状态，摆在两节之前。
+   这条线不是"提示"，是回答问题——用户最常问的就是"我填的 key 去哪了"。 */
+.key-note {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 10px; margin: 0 0 14px;
+  border: 1px solid var(--line-soft); border-radius: 8px;
+  background: var(--surface-2);
+  font-size: 11.5px; color: var(--text-2);
+}
+.key-note .txt { line-height: 1.45; min-width: 0; }
+.key-note code { font-size: 11px; }
+.key-note .sp { flex: 1 1 auto; }
+.key-note.warn {
+  border-color: rgba(232, 163, 61, .38);
+  background: rgba(232, 163, 61, .07);
+  color: var(--warn);
+}
+
+/* 两节：本地（.gguf 起进程）和外部（云端地址）。以前混在一个栅格里，
+   本地卡和云端卡长得一模一样，只有一枚「本地/云端」小徽标区分——扫出来的
+   模型和付费云端挤在一排，找哪个都得先读徽标。分节后徽标本身也多余了。 */
+.svc-sec + .svc-sec {
+  margin-top: 22px; padding-top: 18px;
+  border-top: 1px solid var(--line-soft);
+}
+.sec-head {
+  display: flex; align-items: center; gap: 10px;
+  flex-wrap: wrap; margin: 0 0 10px;
+}
+.sec-head h3 { font-size: 13px; font-weight: 600; letter-spacing: .2px; }
+.sec-head .hint { line-height: 1.45; }
+.sec-head .sp { flex: 1 1 auto; }
+/* 空态靠左贴着自己那一节的标题：居中会把一句话甩到整行中间，看着像全页提示，
+   而它说的只是"这一节还没有东西" */
+.svc-sec .empty-tip { padding: 2px 0 10px; text-align: left; }
+
 .svc-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
   gap: 10px;
+}
+/* 本地一节排成「端点卡 + 模型文件」两栏。
+ *
+ * 原来两者上下叠：本地往往只有一两个端点，一张 300px 的卡占着首列，右边
+ * 五百多像素全空；下面的扫描区却是通栏大块，中间也空。一条竖着的空白把
+ * 同一件事（这台机器上有什么、起没起、怎么加进来）劈成两半。
+ *
+ * 现在扫描区变窄栏贴到右边——「扫到 → 加入 → 卡片里多一个」这条因果在
+ * 同一屏里连成一行。窗口窄到放不下就退回上下堆叠，顺序不变，那套通栏
+ * 样式（扫描区原来那一版）原样生效，所以下面两栏的调整全部关在断点里，
+ * 免得叠起来之后还留着窄栏那套两行控件。 */
+.svc-local-main { min-width: 0; }
+@media (min-width: 1101px) {
+  .svc-local-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 380px;
+    gap: 10px;
+    align-items: start;
+  }
+  .svc-local-layout .scan-panel { margin-top: 0; }
+  /* 收起之后右栏不存在了，栅格退回单列——留着 380px 的空槽比不收起还难看。 */
+  .svc-local-layout.is-collapsed { grid-template-columns: minmax(0, 1fr); }
+  .svc-local-layout.is-collapsed .scan-panel { margin-top: 10px; }
+  /* 窄栏里目录 chips 和扫描结果都得自己撑满，不能沿用通栏那套限宽 */
+  .svc-local-layout .scan-add,
+  .svc-local-layout .scan-empty { max-width: none; }
+  /* 通栏时「环境结论」和按钮抢同一行，结论单行省略就够；缩到 380px 的窄栏，
+     连同省略号只剩 "llama-server 就绪 · NVIDIA G…"，等于把"这台机器能不能起"
+     这句话删了一半。窄栏改成结论独占一行、按钮回到标题行右侧。 */
+  .svc-local-layout .scan-head { flex-wrap: wrap; row-gap: 2px; }
+  .svc-local-layout .scan-head > b { order: 1; }
+  .svc-local-layout .scan-head .dot { order: 1; }
+  .svc-local-layout .scan-head .primary-btn { order: 2; margin-left: auto; }
+  .svc-local-layout .scan-head .hint {
+    order: 3; flex: 1 1 100%;
+    white-space: normal; overflow: visible; text-overflow: clip;
+    line-height: 1.45;
+  }
+  /* 浏览… / 路径 / 添加 三样在 380px 里挤成一条会把输入框压到一百来像素，
+     占位文字变成"或粘贴路…"。窄栏改成两行：路径框独占一行，两颗按钮一左
+     一右跟在下面——左边选目录、右边确认加入，动作从哪来到哪去一眼能读。 */
+  .svc-local-layout .scan-add {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 8px;
+  }
+  .svc-local-layout .scan-add .scan-dir-input { grid-column: 1 / -1; order: -1; }
+  .svc-local-layout .scan-add #scanDirAdd { justify-self: end; }
+  /* 空态那个虚线槽是给通栏写的"这里会长出 chips"。窄栏里它紧跟输入框、
+     说的还是同一句提示，多一块虚线框只是把面板撑高。 */
+  .svc-local-layout .scan-empty { display: none; }
+  /* 结果行在 380px 里还是「圆点 + 名字 + 大小/量化 + 空隙 + 状态/按钮」一横条：
+     名字最先被压成 `Qwen2.5-7B-Instruct-Q…`，而名字正是认模型的那一项，截了
+     等于没列。窄栏改成两行——名字单独一行（过长可折），大小/量化落到名字
+     下面，状态和「＋ 加入」钉在右侧同一列。 */
+  .svc-local-layout .scan-panel .lm-row {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas:
+      "dot name act"
+      ".   meta act";
+    align-items: center;
+    column-gap: 8px; row-gap: 3px;
+    padding: 8px 0;
+  }
+  .svc-local-layout .scan-panel .lm-row .dot { grid-area: dot; }
+  .svc-local-layout .scan-panel .lm-row > b {
+    grid-area: name;
+    white-space: normal; overflow: visible; text-overflow: clip;
+    overflow-wrap: anywhere;
+  }
+  .svc-local-layout .scan-panel .lm-row .lm-meta { grid-area: meta; font-size: 10.5px; }
+  .svc-local-layout .scan-panel .lm-row .sp { display: none; }
+  .svc-local-layout .scan-panel .lm-row > .mini,
+  .svc-local-layout .scan-panel .lm-row > .lm-state { grid-area: act; justify-self: end; }
 }
 .svc-card {
   padding: 12px var(--card-pad-x) var(--card-pad-y);
@@ -1423,6 +1411,103 @@ input[type=number].num::-webkit-outer-spin-button { -webkit-appearance: none; ma
   text-overflow: ellipsis; white-space: nowrap; }
 .svc-card .msg { font-size: 11.5px; color: var(--text-3); min-height: 17px; }
 .svc-card footer { display: flex; gap: 6px; margin-top: 3px; flex-wrap: wrap; }
+
+/* 本地模型清单：一行一个 .gguf，没有端点这一层。
+ *
+ * 本地这一节以前和外部模型共用 `.svc-card`，于是明明是完全不同的两样东西
+ * 长出了同一张脸：一个下拉回答"用哪个模型"，一行实例状态回答"起没起"，两个
+ * 答案叠在一张卡里；三个本地模型就是三张卡，端口和 ctx 各写各的、上下对不齐，
+ * 想比"哪个装得进 6G"只能逐张读。
+ *
+ * 清单化之后：模型是行，第二行固定是 `:端口 · ctx · 大小`——同一位置、同一种
+ * 写法，竖着扫一眼就能比。端点在这里不是实体，只是端口的容器，所以清单不分
+ * 组、也没有「新增端点」，整张表就是一个圆角框。 */
+.lm-flat {
+  border: 1px solid var(--line-soft); border-radius: 10px;
+  background: var(--surface); overflow: hidden;
+}
+.lm-item {
+  display: flex; align-items: center; gap: 9px;
+  padding: 8px 12px;
+}
+.lm-item + .lm-item { border-top: 1px solid var(--line-soft); }
+/* running 那一行给一点底色：三个模型里只有一个在吃显存，得一眼认出来 */
+.lm-item.is-running { background: rgba(72, 199, 142, .045); }
+.lm-item-main { flex: 1 1 auto; min-width: 0; }
+.lm-item-name { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.lm-item-name b { font-size: 12.5px; font-weight: 600; }
+.lm-item-meta {
+  font-family: var(--mono); font-size: 10.5px; color: var(--text-3);
+  line-height: 1.65;
+}
+/* 状态列固定宽度、右对齐：多行时「未启动 / 启动 12s / 运行中」长短不一，
+   不定宽就会把右边的按钮顶得参差不齐，整张表的竖线全断。 */
+.lm-item-state {
+  font-size: 11.5px; color: var(--text-3);
+  flex: none; width: 58px; text-align: right;
+}
+.lm-item-state.ok { color: var(--ok); }
+.lm-item-state.warn { color: var(--warn); }
+.lm-item-state.err { color: var(--err); }
+/* 状态行在卡片里被全局 `.msg`（聊天气泡那套：760px 居中、24px 内缩、
+   20px 下边距）顺带套上了，等于把一句话推进卡内 24px、又在底下撑出 20px
+   空白。给它一个自己的类，位置由所在的容器决定。 */
+.svc-note {
+  max-width: none; margin: 0; padding: 0;
+  display: flex; align-items: center; gap: 7px;
+  font-size: 11.5px; color: var(--text-3);
+}
+.svc-card .svc-note { padding: 2px 0 0; min-height: 0; }
+
+/* 本地实例行：和上面的模型下拉是同一件事的两面（用哪个 / 起没起），排成一条
+   紧凑的机器状态行就够，不再另铺一张卡。以前这里**没有任何样式**——b、span、
+   button 按行内流默认排，模型名又粗又大、端口和按钮贴成一串、状态文字落在
+   按钮右边像注脚，看着就是一行没对齐的句子。顺序也定死：状态在左、动作在右，
+   先读"现在什么情况"，再决定点不点。 */
+.local-models {
+  border-top: 1px solid var(--line-soft);
+  margin-top: 3px; padding-top: 2px;
+}
+.lm-row {
+  display: flex; align-items: center; gap: 8px;
+  min-width: 0; padding: 6px 0;
+}
+.lm-row + .lm-row { border-top: 1px dashed var(--line-soft); }
+.lm-row .sp { flex: 1 1 auto; }
+.lm-tag { color: var(--text-2); font-size: 12px; flex: none; }
+.lm-row b { font-size: 12.5px; font-weight: 600; min-width: 0; }
+.lm-meta {
+  font-family: var(--mono); font-size: 11px; color: var(--text-3);
+  white-space: nowrap; flex: none;
+}
+.lm-state { font-size: 11.5px; color: var(--text-3); white-space: nowrap; flex: none; }
+.lm-state.ok { color: var(--ok); }
+.lm-state.warn { color: var(--warn); }
+.lm-state.err { color: var(--err); }
+/* 窄窗口一行塞不下「名字 + 大小/量化 + 按钮」：flex 会先把名字压成 "Qwe…"
+   （等于没显示），再把按钮挤到下一行，一行变三行。改成三列栅格——圆点、
+   名字（可折行）、按钮各占一列，大小/量化并到名字下面那一行。 */
+@media (max-width: 780px) {
+  .lm-row {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas:
+      "dot name act"
+      ".   meta act";
+    align-items: center;
+    column-gap: 8px; row-gap: 4px;
+    padding: 8px 0;
+  }
+  .lm-row .dot { grid-area: dot; }
+  .lm-row > b {
+    grid-area: name;
+    white-space: normal; overflow: visible; text-overflow: clip;
+    overflow-wrap: anywhere;
+  }
+  .lm-row .lm-meta { grid-area: meta; font-size: 10.5px; }
+  .lm-row .sp { display: none; }
+  .lm-row > .mini, .lm-row > .lm-state { grid-area: act; justify-self: end; }
+}
 
 /* --------------------------------------------------------------- 表单区块 */
 
@@ -1799,65 +1884,157 @@ input[type=number].num::-webkit-outer-spin-button { -webkit-appearance: none; ma
 .cfg-btn .dot { flex: none; }
 
 /* 贴在顶栏下方、右侧「调试面板」的左边：压在面板上会挡住它自己控制的那块
-   区域，改完一个开关还要关掉面板才看得见效果。 */
+   区域，改完一个开关还要关掉面板才看得见效果。
+
+   340px 装不下这一屏东西：字段是「标签 + 控件」横排，标签一长就把下拉挤成
+   半截（"跟随当前后端（local · Qwe…"）；数字框只有半个宽，"跟随"两个占位字
+   直接被切掉；两个开关换行后各自顶到最左，和前后的下拉参差不齐。现在宽度放到
+   400，字段改**纵向**（标签一行、控件一行），行内两列栅格 —— 同一行的控件必然
+   等宽，换行也落在同一列上。 */
 .cfg-pop {
   position: fixed;
   top: 52px; right: calc(var(--panel) + 18px);
-  width: 340px;
+  width: 400px;
+  /* 展开高级参数后这一屏比视口还高：给个上限，内容区自己滚、底栏不动。
+     上限要连输入框一起让开——按视口高度算，浮层底部就会压住"输入问题/发送"
+     那条，用户调完参数想直接发，发现按钮被自己刚打开的面板盖住了。 */
+  max-height: calc(100vh - 168px);
+  overflow: hidden;
   z-index: 70;
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--r-lg);
   box-shadow: 0 18px 40px rgba(0, 0, 0, .45);
-  padding: 12px 14px 10px;
-  display: flex; flex-direction: column; gap: 12px;
+  display: flex; flex-direction: column;
+}
+/* 滚动只发生在内容区。底栏在流里、不脱离文档，所以它既不会浮在正文上
+   （sticky 那种"盖住半行"的样子），也不会被滚走。 */
+.cfg-pop-body {
+  flex: 1 1 auto; min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 14px 16px 13px;
+  display: flex; flex-direction: column; gap: 13px;
 }
 .app.panel-hidden .cfg-pop { right: 18px; }
 @media (max-width: 1200px) { .cfg-pop { right: 18px; } }
-.cfg-sec { display: flex; flex-direction: column; gap: 6px; }
+
+.cfg-sec { display: flex; flex-direction: column; gap: 7px; }
+/* 段与段之间用一条浅线分开：三块内容（库 / 后端 / 检索参数）原本只靠间距，
+   眼睛要读两遍才知道"到哪儿算下一件事"。 */
+.cfg-sec + .cfg-sec { border-top: 1px solid var(--line-soft); padding-top: 13px; }
+
 .cfg-label {
-  font-size: 11px; letter-spacing: .3px; color: var(--text-3);
+  font-size: 11.5px; font-weight: 600; letter-spacing: .2px; color: var(--text-2);
   display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
 }
-.cfg-label .cfg-note { font-size: 11.5px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.cfg-label .cfg-note { font-size: 11px; color: var(--text-3); font-weight: 400;
+  font-variant-numeric: tabular-nums; }
+
 .cfg-pop select {
-  width: 100%; height: 32px;
+  width: 100%; height: var(--ctl);
   background: var(--surface-2); color: var(--text);
   border: 1px solid var(--line); border-radius: 8px;
   padding: 0 8px; font-size: 12.5px;
 }
 .cfg-pop select:focus { outline: none; border-color: var(--accent); }
-.cfg-hint { font-size: 11px; line-height: 1.55; color: var(--text-3); }
+/* 这两个 id 带着自己的固定宽度（158 / 84），特异性比 .cfg-pop select 高，
+   不在这里压回去，生成后端和引用条数就永远是两截短短的窄条。 */
+.cfg-pop #providerSel, .cfg-pop #topKSel { width: 100%; }
+
+.cfg-hint { font-size: 11.5px; line-height: 1.55; color: var(--text-3); }
 .cfg-hint.warn { color: var(--warn); }
-.cfg-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.cfg-row .field { flex: 1 1 120px; }
-.cfg-row select { width: auto; min-width: 84px; }
-.cfg-foot {
-  display: flex; gap: 6px;
-  padding-top: 9px; border-top: 1px solid var(--line-soft);
+/* 一句提示紧贴在下一行的标签上，会被读成那个字段的说明（"还没探测"看起来
+   像是"生成模型"的注释）。留 3px 断开。 */
+.cfg-sec > .cfg-hint + .cfg-row { margin-top: 3px; }
+
+/* 行内两列。align-items:end 让"字段 + 开关"这种混排行底部对齐 —— 字段是
+   标签在上、控件在下，开关只有一行高，按 start 对齐就会浮在标签那一行。 */
+.cfg-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 9px 12px;
+  align-items: end;
 }
-.cfg-foot .mini { flex: 1 1 0; }
+.cfg-row > * { min-width: 0; }
+
+/* 浮层里的字段改纵向：标签占一行、控件占一行。横排时 label 的宽度由文字
+   决定，同一行两个字段的控件起点就不一样，看起来像错位。 */
+.cfg-pop .cfg-row .field {
+  display: flex; flex-direction: column; align-items: stretch; gap: 5px;
+  flex: initial;
+}
+.cfg-pop .cfg-row .field-label { font-size: 11px; letter-spacing: .2px; }
+.cfg-pop .cfg-row .field select,
+.cfg-pop .cfg-row .field input { width: 100%; min-width: 0; }
+
+/* 生成模型 + 测翻译：下拉吃掉剩余宽度，按钮只占自己那点宽度 */
+.cfg-row-gen { grid-template-columns: minmax(0, 1fr) auto; }
+.cfg-row-gen > .mini { height: var(--ctl); align-self: end; }
+
+/* 引用条数 + 两颗开关排成一行：条数固定一列，开关各占剩下的一半。
+   开关本身是 grid item，会被拉到整格宽 —— 内容靠左对齐，看起来比
+   "内容宽度的胶囊 + 右边一块空白"整齐。 */
+.cfg-row-topk { grid-template-columns: 116px minmax(0, 1fr) minmax(0, 1fr); }
+.cfg-row > .toggle { justify-content: flex-start; }
+
+/* 候选池 / MMR / 不拒答：两个字段 + 一颗开关 */
+.cfg-row-mm { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; }
+
+/* 开关组：横排、各自按内容宽度，不拉伸成一模一样的大块 */
+.cfg-switches { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.cfg-switches .toggle { flex: 0 1 auto; }
+
+.cfg-foot {
+  display: flex; gap: 8px;
+  padding-top: 11px; border-top: 1px solid var(--line-soft);
+}
+.cfg-foot .mini { flex: 1 1 0; height: var(--ctl); }
+
+/* 底栏独立于滚动区：两颗出口按钮永远在浮层底部，内容怎么滚都碰不到它们。 */
+.cfg-pop > .cfg-foot:last-child {
+  flex: none;
+  margin: 0;
+  padding: 11px 16px 12px;
+  background: var(--surface);
+  border-radius: 0 0 var(--r-lg) var(--r-lg);
+}
+.cfg-foot-adv { border-top: none; padding-top: 2px; margin-top: 8px; }
+
 /* 高级参数：默认收起。真正的常用项只有三个（库/后端/条数），把融合权重、
    温度这些调优旋钮全摊开，等于让每次提问都先做一遍参数决策。 */
-.cfg-adv { border-top: 1px solid var(--line-soft); padding-top: 8px; }
+.cfg-adv { border-top: 1px solid var(--line-soft); padding-top: 10px; }
 .cfg-adv > summary {
   cursor: pointer; list-style: none; display: flex; align-items: baseline; gap: 6px;
-  font-size: 12px; color: var(--text-2); user-select: none;
+  font-size: 12.5px; color: var(--text-2); user-select: none;
 }
 .cfg-adv > summary::-webkit-details-marker { display: none; }
 .cfg-adv > summary::before {
   content: "▸"; font-size: 9px; color: var(--text-3); transition: transform .15s;
 }
 .cfg-adv[open] > summary::before { transform: rotate(90deg); }
-.cfg-adv[open] > summary { margin-bottom: 8px; }
-.cfg-adv .cfg-sec { gap: 7px; padding: 7px 0 0; }
-.cfg-adv .cfg-label { font-size: 11px; color: var(--text-3); }
-.cfg-pop input[type="number"] {
-  width: 100%; min-width: 72px; padding: 5px 7px; font-size: 12px;
-  border: 1px solid var(--line); border-radius: 7px;
-  background: var(--surface-2, transparent); color: var(--text);
+.cfg-adv[open] > summary { margin-bottom: 10px; }
+.cfg-adv .cfg-sec { gap: 8px; padding: 10px 0 0; }
+.cfg-adv .cfg-sec + .cfg-sec { padding-top: 11px; }
+.cfg-adv .cfg-label { font-size: 11px; font-weight: 500; color: var(--text-3); }
+
+.cfg-pop input[type="number"], .cfg-pop input[type="text"] {
+  width: 100%; height: var(--ctl); padding: 0 9px; font-size: 12.5px;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: var(--surface-2); color: var(--text);
+  font-variant-numeric: tabular-nums;
 }
-.cfg-pop input[type="number"]:focus { outline: none; border-color: var(--accent); }
+.cfg-pop input[type="number"]::placeholder,
+.cfg-pop input[type="text"]::placeholder { color: var(--text-3); }
+.cfg-pop input[type="number"]:focus,
+.cfg-pop input[type="text"]:focus { outline: none; border-color: var(--accent); }
+
+/* 窄屏：两列会把控件压到 150px 以下，不如单列排。 */
+@media (max-width: 640px) {
+  .cfg-pop { width: calc(100vw - 20px); right: 10px; max-height: calc(100vh - 160px); }
+  .cfg-row, .cfg-row-topk, .cfg-row-gen { grid-template-columns: minmax(0, 1fr); }
+  .cfg-row-gen > .mini { width: 100%; }
+}
 
 /* 没配模型时的引导卡：不是错误页，是"下一步做什么" */
 .empty-state.gate .es-mark {
@@ -1904,6 +2081,93 @@ input[type=number].num::-webkit-outer-spin-button { -webkit-appearance: none; ma
   border-color: var(--accent);
   color: var(--text);
 }
+/* 扫描目录：用户自己添加，每个目录一个可移除的 chip */
+.scan-dir { display: inline-flex; align-items: center; gap: 6px; cursor: default; }
+.chip-x {
+  border: 0; background: none; padding: 0;
+  color: var(--text-3); font-size: 14px; line-height: 1; cursor: pointer;
+}
+.chip-x:hover { color: var(--danger, #e24b4a); }
+/* 目录输入框：现在独占一排（主路径仍是「浏览…」弹系统窗口）。以前它只有
+   flex 没有外观，拿的是 UA 默认输入框——23px 高、浅色描边，比旁边 32px 的
+   按钮矮一截，在暗色底上就是一条缝。这里跟 .form-row input 对齐到 --ctl。 */
+.scan-dir-input {
+  flex: 1 1 auto; min-width: 0;
+  height: var(--ctl);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 11px;
+  font-size: 12.5px;
+  color: var(--text);
+  transition: border-color .12s, box-shadow .12s;
+}
+.scan-dir-input::placeholder { color: var(--text-3); }
+.scan-dir-input:hover { border-color: #333b4a; }
+.scan-dir-input:focus {
+  outline: none;
+  border-color: rgba(91, 140, 255, .5);
+  box-shadow: 0 0 0 3px rgba(91, 140, 255, .08);
+}
+
+/* 扫描区常驻在模型页底部，分两排：
+   1) 标题行 = 这是什么 + 环境结论（能不能起）+ 唯一的动作「开始扫描」
+   2) 添加行 = 浏览… / 路径输入 / 添加
+   以前四样控件挤一行：主按钮被顶到换行、孤零零落在左边；输入框被压到
+   210px 还带着 UA 默认外观。环境结论改成单行省略（悬停看全文），窄窗口
+   下按钮就不会被文字推走。 */
+.scan-panel { margin-top: 12px; }
+/* 收起键：一颗只有箭头的方钮，贴着「模型文件」左侧。扫描是"要添东西"时才
+   做的事，平时清单才是主角——允许把它折起来。 */
+.scan-toggle {
+  flex: none; width: 15px; height: 15px; padding: 0; margin-right: -3px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: none; border: 0; border-radius: 4px;
+  color: var(--text-2); font-size: 10.5px; line-height: 1;
+  cursor: pointer;
+}
+.scan-toggle:hover { background: var(--surface-2); color: var(--text); }
+.scan-panel.is-collapsed .scan-body { display: none; }
+/* 收起后整块塌成一行：结论恢复单行省略，"开始扫描"跟着收进去——没有目录
+   输入框露在外面，那颗按钮点了也没意义。 */
+.scan-panel.is-collapsed .scan-head { flex-wrap: nowrap; }
+.scan-panel.is-collapsed .scan-head > b { order: 0; }
+.scan-panel.is-collapsed .scan-head .dot { order: 0; }
+.scan-panel.is-collapsed .scan-head .primary-btn { display: none; }
+/* 窄栏里那条"结论独占一行"的规则特异性比 .scan-panel.is-collapsed 低，
+   不写这一条，收起后仍在 380px 之外重新折成两行。 */
+.svc-local-layout .scan-panel.is-collapsed .scan-head .hint {
+  order: 0; flex: 1 1 auto;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.scan-head { display: flex; align-items: center; gap: 8px; }
+.scan-head > b { font-size: 13px; white-space: nowrap; }
+.scan-head .hint {
+  flex: 1 1 auto; min-width: 0;
+  font-size: 11.5px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.scan-head .dot { margin-left: 1px; }
+.scan-head .primary-btn { flex: none; margin-left: 4px; }
+/* 添加行不铺满：路径框拉到 1000px 会暗示"这里要写长文本"，实际最多
+   一个盘符加几层目录。整组靠左，宽度够放下两条长路径就行。 */
+.scan-add { display: flex; align-items: center; gap: 8px; margin-top: 10px; max-width: 760px; }
+.scan-add .ghost-btn { flex: none; }
+.scan-panel .chip-row { margin-top: 9px; }
+/* 一个目录都没加时，用虚线的"空槽"占位：它不是说明文字，是下一步动作的
+   位置提示。跟下面那条灰色说明混成两行灰字，就等于没说。 */
+.scan-empty {
+  display: block; flex: 1 1 100%; max-width: 760px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  padding: 9px 12px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+/* 环境缺失不是错误，是"能扫不能起"——用警告色就够，别用红 */
+/* 警告色的补充说明：扫描面板的环境缺失、密钥"只活本次会话"都用它 */
+.warn-note { color: var(--warn); }
+.scan-panel .chip-row:empty { display: none; }
 
 /* 卡片上的"切换模型"下拉：只在探测出多个模型时出现 */
 .svc-card .pick {
@@ -1937,13 +2201,6 @@ input[type=number].num::-webkit-outer-spin-button { -webkit-appearance: none; ma
 .icon-btn[disabled] { opacity: .3; cursor: not-allowed; }
 .svc-card header .sp { flex: 1 1 auto; }
 .svc-card .msg .ago { font-size: 11.5px; color: var(--text-3); opacity: .75; }
-.launch-fold { margin-top: 12px; }
-.launch-fold > summary {
-  cursor: pointer; font-size: 12.5px; color: var(--text-2);
-  list-style-position: outside; padding: 2px 0;
-}
-.launch-fold > summary::marker { color: var(--text-3); }
-.launch-fold[open] > summary { margin-bottom: 8px; }
 
 /* 缺配置的卡片要明说缺什么：和"连接超时"是两种病，重试解决不了缺密钥 */
 .svc-card .miss {
@@ -2808,6 +3065,40 @@ details.sbk-note-line[open] > summary::before { transform: rotate(90deg); }
 }
 .scfg-card.span-all .scfg-field.wide { grid-column: auto; }
 
+/* 「运行」是站点设置页唯一的卡，铺满整行。三个字段不再各占一列 —— 那会把
+   "8800" 摆在全宽的 1/3 处、右边留一大片空。改成三条设置行：名称 / 控件 /
+   说明各占固定一列，纵向看齐、横向把宽度用满，扫一眼就知道自己在改哪一项。 */
+.scfg-card.run-only .scfg-card-body {
+  display: flex; flex-direction: column; gap: 0;
+}
+.scfg-card.run-only .scfg-field {
+  display: grid;
+  grid-template-columns: 72px 200px minmax(0, 1fr);
+  align-items: center;
+  gap: 14px;
+  padding: 10px 0;
+}
+/* 行分隔用 --line 而不是 --line-soft：后者在卡片底色上几乎看不见，三行会
+   糊成一整块。 */
+.scfg-card.run-only .scfg-field + .scfg-field { border-top: 1px solid var(--line); }
+.scfg-card.run-only .scfg-field > label { font-size: 12px; color: var(--text-2); }
+.scfg-card.run-only .scfg-field small { font-size: 11px; }
+/* 开关在纵向字段里是 align-self:flex-start（防止被拉成一条色块），
+   进了横排网格要正回中间。 */
+/* 开关是 grid item：默认 stretch 会被拉成一条 200px 宽的横条（选中时就是
+   一整块蓝），必须 justify-self 收回到内容宽度。 */
+.scfg-card.run-only .scfg-field > .toggle { align-self: center; justify-self: start; }
+.scfg-card.run-only .scfg-field input { max-width: 180px; }
+
+@media (max-width: 780px) {
+  .scfg-card.run-only .scfg-field {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px; padding: 11px 0;
+  }
+  .scfg-card.run-only .scfg-field > .toggle { align-self: flex-start; }
+  .scfg-card.run-only .scfg-field input { max-width: none; }
+}
+
 .scfg-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .scfg-field > label { font-size: 11.5px; color: var(--text-3); }
 .scfg-field small { font-size: 10.5px; line-height: 1.55; color: var(--text-3); }
@@ -2887,3 +3178,14 @@ details.sbk-note-line[open] > summary::before { transform: rotate(90deg); }
   .sif-standalone { padding-left: 12px; padding-right: 12px; }
 }
 
+
+/* 1500px 以下为了省地方会藏掉 .field-label，1400px 以下直接藏掉 #topKSel。
+   那两条是给"标签 + 控件横排"的旧字段写的：标签只是前缀，藏了还能看懂。
+   浮层里的字段已经改成纵向，标签是唯一的说明，再藏就只剩一排"跟随"占位符
+   （截图里就是这样：温度、最大输出、融合方式全没了名字）。 */
+@media (max-width: 1500px) {
+  .cfg-pop .field-label { display: block; }
+}
+@media (max-width: 1400px) {
+  .cfg-pop #topKSel { display: inline-block; width: 100%; }
+}

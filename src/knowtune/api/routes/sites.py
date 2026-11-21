@@ -7,7 +7,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from ... import logbus, promptcfg
+from ... import logbus
 from ...frontsite import instcfg
 from ..state import state
 
@@ -65,16 +65,13 @@ def list_instances() -> dict:
 
 @router.get("/api/instances/defaults")
 def instance_defaults(lang: str = "ug") -> dict:
-    """新建实例时按语言预填一套文案。
+    """新建实例时按语言给一套内置文案。
 
-    文案的主来源已经是「提示词配置」里的 copy_ug / copy_zh，这里先取那套；
-    提示词没改过的字段才落回出厂默认——否则新建一个站点会拿到一份跟现有站点
-    不一样的旧文案，用户得再改一遍。
+    文案是前台固定内置值（instcfg.default_copy），不再走提示词覆盖；
+    新建站点直接拿出厂默认，避免多一个能改的地方却改了不生效。
     """
     picked = lang if lang in instcfg.LANGS else "ug"
-    out = instcfg.default_copy(picked)
-    out.update(promptcfg.copy_texts(picked))
-    return out
+    return instcfg.default_copy(picked)
 
 
 @router.get("/api/instances/next-port")

@@ -34,7 +34,7 @@ from . import settings as settings_mod
 from .config import Config
 
 # 允许按库覆盖的参数。顺序决定 UI 上的分组顺序。
-KB_PARAM_KEYS: tuple[str, ...] = (
+_LEGACY_KB_PARAM_KEYS: tuple[str, ...] = (
     "chunking.strategy",
     "chunking.size",
     "chunking.overlap",
@@ -59,10 +59,15 @@ KB_PARAM_KEYS: tuple[str, ...] = (
     "refusal.min_margin",
     "refusal.soft_margin",
     "evidence.mid_ratio",
-    "generation.provider",
     "generation.temperature",
     "chat.history_turns",
     "chat.history_token_budget",
+)
+
+# 旧数据库仍可读取。已经从参数面板移除的低频项不再生成新的覆盖项，
+# 读取时由 Config 默认值补齐。
+KB_PARAM_KEYS: tuple[str, ...] = tuple(
+    key for key in _LEGACY_KB_PARAM_KEYS if key in settings_mod.PARAM_MAP
 )
 
 KB_PARAMS = tuple(settings_mod.PARAM_MAP[k] for k in KB_PARAM_KEYS)
@@ -200,13 +205,6 @@ def effective(cfg: Config, overrides: dict[str, Any]) -> Config:
     clone = cfg.model_copy(deep=True)
     for key, value in overrides.items():
         if key not in KB_PARAM_MAP:
-            continue
-        # 全量快照里常年存着一个空的 "generation.provider": ""。它不是用户
-        # "特意不要生成后端"，而是参数面板保存时留下的空字段。真按空串覆盖，
-        # 状态栏就会亮一颗写着「未选择」的红点，而问答其实走的是全局后端
-        # （2026-11-06 截图里 28020 chunk / bge-reranker-base 那张卡就是它）。
-        # 空串一律视为"跟随全局"，只有填了名字才算显式指定。
-        if key == "generation.provider" and not str(value or "").strip():
             continue
         try:
             settings_mod.write_value(clone, key, value)

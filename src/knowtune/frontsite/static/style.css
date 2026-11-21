@@ -824,3 +824,133 @@ body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
   background: var(--bg); color: var(--muted);
   font-family: var(--zh); font-size: 15px; letter-spacing: .02em;
 }
+
+/* ── 维吾尔语字号补偿（1.7.38）──
+   同样的 px，维吾尔文看着比汉字小一号：阿拉伯字母没有大写、上下伸展短，
+   字面（x-height）在墨迹里占的比例也小。放在一起看就是"这块字怎么这么小"。
+   所以维语界面整体 +1.5～2px，并把行高放到 1.85——维语有 ئ 这类带 hamza
+   的字头、还有 ۇ ۆ ۈ 这类带附加符的字母，行距紧了会顶到上一行。
+   只动字号与行高，不动任何布局尺寸：按钮高度、圆角、列宽、侧栏宽度全不变，
+   否则切换语言时整页会跳一下。选择器都带 html[lang="ug"]，中文界面零影响。 */
+html[lang="ug"] body { line-height: 1.85; }
+html[lang="ug"] .wel-text { font-size: 25.5px; line-height: 1.8; }
+html[lang="ug"] .wel-hint { font-size: 15px; }
+html[lang="ug"] .chip { font-size: 15px; }
+html[lang="ug"] #q { font-size: 17.5px; line-height: 1.85; }
+html[lang="ug"] .tool { font-size: 13.5px; }
+html[lang="ug"] .disclaimer { font-size: 13px; }
+html[lang="ug"] .nav-item { font-size: 15.5px; }
+html[lang="ug"] .nav-item .ni-meta { font-size: 12.5px; }
+html[lang="ug"] .side-name { font-size: 16px; }
+html[lang="ug"] .side-meta { font-size: 13px; }
+html[lang="ug"] .top h1 { font-size: 15.5px; }
+html[lang="ug"] .answer { font-size: 17.5px; line-height: 1.9; }
+html[lang="ug"] #pvMsgs .msg.bot .answer { font-size: 16.5px; }
+html[lang="ug"] .status { font-size: 14px; }
+html[lang="ug"] .src-head { font-size: 14px; }
+html[lang="ug"] .src-prev { font-size: 14px; }
+html[lang="ug"] .foot { font-size: 13.5px; }
+html[lang="ug"] .foot .alang, html[lang="ug"] .msg .alang { font-size: 13px; }
+/* 窄屏再让一档：25.5px 的标题在 360px 宽的手机上会折成三行 */
+@media (max-width: 860px) {
+  html[lang="ug"] .wel-text { font-size: 21px; line-height: 1.7; }
+  html[lang="ug"] #q { font-size: 17px; }
+  html[lang="ug"] .answer { font-size: 16.5px; }
+}
+
+/* ── 维语输入面板（1.7.38）──
+   中文 Windows 上没有维吾尔语键盘，手机端可能连阿拉伯字母都不会打，所以
+   输入框里给一条"不装任何东西也能打维语"的路：拉丁转写 + 字母表。
+   面板浮在输入卡**上方**（position:absolute，不参与流式布局）：展开收起时
+   输入框一动不动，用户不用重新找光标；也不做成遮罩层——填一个词就要回看
+   聊天区，挡住半屏是帮倒忙。 */
+.box { position: relative; }
+
+.kb-btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  height: 24px; padding: 0 9px 0 7px; flex: none;
+  border: 1px solid var(--line); border-radius: 999px;
+  background: transparent; color: var(--ink-2);
+  font: inherit; font-size: 12.5px; line-height: 1; cursor: pointer;
+  transition: background .14s, color .14s, border-color .14s;
+}
+.kb-btn svg {
+  width: 14px; height: 14px; flex: none;
+  fill: none; stroke: currentColor; stroke-width: 1.7;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+.kb-btn:hover { color: var(--ink); border-color: var(--brand-line); background: var(--surface-2); }
+.kb-btn.on { color: var(--brand); border-color: var(--brand-line); background: var(--brand-soft); }
+
+.kb {
+  position: absolute; left: 0; right: 0; bottom: calc(100% + 8px); z-index: 25;
+  max-height: 52vh; overflow: auto;
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--r-lg); box-shadow: var(--shadow-lg);
+  padding: 10px 12px 12px;
+}
+.kb-head { display: flex; align-items: center; gap: 8px; }
+.kb-head b { font-size: 13px; font-weight: 700; color: var(--ink); }
+/* 提示单独占一行：塞在标题右边时，维语标题和这句提示会挤成一坨灰字 */
+.kb-tip {
+  margin: 4px 0 0; font-size: 11.5px; color: var(--ink-3); line-height: 1.6;
+}
+.kb-head .grow { flex: 1; }
+.kb-x {
+  flex: none; width: 22px; height: 22px; border-radius: 6px;
+  color: var(--ink-3); font-size: 15px; line-height: 1;
+}
+.kb-x:hover { background: var(--surface-2); color: var(--ink); }
+
+.kb-lat { display: flex; align-items: center; gap: 8px; margin-top: 9px; }
+.kb-input {
+  flex: 1 1 46%; min-width: 0; height: 32px;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: var(--surface-2); padding: 0 10px;
+  font-size: 13px; color: var(--ink); outline: none;
+}
+.kb-input:focus { border-color: var(--brand-line); background: var(--surface); }
+/* 预览区：写成一段"结果"，不是输入框——用户要看的是"我打的字变成了什么" */
+.kb-prev {
+  flex: 1 1 46%; min-width: 0; height: 32px; line-height: 30px;
+  padding: 0 8px; text-align: right;
+  font-family: var(--ug); font-size: 17px; color: var(--ink);
+  border-bottom: 1px dashed var(--line);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.kb-ins {
+  flex: none; height: 32px; padding: 0 13px; border-radius: 8px;
+  background: var(--brand); color: #fff;
+  font-size: 12.5px; font-weight: 600;
+}
+.kb-ins:hover { background: var(--brand-2); }
+.kb-ins:disabled { opacity: .45; cursor: default; }
+
+/* 8×4 = 32 个字母，正好一屏；比"按标准维语键盘排"更好找——不会盲打的人
+   找字母靠的是扫一眼，不是记键位。 */
+/* 字母表按 rtl 排：ا 落在右上角，跟维语读者的扫视方向一致（从左往右找
+   第 1 个字母，等于从 ي 开始，怎么找都别扭）。只改这一格的填充方向，
+   面板骨架仍是 ltr——和全站"切语言不换边"的规则不冲突。 */
+.kb-keys { direction: rtl; display: grid; grid-template-columns: repeat(8, 1fr); gap: 6px; margin-top: 10px; }
+.kb-key {
+  height: 38px; border: 1px solid var(--line); border-radius: 9px;
+  background: var(--surface-2); color: var(--ink);
+  font-family: var(--ug); font-size: 18px; line-height: 1; cursor: pointer;
+  transition: background .12s, border-color .12s;
+}
+.kb-key:hover { background: var(--brand-soft); border-color: var(--brand-line); }
+.kb-key:active { background: var(--brand); color: #fff; }
+.kb-foot { display: flex; gap: 6px; margin-top: 6px; }
+.kb-key-extra { flex: none; width: 76px; font-size: 15px; }
+.kb-space { flex: 1; font-family: var(--ui); font-size: 12px; color: var(--ink-3); }
+
+/* 窄屏：按钮只剩图标（"ئۇيغۇرچە كىرگۈزۈش" 会把工具标签挤没），
+   字母格子再收一号，保证 360px 宽也能一格不落地摆下 8 列。 */
+@media (max-width: 560px) {
+  .kb-btn { padding: 0 8px; }
+  .kb-btn span { display: none; }
+  .kb-keys { gap: 4px; }
+  .kb-key { height: 34px; font-size: 17px; }
+  .kb-key-extra { width: 58px; }
+  .kb-tip { font-size: 11px; }
+}

@@ -13,9 +13,10 @@
 （回落到当前后端），配了才分工。
 
 解析顺序（谁更具体谁优先）：
-  站点 roles → 系统 roles → 站点 provider → 知识库/系统当前后端
+  板块 roles → 站点 roles → 站点 provider
 每一级都可能是"改过名 / 已删掉"的后端，所以每一级都要用 known 校验一遍，
 对不上就往下退一层 —— 宁可退化成"没分工"，也不能抛异常让整个站点 500。
+没有全局默认后端这一层：全都没配就是空，由调用方明确报错。
 """
 
 from __future__ import annotations
@@ -82,23 +83,21 @@ def resolve(
     role: str,
     *,
     instance_roles: Mapping[str, str] | None = None,
-    global_roles: Mapping[str, str] | None = None,
     instance_provider: str = "",
-    default_provider: str = "",
     known: Mapping[str, Any] | None = None,
     section_roles: Mapping[str, str] | None = None,
 ) -> str:
     """按"谁更具体谁优先"的顺序找一个可用的角色值（可能带 `::模型`）。
 
     `section_roles` 是板块级覆盖（med/classic 各自可钉一个与站点不同的后端），
-    比站点级 roles 更具体，排在最前。留空则该层跳过，行为与改造前一致。
+    比站点级 roles 更具体，排在最前。项目没有全局后端这一层——链上只有
+    板块 → 站点角色 → 站点 provider，没有"系统默认"兜底。谁都不配就返回空串，
+    由调用方明确报错，而不是静默挑一个后端把不同站点串到一起。
     """
     chain = (
         (section_roles or {}).get(role),
         (instance_roles or {}).get(role),
-        (global_roles or {}).get(role),
         instance_provider,
-        default_provider,
     )
     for cand in chain:
         name, _model = split(cand)
@@ -108,15 +107,13 @@ def resolve(
         if known is not None and name not in known:
             continue
         return join(name, _model)
-    return str(default_provider or "").strip()
+    return ""
 
 
 def plan(
     *,
     instance_roles: Mapping[str, str] | None = None,
-    global_roles: Mapping[str, str] | None = None,
     instance_provider: str = "",
-    default_provider: str = "",
     known: Mapping[str, Any] | None = None,
     section_roles: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
@@ -125,9 +122,7 @@ def plan(
         role: resolve(
             role,
             instance_roles=instance_roles,
-            global_roles=global_roles,
             instance_provider=instance_provider,
-            default_provider=default_provider,
             known=known,
             section_roles=section_roles,
         )

@@ -146,7 +146,7 @@ def ordered(line: str, *tokens: str) -> bool:
 
 for label, tokens, minimum in [
     ("提示词优先级", ("by_provider", "by_scope", "default", "内置"), 6),
-    ("角色优先级", ("板块级 roles", "站点级 roles", "系统级 roles"), 5),
+    ("角色优先级", ("板块级 roles", "站点级 roles", "没有系统级"), 5),
 ]:
     hits = [
         p.name for p in DOCS
@@ -306,8 +306,9 @@ for token, why in (
     ('class="sif-sec"', "内联分区容器"),
     ("function saveSiteInline", "页面内就地保存"),
     ("data-save-inline", "站点保存按钮"),
-    ("function previsitInlineHtml", "预问诊参数内联渲染"),
-    ("data-pv-save", "预问诊就地保存按钮"),
+    ('class="scfg-matrix"', "模型角色矩阵"),
+    ('data-open-prompt="previsit"', "预问诊提示词入口"),
+    ("pv_role_translate", "预问诊翻译模型位"),
     ('class="sbk-top"', "身份头部"),
     ("i.ug_capable === false && i.ug_note", "正常态自检不渲染"),
     ("function bindSiteInlineEvents", "内联交互事件委托"),

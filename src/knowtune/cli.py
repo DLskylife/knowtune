@@ -17,6 +17,7 @@ import sys
 from pathlib import Path
 
 from . import paths as paths_mod
+from . import secrets as secrets_mod
 from .config import calibration_of_kb, load_config
 from .db import Database
 from .generate import cite as cite_mod
@@ -36,6 +37,10 @@ def _bootstrap():
     cfg = load_config()
     db = Database(cfg)
     db.ensure_schema()
+    # 密钥库必须在这里挂上，否则 `ask --provider deepseek` 必然 401：云端后端要
+    # 的是 secrets.get() 里那把钥匙，不 attach 就永远返回 None，而 CLI 又不带
+    # 网页那层 lifespan。报错还长成「Authentication Fails」，看着像 key 过期。
+    secrets_mod.attach(cfg.storage.data_dir)
     embedder = Embedder(cfg.embedding)
     vectors = VectorStore(cfg)
     sparse = SparseIndex(cfg.retrieval.sparse)
@@ -74,7 +79,8 @@ def cmd_status(args) -> int:
     if engine.embedder.error:
         print(f"  错误: {engine.embedder.error}")
     print(f"精排: enabled={cfg.retrieval.rerank.enabled} model={cfg.retrieval.rerank.model}")
-    print(f"LLM: provider={cfg.generation.provider}")
+    print(f"后端: {len(cfg.generation.providers)} 个已注册"
+          f"（{', '.join(cfg.generation.providers) or '无'}）")
     # 标定状态逐库打印。只写「阈值 0.35」是不够的：那个数可能是出厂值，
     # 也可能扫出来的——两者的可信度差一个量级，命令行上看不出区别最误事。
     print("知识库:")
@@ -144,6 +150,15 @@ def cmd_ingest(args) -> int:
 
 def cmd_ask(args) -> int:
     cfg, db, engine, _ = _bootstrap()
+    # 没有全局默认后端：提问必须自己指定用谁，否则到生成那一步才报错。
+    provider = (args.provider or "").strip()
+    if not provider:
+        if not cfg.generation.providers:
+            print("没有可用后端。先到「模型服务」页添加一个，或用 --provider 指定。")
+            return 2
+        print("请用 --provider 指定后端（项目没有全局默认后端）。"
+              f"可选：{', '.join(sorted(cfg.generation.providers))}")
+        return 2
     conn = db.conn()
     kb_id = args.kb or _default_kb(conn)
     result = engine.search(conn, args.question, kb_id=kb_id)
@@ -161,11 +176,11 @@ def cmd_ask(args) -> int:
         token_budget=cfg.generation.context_token_budget,
         min_context_chars=cfg.generation.min_context_chars,
         prompt_version=cfg.prompt_version,
-        provider=args.provider or cfg.generation.provider,
+        provider=provider,
     )
     client = LLMClient(cfg)
     try:
-        answer = "".join(client.stream(bundle.messages(args.question), provider=args.provider))
+        answer = "".join(client.stream(bundle.messages(args.question), provider=provider))
     except LLMError as exc:
         print(f"LLM 调用失败：{exc}", file=sys.stderr)
         print("检索结果仍然可用，可加 --debug 查看。", file=sys.stderr)

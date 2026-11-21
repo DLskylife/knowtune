@@ -60,16 +60,17 @@ def _main_llm_factory(pv: dict) -> object:
     跟着变，不用再单独配一遍；将来把预问诊拆成独立进程，地址一个字不用改。
     """
     cfg = load_config()
-    # 老配置里可能钉着已经删掉的后端（lmstudio / siliconflow …）。留着它，
-    # 网关每次回「端点不存在」，备用链路再报「未知 provider」，最后整场
-    # 问诊悄悄退化成规则兜底。认不出来的名字一律当「跟随当前端点」。
-    raw = str(pv.get("provider") or "").strip()
-    provider = raw if raw in cfg.generation.providers else ""
+    # 项目没有全局固定后端：预问诊用谁完全由它自己的配置（pv）决定。
+    # pv 里没写就是没配，交由网关按模型名路由或明确报错，绝不去读一个
+    # 不存在的"系统当前后端/系统角色"——那会让不同站点悄悄串到同一后端。
+    provider = str(pv.get("provider") or "").strip()
+    provider = provider if provider in cfg.generation.providers else ""
+    model = str(pv.get("model") or "").strip() or None
     clean = dict(pv)
     clean["provider"] = provider or None
     direct = KnowtuneLLMAdapter(LLMClient(cfg),
                                 provider=provider or None,
-                                model=pv.get("model") or None)
+                                model=model)
     return GatewayLLM.wrap(clean, direct)
 
 
@@ -84,6 +85,7 @@ def build_engine() -> PrevisitEngine:
 
     cfg = load_config()
     pv = load_previsit()
+    # 翻译模型也只认预问诊自己的配置，不读系统级 translate 角色（已删除）。
     secrets_mod.attach(cfg.storage.data_dir)
     store = Store(cfg.storage.data_dir / "previsit.db")
     llm = _main_llm_factory(pv)

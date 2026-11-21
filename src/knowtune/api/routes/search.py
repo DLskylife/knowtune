@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from ...config import Config, refusal_mode
-from ...db import ensure_session, save_message as _save, utcnow as _utcnow
+from ...db import utcnow as _utcnow
 from ...sse import sse as _sse
 from ...generate import cite as cite_mod
 from ...generate import llm as llm_mod
@@ -33,7 +33,10 @@ router = APIRouter()
 class AskRequest(BaseModel):
     question: str = Field(min_length=1, max_length=4000)
     kb_id: int | None = None
-    session_id: str | None = None
+    # 会话历史由前端带过来（后台不存会话）。格式与前台一致：
+    # [{"role":"user"|"assistant","content":"..."}, ...] 按时间正序。
+    # 轮数与字符预算都由 chat.* 配置裁剪，前端传多传少都不会突破上限。
+    history: list[dict] | None = None
     provider: str | None = None
     rerank_model: str | None = None
     rerank: bool | None = None
@@ -298,29 +301,15 @@ def _debug_payload(result, cfg: Config | None = None, overrides: dict | None = N
     }
 
 
-def _history(conn, session_id: str, turns: int) -> list[dict]:
-    rows = conn.execute(
-        "SELECT role, content FROM message WHERE session_id=? ORDER BY id DESC LIMIT ?",
-        (session_id, turns * 2),
-    ).fetchall()
-    return [{"role": r["role"], "content": r["content"]} for r in reversed(rows)]
-
-
-def _context_usage(conn, session_id: str | None, history: list[dict], cfg) -> dict:
+def _context_usage(history: list[dict], cfg) -> dict:
     """这一轮到底装了多少历史、还剩多少预算。
 
-    规则本身在 chatctx（不依赖 torch，能单测）；这里只负责把"会话里一共多少条
-    消息"查出来喂进去。
+    规则本身在 chatctx（不依赖 torch，能单测）；这里只把配置喂进去。
+    历史现在由请求带来，"会话里一共多少条"就是请求里的原始条数。
     """
-    total_msgs = 0
-    if session_id:
-        row = conn.execute(
-            "SELECT count(*) FROM message WHERE session_id=?", (session_id,)
-        ).fetchone()
-        total_msgs = int(row[0]) if row else 0
     return chatctx.usage(
         history,
-        total_messages=total_msgs,
+        total_messages=len(history),
         budget=int(cfg.generation.context_token_budget),
         turns_limit=int(cfg.chat.history_turns),
         min_chars=int(cfg.generation.min_context_chars),
@@ -339,20 +328,28 @@ def ask(req: AskRequest) -> Response:
         kb_cfg = kbconfig.effective(kb_cfg, req.overrides)
     kb_overrides = state.tuned(req.kb_id)
 
-    session_id = req.session_id
-    ensure_session(conn, session_id, req.kb_id, req.question)
-    history = _history(conn, session_id, kb_cfg.chat.history_turns) if session_id else []
-    # 轮数只是第一道闸：5 轮长回答照样能把资料预算吃光。再按字符预算裁一次，
-    # 从最早一轮开始整轮丢——半截对话比没有对话更容易引出错误指代。
-    history = chatctx.trim_history(history, budget=int(kb_cfg.chat.history_token_budget))
-    context_usage = _context_usage(conn, session_id, history, kb_cfg)
+    # 会话历史由请求带来：后台不存会话，也没有"每库一条固定会话"。
+    # 先把原始条数留住给 usage 显示"带了几轮/共几轮"，再按两道闸裁剪：
+    # 轮数上限 chat.history_turns、字符预算 chat.history_token_budget。
+    # 这两项现在同时管前台和后台——它们是会话配置，不是某个界面自己的。
+    raw_history = [
+        {"role": m.get("role"), "content": m.get("content") or ""}
+        for m in (req.history or [])
+        if m.get("role") in ("user", "assistant")
+    ]
+    history = chatctx.trim_history(
+        raw_history,
+        turns=int(kb_cfg.chat.history_turns),
+        budget=int(kb_cfg.chat.history_token_budget),
+    )
+    context_usage = _context_usage(raw_history, kb_cfg)
 
-    # 本次提问真正要用的后端：对话页下拉选的那个优先，没传才落到库/系统当前后端。
+    # 本次提问真正要用的后端：只能用对话页下拉选的那个（请求显式带 provider）。
+    # 项目没有全局默认后端，没带就是没配——下面 llm.resolve 会给出明确报错。
     # 这个值算一次、全程复用——下面提示词、报错指路、探测缓存作废、query_log
-    # 全都得指同一个后端。散着写 kb_cfg.generation.provider 的后果是：用户选了
-    # deepseek 提问，401 报错却说"后端 siliconflow 密钥无效"，日志里也记成
-    # siliconflow，等于"选哪个都是测当前那个"。
-    gen_provider = req.provider or kb_cfg.generation.provider
+    # 全都得指同一个后端。散着写多个来源的后果是：用户选了 deepseek 提问，
+    # 401 报错却说别的后端密钥无效，日志里也记错，等于"选哪个都是测另一个"。
+    gen_provider = req.provider
     # 角色值可能带「::模型」，模型优先级：请求显式指定 > 角色值里的 > 后端默认。
     _ref_base, _ref_model = roles_mod.split(gen_provider)
     try:
@@ -435,17 +432,13 @@ def ask(req: AskRequest) -> Response:
             yield _sse("meta", payload_meta)
             for i in range(0, len(REFUSE_TEMPLATE), 12):
                 yield _sse("delta", {"text": REFUSE_TEMPLATE[i : i + 12]})
-            msg_id = (
-                _save(conn, session_id, req.question, REFUSE_TEMPLATE, trace_id, [])
-                if session_id else None
-            )
+            # 会话历史归前端，这里不再落库，也就没有 message_id 可供反馈。
             yield _sse("done", {
                 "trace_id": trace_id, "refused": True,
                 "provider": gen_provider, "model": gen_model,
                 "citations": [],
                 "cite_coverage": 0.0, "invalid_ids": [], "degraded": result.degraded,
                 "answer": REFUSE_TEMPLATE,
-                "message_id": msg_id,
             })
             _log(conn, trace_id, req, result, timings, "refuse", 0, 0, 0.0, history_len=len(history), provider=gen_provider)
             return
@@ -545,10 +538,6 @@ def ask(req: AskRequest) -> Response:
         sup = _support_payload(answer, bundle, kb_cfg)
         timings["support_ms"] = sup.get("ms", 0)
         citations = [asdict(c) for c in bundle.citations]
-        msg_id = (
-            _save(conn, session_id, req.question, answer, trace_id, citations)
-            if session_id else None
-        )
         yield _sse("done", {
             "trace_id": trace_id,
             "refused": False,
@@ -562,7 +551,6 @@ def ask(req: AskRequest) -> Response:
             "support": sup,
             "degraded": result.degraded + ([f"llm_error:{error}"] if error else []),
             "answer": answer,
-            "message_id": msg_id,
         })
         _log(conn, trace_id, req, result, timings, "ok", 0, 0, report.coverage, len(history), provider=gen_provider)
         _ = started  # 保留给 trace 扩展，避免被 lint 判定未使用
@@ -571,7 +559,7 @@ def ask(req: AskRequest) -> Response:
         # stream=false：把同一条链路整条跑完，只取 done 事件的载荷当 JSON 返回。
         #
         # 不给非流式单写一遍"检索 + 生成 + 引用校验"——两份实现必然发散，而
-        # 分叉处的差异（拒答判定、引用覆盖率、message_id 落库）恰恰是最难被
+        # 分叉处的差异（拒答判定、引用覆盖率）恰恰是最难被
         # 发现的地方。这里只是把 SSE 当内部传输格式消费掉，对外是一份完整 JSON。
         #
         # 顺带的好处：走不支持 SSE、或者会在网关处被缓冲截断的客户端时，一次
@@ -608,7 +596,7 @@ def _log(conn, trace_id: str, req: AskRequest, result, timings: dict, status: st
          prompt_tokens: int, completion_tokens: int, coverage: float,
          history_len: int, provider: str | None = None) -> None:
     digest = hashlib.sha256(req.question.encode("utf-8")).hexdigest()[:16]
-    provider_name = provider or req.provider or state.cfg.generation.provider
+    provider_name = provider or req.provider or ""
     provider_cfg = state.cfg.generation.providers.get(provider_name)
     model_name = provider_cfg.model if provider_cfg else provider_name
     candidates = [

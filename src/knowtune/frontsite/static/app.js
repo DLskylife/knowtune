@@ -22,7 +22,7 @@
 
 /* 构建号：和 index.html 里那份必须一致，不一致说明浏览器拿的是旧 JS，
    页面加载完会强制换一次（见 index.html 里的自检脚本）。 */
-window.SITE_BUILD = "1.7.37";
+window.SITE_BUILD = "1.7.39";
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
@@ -108,6 +108,13 @@ const T = {
     pvThinking: "تەييارلىنىۋاتىدۇ…",
     pvFailed: "ئالدىن سوراش مۇلازىمىتى جاۋاب بەرمىدى، سەل تۇرۇپ قايتا سىناڭ.",
     pvEmpty: "بۇ بۆلەكتە تېخى ماتېرىيال يوق.",
+    // 维语输入面板（输入框右下角那颗键盘键）
+    kbBtn: "ئۇيغۇرچە كىرگۈزۈش",
+    kbTitle: "ئۇيغۇرچە ھەرپ تاختىسى",
+    kbTip: "لاتىنچە يازسىڭىز ئاپتوماتىك ئۇيغۇرچە بولىدۇ، ياكى ھەرپنى بېسىڭ",
+    kbLatPh: "uyghurche tébabiti",
+    kbInsert: "قىستۇرۇش",
+    kbSpace: "بوشلۇق",
     // 资料语言 · 作答语言。不能写死"维语作答"：答案语言现在跟着右上角走，
     // 高亮中文时那句"维语作答"就是当着用户的面撒谎。
     chip: (src, dst) =>
@@ -182,6 +189,13 @@ const T = {
     pvThinking: "正在整理…",
     pvFailed: "预问诊服务没有响应，稍后再试。",
     pvEmpty: "这一栏还没有资料，请先在后台导入文档。",
+    // 维语输入面板（输入框右下角那颗键盘键）
+    kbBtn: "维语输入",
+    kbTitle: "维吾尔语输入",
+    kbTip: "会拼音就会用：敲 uyghurche 得到 ئۇيغۇرچە；也可以直接点字母",
+    kbLatPh: "uyghurche tébabiti",
+    kbInsert: "插入",
+    kbSpace: "空格",
     chip: (src, dst) =>
       `${LANG_LABEL.zh[src] || src}资料 · ${LANG_LABEL.zh[dst] || dst}作答`,
     stamp: (lang) => `${LANG_LABEL.zh[lang] || lang}作答`,
@@ -202,6 +216,12 @@ const T = {
     docUnit: "docs",
     pvTag: "no search",
     pvMeta: "Symptom intake",
+    kbBtn: "Uyghur input",
+    kbTitle: "Uyghur keyboard",
+    kbTip: "Type Latin — uyghurche becomes ئۇيغۇرچە — or tap the letters",
+    kbLatPh: "uyghurche tébabiti",
+    kbInsert: "Insert",
+    kbSpace: "space",
     classicName: "Classic texts",
     netErr: "Connection lost. Please retry.",
     srvErr: "Service temporarily unavailable.",
@@ -725,10 +745,157 @@ $("q").addEventListener("keydown", (e) => {
 $("btnNewChat").onclick = () => (view === "pv" ? pvReset() : newSession());
 $("btnSend").onclick = () => (busy ? stop() : send());
 
+/* --------------------------------------------------------- 维语输入
+
+   为什么要有这个：中文 Windows 上**没有**维吾尔语键盘（阿拉伯字母要另装
+   语言包，装完还得记一套跟英文完全不同的键位），手机端用户可能连阿拉伯
+   字母怎么打都不知道。结果就是这个系统的实际使用者——维族患者——打开页面
+   只能点示例。所以给两条不用装任何东西的路：
+
+   1) 拉丁转写（ULY）。会打拼音就会用：uyghurche → ئۇيغۇرچە。
+      ULY 是维吾尔语的官方拉丁转写，规则近似"一个字母一个音"，
+      这里按最长匹配做音译，词首元音自动补 ئ（hamza 座）。
+   2) 字母表。8×4 一格一个字母，点一下插到光标处。触屏和"完全不想学拉丁
+      转写"的人用这条。
+
+   两条路都只往输入框里写字符，不碰请求链路：写完照常回车发送。 */
+
+/* ULY → 阿拉伯字母。双字母先匹配（ng 是一个字母 ڭ，不是 ن+گ）。 */
+const ULY_MAP = {
+  ch: "چ", sh: "ش", gh: "غ", zh: "ژ", ng: "ڭ", kh: "خ",
+  a: "ا", e: "ە", i: "ى", o: "و", u: "ۇ", ö: "ۆ", ü: "ۈ", é: "ې", ë: "ې",
+  b: "ب", p: "پ", t: "ت", j: "ج", x: "خ", d: "د", r: "ر", z: "ز",
+  s: "س", f: "ف", q: "ق", k: "ك", g: "گ", l: "ل", m: "م", n: "ن",
+  h: "ھ", w: "ۋ", y: "ي", "'": "ئ",
+};
+const ULY_VOWELS = new Set(["ا", "ە", "ى", "و", "ۇ", "ۆ", "ۈ", "ې"]);
+const isWordChar = (c) => /[\p{L}\p{N}']/u.test(c);
+
+function ulyToUg(src) {
+  const s = String(src || "").toLowerCase();
+  let out = "";
+  let atWord = true;          // 光标是否在词首（决定要不要补 hamza 座）
+  for (let i = 0; i < s.length;) {
+    const pair = s.slice(i, i + 2);
+    const hit = ULY_MAP[pair];
+    const ch = hit || ULY_MAP[s[i]];
+    if (!ch) {
+      out += s[i];            // 空格、标点、数字原样带过去
+      atWord = !isWordChar(s[i]);
+      i += 1;
+      continue;
+    }
+    i += hit ? 2 : 1;
+    // 词首元音必须站在 ئ 上：ana → ئانا。写成 انا 是拼错的词。
+    if (atWord && ULY_VOWELS.has(ch)) out += "ئ";
+    out += ch;
+    atWord = false;
+  }
+  return out;
+}
+
+const KB_KEYS = [
+  "ا", "ە", "ب", "پ", "ت", "ج", "چ", "خ",
+  "د", "ر", "ز", "ژ", "س", "ش", "غ", "ف",
+  "ق", "ك", "گ", "ڭ", "ل", "م", "ن", "ھ",
+  "و", "ۇ", "ۆ", "ۈ", "ۋ", "ې", "ى", "ي",
+];
+
+/* 插到光标处（不是拼到末尾）：用户可能回头改中间某个词。 */
+function insertAtCaret(text) {
+  const el = $("q");
+  const start = el.selectionStart == null ? el.value.length : el.selectionStart;
+  const end = el.selectionEnd == null ? start : el.selectionEnd;
+  el.value = el.value.slice(0, start) + text + el.value.slice(end);
+  const pos = start + text.length;
+  el.focus();
+  try { el.setSelectionRange(pos, pos); } catch (e) { /* 老浏览器不支持就算了 */ }
+  autosize();
+  syncSend();
+}
+
+function kbRender() {
+  $("kbTitle").textContent = t.kbTitle || "";
+  $("kbTip").textContent = t.kbTip || "";
+  $("kbBtnLabel").textContent = t.kbBtn || "";
+  $("btnKb").title = t.kbTitle || "";
+  $("kbLat").placeholder = t.kbLatPh || "";
+  $("kbIns").textContent = t.kbInsert || "";
+  $("kbSpace").textContent = t.kbSpace || "";
+  const keys = $("kbKeys");
+  keys.innerHTML = KB_KEYS.map((ch) =>
+    `<button class="kb-key" type="button">${esc(ch)}</button>`).join("");
+  keys.querySelectorAll(".kb-key").forEach((btn) => {
+    btn.onclick = () => insertAtCaret(btn.textContent);
+  });
+}
+
+function kbPreview() {
+  const ug = ulyToUg($("kbLat").value.trim());
+  $("kbPrev").textContent = ug;
+  $("kbIns").disabled = !ug;
+  return ug;
+}
+
+function kbCommit() {
+  const ug = kbPreview();
+  if (!ug) return;
+  insertAtCaret(ug);
+  $("kbLat").value = "";
+  kbPreview();
+  $("kbLat").focus();
+}
+
+function kbOpen(on) {
+  const open = on == null ? $("kb").hidden : Boolean(on);
+  $("kb").hidden = !open;
+  $("btnKb").classList.toggle("on", open);
+  $("btnKb").setAttribute("aria-expanded", open ? "true" : "false");
+  if (open) {
+    // 界面是维语时，用户多半真的要打字，直接把光标放进拉丁输入框；
+    // 中文界面下打开这个面板通常是"帮别人输"，同样给焦点更省事。
+    kbPreview();
+    $("kbLat").focus();
+  }
+}
+
+$("btnKb").onclick = () => kbOpen();
+$("kbClose").onclick = () => kbOpen(false);
+$("kbIns").onclick = kbCommit;
+$("kbLat").addEventListener("input", kbPreview);
+$("kbLat").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); kbCommit(); }
+});
+$("kbDel").onclick = () => {
+  const el = $("q");
+  const start = el.selectionStart == null ? el.value.length : el.selectionStart;
+  const end = el.selectionEnd == null ? start : el.selectionEnd;
+  if (start === end) {
+    if (start === 0) return;
+    el.value = el.value.slice(0, start - 1) + el.value.slice(start);
+    el.focus();
+    try { el.setSelectionRange(start - 1, start - 1); } catch (e) { /* 同上 */ }
+  } else {
+    el.value = el.value.slice(0, start) + el.value.slice(end);
+    el.focus();
+    try { el.setSelectionRange(start, start); } catch (e) { /* 同上 */ }
+  }
+  autosize();
+  syncSend();
+};
+/* 空格键（面板底部那颗）：data-ins 里就一个空格，交给同一条插入逻辑 */
+$("kb").querySelectorAll("[data-ins]").forEach((btn) => {
+  if (btn.id === "kbDel") return;
+  btn.addEventListener("click", () => insertAtCaret(btn.dataset.ins));
+});
+
+
 /* Esc：先生成中则停止；否则收起侧栏抽屉 */
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   if (busy) { e.preventDefault(); stop(); return; }
+  // 维语输入面板开着时，Esc 先收面板——它盖在输入框上方，是最上面那层。
+  if (!$("kb").hidden) { kbOpen(false); return; }
   closeSide();
 });
 
@@ -994,6 +1161,27 @@ function groupCitations(citations) {
   return [...byDoc.values()];
 }
 
+/* 文档标题取的是文件名，于是出处行读作「普通感冒（现代医学参考）.md」——
+   `.md` / `.pdf` 是给文件系统看的，患者看来源不需要。这里只去扩展名，
+   不改数据：分组仍按原始 doc_title，标题里同名不同格式的两份也不会被合并。 */
+function displayTitle(t) {
+  return (t || "").replace(/\.(md|markdown|pdf|docx?|xlsx?|pptx?|txt|csv)$/i, "");
+}
+
+/* Markdown 文档的 H1 会进 heading_path 的第一段，于是出处行读作
+   「普通感冒（现代医学参考） · 普通感冒（现代医学参考） > 普通感冒的症状」——
+   同一个名字在一行里出现两次。标题已经盖住的那一段就不必再报，只留小节名。
+   PDF 抽出来的 heading_path 一般不含文档标题，走 else 原样返回。 */
+function trimHeading(docTitle, path) {
+  if (!path) return "";
+  if (!docTitle) return path;
+  if (path === docTitle) return "";
+  for (const sep of [" > ", " › ", " / "]) {
+    if (path.startsWith(docTitle + sep)) return path.slice(docTitle.length + sep.length);
+  }
+  return path;
+}
+
 function sourcesBar(citations) {
   if (!citations || !citations.length) return null;
   const det = document.createElement("details");
@@ -1001,7 +1189,9 @@ function sourcesBar(citations) {
   const groups = groupCitations(citations);
   const items = groups.map((g) => {
     const first = g.items[0];
-    const head = [g.doc_title, first.page_no ? `${first.page_no}` : "", first.heading_path || ""]
+    const title = displayTitle(g.doc_title);
+    const head = [title, first.page_no ? `${first.page_no}` : "",
+      trimHeading(title, first.heading_path || "")]
       .filter(Boolean).join(" · ");
     const ns = g.ns.map((n) => `<span class="n">${esc(n)}</span>`).join("");
     return `<li class="src-item" data-n="${esc(g.ns[0])}" data-ns="${esc(g.ns.join(","))}">
@@ -1289,6 +1479,9 @@ function applyChrome() {
   renderNav();
   applyViewCopy();
   renderSamples();
+  // 维语输入面板的文案（含那颗键盘键上的标签）也归这里管：它随界面语言变，
+  // 且必须在**打开之前**就是对的——否则第一次看到的是个光秃秃的图标。
+  kbRender();
 }
 
 /* 示例问题。维医栏用站点自己配的那三句（本来就是照着这个库写的）；

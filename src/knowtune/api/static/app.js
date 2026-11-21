@@ -1,6 +1,6 @@
 /* 构建号：与 index.html 里那份一致，不一致说明浏览器拿到的是旧 JS，
    页面加载完会强制换一次（见 index.html 的自检脚本）。 */
-window.ADMIN_BUILD = "0.9.71";
+window.ADMIN_BUILD = "0.9.97";
 
 const $ = (id) => document.getElementById(id);
 
@@ -9,11 +9,9 @@ const state = {
   kbs: [],
   docs: [],
   status: null,
-  // 会话 id 不再从 localStorage 里取。那份数据在换浏览器/清缓存后就丢了，
-  // 而会话其实还在库里——用户看到的是"历史全没了"。改为以服务端为准：
-  // 每个知识库一个固定会话，见 ensureSession()。
-  sessionId: null,
-  sessionInfo: null,
+  // 会话历史归前端：后台不建会话、不落库。这一页的对话只活在 state.history，
+  // 换页/刷新即清空；要接着聊的是前台站点，它有浏览器 localStorage。
+  history: [],        // [{role:"user"|"assistant", content}, ...] 按时间正序
   lastCitations: [],
   lastCtx: null,
   lastConfidence: null,
@@ -517,24 +515,15 @@ async function previewDoc(docId) {
 
 /* ------------------------------------------------------------------ 会话 */
 /*
- * 单会话模式：每个知识库固定一个会话，侧栏只显示这一行 + 一个刷新按钮。
- *
- * 多会话在这个场景里是纯负担——用户要的是"接着刚才说"，不是管理一堆标题、
- * 给每次对话取名、清理过期条目。会话 id 也不再存在 localStorage 里：那份
- * 数据换浏览器就丢，而会话本身还在库里，用户看到的是"历史全没了"。
- * 以服务端为准（/api/session/current），换设备也是同一个会话。
+ * 后台不存会话历史：这一页的对话只活在内存里（state.history），换页/刷新即
+ * 清空。要长期接着聊的是前台站点，它有自己的浏览器 localStorage 会话列表。
+ * 侧栏这张卡片只报这一页的轮数和上下文占用，加一个"重新开始"按钮。
  */
 
 function renderSessions() {
   const box = $("sessionList");
   if (!box) return;
-  const info = state.sessionInfo;
-  if (!info) {
-    box.innerHTML = `<p class="list-hint">还没有会话。</p>`;
-    return;
-  }
-  const turns = Number(info.turns || 0);
-  const msgs = Number(info.messages || 0);
+  const turns = Math.ceil(state.history.length / 2);
   const ctx = state.lastCtx;
   // 把"还能聊多少"直接画出来：上下文满没满，用户不该靠模型突然变笨去猜。
   const used = ctx && ctx.budget
@@ -544,89 +533,41 @@ function renderSessions() {
   box.innerHTML = `
     <div class="session-card">
       <div class="sc-head">
-        <span class="sc-title">这个知识库只有一条对话</span>
+        <span class="sc-title">本次对话（刷新页面即清空）</span>
         <span class="badge${turns ? "" : " muted"}">${turns ? `${turns} 轮` : "空"}</span>
       </div>
       <div class="sc-meta">
-        <span>${msgs} 条消息</span>
+        <span>${state.history.length} 条消息</span>
         <span class="sc-ctx ${lvl}">上下文 ${used}%</span>
       </div>
       <div class="sc-bar"><i style="width:${used}%"></i></div>
-      <button class="sc-refresh" data-act="refresh" title="清空这轮对话，重新开始（文档和索引不受影响）">
-        ${ICON_REFRESH}<span>刷新对话</span>
+      <button class="sc-refresh" data-act="refresh" title="清空这页的对话，重新开始">
+        ${ICON_REFRESH}<span>重新开始</span>
       </button>
     </div>`;
   const btn = box.querySelector("[data-act=refresh]");
   if (btn) btn.onclick = (e) => { e.stopPropagation(); refreshSession(); };
 }
 
-/* 取（或建）该知识库的那个固定会话，再把消息画出来。 */
-async function ensureSession(reloadMessages = true) {
-  if (!state.kbId) {
-    state.sessionInfo = null;
-    // 不挂载知识库时清掉会话：留着上一个库的 session_id，这一轮"直问模型"
-    // 就会被写进那个库的对话历史里——侧栏里突然冒出一段没有来源的对话。
-    state.sessionId = null;
-    renderSessions();
-    return null;
-  }
-  let info = null;
-  try {
-    info = await api(`/api/session/current?kb_id=${state.kbId}`);
-  } catch (_) {
-    info = null;
-  }
-  state.sessionInfo = info;
-  if (info) state.sessionId = info.id;
-  renderSessions();
-  if (reloadMessages) await loadMessages();
-  return info;
-}
-
-/* 只更新侧栏轮数，不重绘消息——重绘会把用户正在看的位置弹回底部。 */
-async function loadSessions() {
-  return ensureSession(false);
-}
-
-async function loadMessages() {
-  if (!state.sessionId) return;
-  let msgs = [];
-  try {
-    msgs = await api(`/api/sessions/${encodeURIComponent(state.sessionId)}/messages`);
-  } catch (_) {
-    msgs = [];
-  }
-  paintInto(msgs);
-}
-
-function paintInto(msgs) {
-  $("chat").innerHTML = "";
-  if (!msgs.length) {
-    renderEmptyChat();
+/* 重新开始：只清内存里的这一页对话和消息区，不碰任何库表。 */
+function refreshSession() {
+  if (state.busy) {
+    alert("这一轮还在回答，等结束再重新开始。");
     return;
   }
-  for (const m of msgs) {
-    if (m.role === "user") {
-      appendUser(m.content);
-      continue;
-    }
-    const el = document.createElement("div");
-    el.className = "msg assistant";
-    el.innerHTML = `<div class="role">knowtune</div>
-      <div class="bubble">${renderBody(m.content)}</div>
-      <div class="msg-foot"></div>`;
-    $("chat").appendChild(el);
-    if (m.citations?.length) {
-      state.lastCitations = m.citations;
-      el.querySelector(".msg-foot").innerHTML =
-        `<button data-src="cites">查看 ${m.citations.length} 条来源</button>`;
-      el.querySelector("[data-src=cites]").onclick = () => {
-        switchTab("source");
-        showCitation(m.citations[0]);
-      };
-    }
-  }
-  scrollToBottom();
+  state.history = [];
+  state.lastCtx = null;
+  renderSessions();
+  renderEmptyChat("已重新开始", "这一页的对话已清空，从这里重新开始。");
+  $("question")?.focus();
+}
+
+/* 追加一轮问答到本次对话。done 时才追加——中途流式输出不算一轮，
+   回答失败也不把半截答案喂给下一轮。 */
+function rememberTurn(question, answer) {
+  state.history.push({ role: "user", content: question });
+  state.history.push({ role: "assistant", content: answer || "" });
+  renderSessions();
 }
 
 /* 能不能发问：模型没配好就不发。发出去也是 500 或空回答，还不如当场说清楚。 */
@@ -723,7 +664,7 @@ function renderEmptyChat(title = "问点什么",
     <div class="es-keys">
       <span><kbd>Enter</kbd> 发送</span>
       <span>顶栏「对话配置」切换知识库与后端</span>
-      <span><kbd>Alt</kbd>+<kbd>,</kbd> 全局参数</span>
+      <span><kbd>Alt</kbd>+<kbd>,</kbd> 对话配置</span>
     </div>
   </div>`;
 }
@@ -731,42 +672,6 @@ function renderEmptyChat(title = "问点什么",
 function scrollToBottom() {
   const box = $("chat");
   if (box) box.scrollTop = box.scrollHeight;
-}
-
-/* 深链 #s=<会话 id> 用：直接打开指定会话。 */
-async function openSession(id) {
-  state.sessionId = id;
-  const msgs = await api(`/api/sessions/${encodeURIComponent(id)}/messages`).catch(() => []);
-  state.sessionInfo = { id, turns: Math.ceil(msgs.length / 2) };
-  renderSessions();
-  paintInto(msgs);
-}
-
-/* 刷新会话：清空消息但保留会话本身。
-   保留 id 是因为别的持有方（命令行、深链）都拿着它，换 id 等于要求所有人
-   同时察觉——为一个"清空"动作付这个代价不值。 */
-async function refreshSession() {
-  if (state.busy) {
-    alert("这一轮还在回答，等结束再刷新。");
-    return;
-  }
-  if (!state.sessionId) await ensureSession(false);
-  if (!state.sessionId) { return; }
-  try {
-    const r = await api(`/api/sessions/${encodeURIComponent(state.sessionId)}/clear`,
-      { method: "POST" });
-    if (state.sessionInfo) {
-      state.sessionInfo = { ...state.sessionInfo, turns: 0, messages: 0 };
-    }
-    // 上下文占用条也要归零：留着上一轮的 92% 会让人以为清空没生效
-    state.lastCtx = null;
-    renderSessions();
-    renderEmptyChat("会话已刷新", "上下文已清空，从这里重新开始。");
-    $("question").focus();
-    toast(`已清空 ${r.cleared} 条消息`);
-  } catch (err) {
-    alert(`刷新失败：${err.message}`);
-  }
 }
 
 
@@ -801,65 +706,31 @@ function stopWarmPoll() {
 function renderStatus() {
   const s = state.status;
   if (!s) return;
-  $("statChunks").textContent = s.chunks;
-  // 状态用圆点表达，文字保持中性色 —— 一整行绿字会跟"成功提示"混淆，
-  // 而这个位置只是说明"现在能不能检索"。
+  // 侧栏底部那排全局统计已经撤掉：chunk 数在知识库「信息」页、精排模型与
+  // 候选数在本库「参数」页、后端数量在模型页。同一件事只该有一个权威位置。
+  //
+  // 这一节现在只负责一件事：索引器没准备好，就别让用户点发送。状态说明挪到
+  // 按钮的 title 上——需要它的人会去悬停，不需要的人不必天天看一行绿字。
   const ok = s.embedder.available;
   const warm = s.embedder.warmup || {};
+  const send = $("btnSend");
   if (ok) {
-    $("statEmbed").textContent = "索引就绪";
-    $("embedDot").className = "dot ok";
+    send.title = "";
     stopWarmPoll();
     // 就绪后必须把按钮放回来 —— 只关不开，用户会以为还卡在启动中。
     // 用 busy 兜底：正在回答时不能被状态刷新重新点亮。
-    $("btnSend").disabled = state.busy;
+    send.disabled = state.busy;
   } else if (warm.state === "pending" || warm.state === "loading") {
     // 冷启动 40 秒。这段时间按钮必须是"等"而不是"点下去转圈"：
     // 用户能看见还剩多久，就不会以为程序坏了。
     const sec = Math.round((warm.elapsed_ms || 0) / 1000);
-    $("statEmbed").textContent = `索引器启动中 ${sec}s`;
-    $("embedDot").className = "dot warn";
-    $("btnSend").disabled = true;
+    send.title = `索引器启动中 ${sec}s，就绪后按钮自动亮`;
+    send.disabled = true;
     startWarmPoll();
   } else {
-    $("statEmbed").textContent = "嵌入不可用";
-    $("embedDot").className = "dot err";
-    $("btnSend").disabled = state.busy;
+    send.title = "嵌入模型不可用：到「模型」页把它修好再提问";
+    send.disabled = state.busy;
     stopWarmPoll();
-  }
-  const rr = $("statRerank");
-  // 只显示全局开关是不够的：库参数是独立的一份，"全局开着、本库关着"才是
-  // 实际最常见的状态。用户看到"已关闭"却想不起在哪儿关的，就会以为功能坏了。
-  rr.textContent = s.rerank.enabled ? s.rerank.default_model.split("/").pop() : "已关闭";
-  if (!s.rerank.enabled) {
-    rr.title = s.rerank.global_enabled
-      ? "本库参数里关了精排（全局是开着的）。到参数面板的「检索」分组里打开"
-      : "精排已关闭（全局参数）";
-  } else {
-    const bits = [s.rerank.default_model];
-    if (s.rerank.candidates) bits.push(`前 ${s.rerank.candidates} 条候选`);
-    if (s.rerank.max_length) bits.push(`每条截断 ${s.rerank.max_length} 字`);
-    if (s.rerank.last_error) bits.push(`⚠ ${s.rerank.last_error}`);
-    rr.title = bits.join(" · ");
-  }
-
-  // 生成后端缺失时，提问会一路跑到"模型服务不存在"。与其让用户在那个时刻
-  // 才看到报错，不如状态栏先红：他至少知道该先去配端点，而不是怀疑检索坏了。
-  const gen = s.generation || {};
-  const gb = $("statGen");
-  const gd = $("genDot");
-  if (gen.configured) {
-    gb.textContent = gen.provider;
-    gb.title = gen.follows_global
-      ? `跟随全局生成后端：${gen.provider}（本库没有单独指定）`
-      : `当前生成后端：${gen.provider}`;
-    gd.className = "dot ok";
-  } else {
-    gb.textContent = gen.provider ? "未配置" : "未选择";
-    gb.title = gen.provider
-      ? `参数里写的是「${gen.provider}」，但模型服务里没有这个端点（已配：${(gen.known || []).join("、") || "一个都没有"}）。到「模型服务」页添加，或改本库的生成后端。`
-      : "还没有选择生成后端。到「模型服务」页添加一个端点。";
-    gd.className = "dot err";
   }
   const pill = $("refusalPill");
   const pillText = $("refusalText");
@@ -1135,8 +1006,10 @@ function syncGenModelOptions() {
   const baseName = pv?.name || "";
   const baseModel = pv?.model || "";
 
+  // 文案压短了一个括号的长度：这一格只有 296px 宽，写"跟随当前后端（…）"
+  // 会被截在右括号之前，看起来像坏了。现在断在模型名里，语义完整。
   sel.innerHTML =
-    `<option value="">跟随当前后端（${esc(baseName || "未配置")} · ${esc(shortModel(baseModel) || "没配模型")}）</option>`
+    `<option value="">跟随 ${esc(baseName || "未配置")} · ${esc(shortModel(baseModel) || "没配模型")}</option>`
     + groups
     + `<option value="${GEN_CUSTOM}">＋ 手动输入模型名…</option>`;
 
@@ -1445,7 +1318,8 @@ async function ask(question) {
     question,
     // 不挂载知识库时 kb_id 必须是 null（不是 0 / ""）：0 会被当成"查一个不存在的库"
     kb_id: state.kbId || null,
-    session_id: state.sessionId,
+    // 后台不存会话：把这一页内存里的对话带过去，轮数/预算由后端 chat.* 配置裁。
+    history: state.history,
     // 平铺目录里选了某个后端的模型 → 后端跟着它走，而不是停在上面那个下拉
     provider: gm.provider || $("providerSel").value || null,
     top_k: $("topKSel").value ? Number($("topKSel").value) : null,
@@ -1549,6 +1423,8 @@ async function ask(question) {
           paint(false);
         } else if (event === "done") {
           paint(true);
+          // 这一问完成后才把问答记进本次对话：下一轮带上它才有指代对象。
+          rememberTurn(question, obj.answer || acc);
           // meta 没带回显（比如老版本服务端）时用 done 里的那份兜底
           if (!state.lastGen && obj.provider) {
             state.lastGen = { provider: obj.provider, model: obj.model || "" };
@@ -1560,10 +1436,6 @@ async function ask(question) {
               if (state.lastGen?.provider) {
                 foot.innerHTML += genTag(state.lastGen);
               }
-            if (obj.message_id) {
-              foot.innerHTML += `<button data-fb="up" title="回答有用">有用</button>` +
-                `<button data-fb="down" title="回答无用，进入待分析队列">无用</button>`;
-            }
             bindFootActions(foot, obj);
           } else if (!obj.refused) {
             const bits = [];
@@ -1614,10 +1486,6 @@ async function ask(question) {
             if (obj.citations?.length) {
               bits.push(`<button data-src="cites">查看 ${obj.citations.length} 条来源</button>`);
             }
-            if (obj.message_id) {
-              bits.push(`<button data-fb="up" title="回答有用">有用</button>` +
-                        `<button data-fb="down" title="回答无用，进入待分析队列">无用</button>`);
-            }
             foot.innerHTML = bits.join("");
             bindCiteBtn(foot, obj);
             bindFeedback(foot, obj);
@@ -1636,7 +1504,7 @@ async function ask(question) {
     state.busy = false;
     $("btnSend").disabled = false;
     loadKb();
-    loadSessions();
+    renderSessions();
   }
 }
 
@@ -1824,7 +1692,7 @@ async function loadKb() {
   renderStatus();
   renderKbList();
   if (state.kbId) await loadDocs();
-  await loadSessions();
+  renderSessions();
   renderCfgSummary();
 }
 
@@ -1845,8 +1713,11 @@ async function selectKb(id) {
   state.status = await api(statusUrl());
   renderStatus();
   await loadDocs();
-  // 每个库有自己的固定会话：换库就是换对话，消息要跟着换
-  await ensureSession(true);
+  // 会话是这一页的内存对话，换库就清掉——别把 A 库的问答喂给 B 库。
+  state.history = [];
+  state.lastCtx = null;
+  renderSessions();
+  renderEmptyChat();
   renderCfgSummary();
   if (state.view === "kb") await renderKbPage();
 }
@@ -1943,33 +1814,16 @@ function askConfirm(messageHTML, opts = {}) {
   });
 }
 
-/* --------------------------------------------------------------- 参数面板 */
+/* --------------------------------------------------------- 参数控件（共用） */
 /*
- * 参数的定义、边界、步长、说明全部由后端 /api/settings 下发，前端只负责渲染
- * 和把新值送回去。以后加一个可调参数，后端注册表加一行即可，这里不用动。
+ * 全局参数抽屉已经退役：每个库在「知识库 → 参数」里持有完整一套值（见
+ * kbconfig.py），再在外面挂一层"全局值"只会让人以为改它能影响所有库。
+ * 但下面这几个控件是**共用的** —— 库参数页每一行都用它渲染，别顺手删了。
  *
- * 交互上有一处刻意的取舍：改动是"边改边生效"（防抖后发 PATCH），但面板不重绘
- * 输入控件——重绘会把光标顶掉，所以落盘只更新行内的值与标记。
- *
- * 数值控件**不用滑杆**：拖动一条 range 很难精确落在 0.35，而阈值的 0.05 之差
+ * 数值控件不用滑杆：拖动一条 range 很难精确落在 0.35，而阈值的 0.05 之差
  * 就是"拒答"与"硬答"的分界。现在是「− 数字框 ＋」按 step 精确走，外加
  * 默认 / 下限 / 上限三个档位一键到位。
  */
-
-const cfgPanel = { data: null, rows: new Map(), timer: null, queue: {}, inflight: false };
-
-/* 右上角的值区：布尔放开关（它本身就是值），枚举的下拉太宽留在下面单独一行，
-   数值只显示当前值——输入在下面那一行，同一行出现两个"50"是纯噪音。 */
-function valueHTML(it) {
-  if (it.kind === "bool") {
-    return `<label class="toggle"><input type="checkbox" data-k="${it.key}"${
-      it.value ? " checked" : ""}><span class="sw"></span>
-      <span class="toggle-label">${it.value ? "开" : "关"}</span></label>`;
-  }
-  if (it.kind === "enum") return "";
-  return `<span class="set-cur">${esc(fmtParamVal(it, it.value))}</span>${
-    it.unit ? `<span class="unit">${esc(it.unit)}</span>` : ""}`;
-}
 
 function fmtParamVal(it, v) {
   if (v === null || v === undefined) return "-";
@@ -2018,282 +1872,6 @@ function numCtlHTML(it, value, disabled, dataAttr, chipAttr = "data-pickk") {
       ${unit}
       <span class="picks">${pickChipsHTML(it, value, chipAttr, it.key, disabled)}</span>
     </div>`;
-}
-
-function findItem(key) {
-  if (!cfgPanel.data) return null;
-  for (const g of cfgPanel.data.groups) {
-    const hit = g.items.find((i) => i.key === key);
-    if (hit) return hit;
-  }
-  return null;
-}
-
-function rowHTML(it) {
-  const marks = [];
-  if (it.from_calibration) marks.push(`<i class="mark cal" title="来自评估集标定结果">标定</i>`);
-  if (it.effect === "reindex") marks.push(`<i class="mark rebuild" title="改后需重新索引才生效">需重建</i>`);
-  if (it.modified && !it.saved) marks.push(`<i class="mark">未保存</i>`);
-
-  let ctl = "";
-  if (it.kind === "enum") {
-    ctl = `<select data-k="${it.key}">${it.options
-      .map((o) => `<option value="${esc(o)}"${o === it.value ? " selected" : ""}>${esc(o)}</option>`)
-      .join("")}</select>`;
-  } else if (it.kind !== "bool") {
-    ctl = numCtlHTML(it, it.value, false, `data-k="${it.key}"`);
-  }
-
-  return `<div class="set-row${it.modified ? " is-mod" : ""}${
-    it.modified && !it.saved ? " is-unsaved" : ""}" data-row="${it.key}">
-    <div class="set-row-top">
-      <span class="set-name">${esc(it.label)}</span>
-      <span class="set-val">${valueHTML(it)}<span class="marks">${marks.join("")}</span></span>
-    </div>
-    ${it.desc ? `<div class="set-desc">${esc(it.desc)}</div>` : ""}
-    ${ctl ? `<div class="set-ctl">${ctl}</div>` : ""}
-  </div>`;
-}
-
-function renderSettings() {
-  const d = cfgPanel.data;
-  if (!d) return;
-  cfgPanel.rows.clear();
-
-  const groups = d.groups.map((g) => {
-    const changed = g.items.filter((i) => i.modified).length;
-    return `<section class="set-group" data-group="${g.id}">
-      <button class="set-group-head" data-ghead="${g.id}">
-        <span class="chev">▶</span><span>${esc(g.label)}</span>
-        <span class="cnt">${changed ? `${changed} 项已改` : ""}</span>
-      </button>
-      <p class="set-group-note">${esc(g.note)}</p>
-      ${g.items.map(rowHTML).join("")}
-    </section>`;
-  }).join("");
-
-  const cal = d.calibration;
-  const calHTML = cal && cal.at
-    ? `<p class="set-group-note" style="padding-top:14px;border-top:1px solid var(--border-soft)">
-         拒答阈值标定于 ${esc(String(cal.at).slice(0, 10))}（${esc(cal.model || "-")}）：
-         score ${cal.min_score} / margin ${cal.min_margin}
-         ${cal.samples_ok ? "" : " · 样本不足，仅供参照"}
-       </p>`
-    : "";
-
-  const fileHTML = `<p class="set-group-note" style="padding-top:4px">
-      ${d.local_file.exists
-        ? `config/local.yaml 已覆盖 ${d.local_file.count} 项`
-        : "config/local.yaml 尚未创建（点「保存」才会写盘）"}
-    </p>`;
-
-  $("drawerBody").innerHTML = navHTML(d) + groups + calHTML + fileHTML;
-  bindSettings();
-  setDirtyNote(d.unsaved.length);
-}
-
-/* 27 个参数铺下来要滚很久。顶部给一组跳转 chip，等于给这份表单做一个目录。 */
-function navHTML(d) {
-  return `<div class="set-nav">${d.groups
-    .map((g) => `<button class="nav-chip" data-jump="${g.id}">${esc(g.label)}</button>`)
-    .join("")}</div>`;
-}
-
-function bindSettings() {
-  const body = $("drawerBody");
-  body.querySelectorAll("[data-row]").forEach((row) => cfgPanel.rows.set(row.dataset.row, row));
-
-  body.querySelectorAll("[data-ghead]").forEach((btn) => {
-    btn.onclick = () => btn.closest(".set-group").classList.toggle("closed");
-  });
-
-  body.querySelectorAll("[data-jump]").forEach((chip) => {
-    chip.onclick = () => {
-      const sec = body.querySelector(`.set-group[data-group="${chip.dataset.jump}"]`);
-      if (!sec) return;
-      sec.classList.remove("closed");  // 跳到收起的组等于跳到空白
-      sec.scrollIntoView({ block: "start", behavior: "smooth" });
-    };
-  });
-
-  // 步进按钮与档位 chip 会随值变化被重建，所以走**事件委托**而不是逐个绑定——
-  // 每刷新一次就重绑一遍，迟早出现"点一下生效两次"。
-  if (!body.dataset.numBound) {
-    body.dataset.numBound = "1";
-    body.addEventListener("click", (e) => {
-      const pick = e.target.closest("[data-pickk]");
-      if (pick) {
-        const it = findItem(pick.dataset.pickk);
-        if (!it) return;
-        const v = it.kind === "int"
-          ? Math.round(Number(pick.dataset.pick)) : Number(pick.dataset.pick);
-        const box = body.querySelector(`input.num[data-k="${it.key}"]`);
-        if (box) box.value = String(v);
-        commitParam(it.key, v);
-        return;
-      }
-      const stepBtn = e.target.closest("[data-step]");
-      if (stepBtn) {
-        const it = findItem(stepBtn.dataset.k);
-        if (!it) return;
-        const v = stepParamVal(it, Number(stepBtn.dataset.step));
-        const box = body.querySelector(`input.num[data-k="${it.key}"]`);
-        if (box) box.value = String(v);
-        commitParam(it.key, v);
-      }
-    });
-  }
-
-  body.querySelectorAll("[data-k]").forEach((el) => {
-    const key = el.dataset.k;
-    const it = findItem(key);
-    if (!it) return;
-    if (el.tagName === "BUTTON") return;   // 步进按钮走上面的委托
-
-    if (it.kind === "bool") {
-      el.onchange = () => {
-        const lab = el.closest(".toggle")?.querySelector(".toggle-label");
-        if (lab) lab.textContent = el.checked ? "开" : "关";
-        commitParam(key, el.checked);
-      };
-      return;
-    }
-
-    if (it.kind === "enum") {
-      el.onchange = () => commitParam(key, el.value);
-      return;
-    }
-
-    // 数字框允许中途是空的，不要在 oninput 里就急着纠错
-    el.onchange = () => {
-      const v = el.value.trim();
-      if (v === "") { el.value = it.value; return; }
-      const n = Number(v);
-      if (!Number.isFinite(n)) { el.value = it.value; return; }
-      commitParam(key, n);
-    };
-  });
-}
-
-/* polite=true 表示"还在拖"，只更新显示，等停手再发请求 */
-function commitParam(key, value, opts = {}) {
-  const it = findItem(key);
-  if (!it) return;
-  it.value = value;
-  it.modified = value !== it.default;
-  it.saved = false;
-  if (key.startsWith("refusal.min_")) it.from_calibration = false;
-  refreshRow(key);
-
-  cfgPanel.queue[key] = value;
-  clearTimeout(cfgPanel.timer);
-  cfgPanel.timer = setTimeout(flushParams, opts.polite ? 260 : 80);
-}
-
-function refreshRow(key) {
-  const it = findItem(key);
-  const row = cfgPanel.rows.get(key);
-  if (!it || !row) return;
-
-  const marks = [];
-  if (it.from_calibration) marks.push(`<i class="mark cal" title="来自评估集标定结果">标定</i>`);
-  if (it.effect === "reindex") marks.push(`<i class="mark rebuild" title="改后需重新索引才生效">需重建</i>`);
-  if (it.modified && !it.saved) marks.push(`<i class="mark">未保存</i>`);
-
-  row.querySelector(".marks").innerHTML = marks.join("");
-  // 数字框就是输入处，不重绘它 —— 重绘会把光标顶掉；只同步上面的值显示
-  const cur = row.querySelector(".set-cur");
-  if (cur) cur.textContent = fmtParamVal(it, it.value);
-  const num = row.querySelector("input.num");
-  if (num && document.activeElement !== num) num.value = String(it.value);
-  const picks = row.querySelector(".picks");
-  // 档位 chip 随当前值变化：当前值已经是"默认"了，就不必再给一个"默认"可点。
-  // 点击走事件委托，所以这里直接换 innerHTML 也不会丢绑定。
-  if (picks) picks.innerHTML = pickChipsHTML(it, it.value, "data-pickk", it.key);
-  row.classList.toggle("is-mod", it.modified);
-  row.classList.toggle("is-unsaved", it.modified && !it.saved);
-}
-
-async function flushParams() {
-  const values = cfgPanel.queue;
-  cfgPanel.queue = {};
-  const keys = Object.keys(values);
-  if (!keys.length || cfgPanel.inflight) {
-    if (keys.length) { cfgPanel.queue = { ...values, ...cfgPanel.queue }; }
-    return;
-  }
-  cfgPanel.inflight = true;
-  try {
-    const r = await api("/api/settings", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ values }),
-    });
-    const unsaved = new Set(r.unsaved || []);
-    cfgPanel.data.groups.forEach((g) => g.items.forEach((it) => {
-      if (it.key in r.applied) it.saved = !unsaved.has(it.key);
-    }));
-    keys.forEach(refreshRow);
-    setDirtyNote((r.unsaved || []).length);
-    // 这几项会改变侧栏状态与顶部角标，改完要让它们跟上；其余参数没必要
-    // 每次都重拉一遍文档列表
-    if (keys.some((k) => k.startsWith("refusal.") || k === "generation.provider"
-      || k === "retrieval.rerank.enabled" || k === "retrieval.rerank.model")) {
-      loadKb().catch(() => {});
-    }
-  } catch (err) {
-    // 校验失败必须回拉真值：前端已经把界面改成新值了，不回拉就会显示一个
-    // 后端根本没接受的状态——比不响应更危险。
-    alert(err.message);
-    cfgPanel.queue = {};
-    await refreshSettings().catch(() => {});
-  } finally {
-    cfgPanel.inflight = false;
-    if (Object.keys(cfgPanel.queue).length) flushParams();
-  }
-}
-
-function setDirtyNote(n) {
-  const el = $("dirtyNote");
-  if (!el) return;
-  if (!cfgPanel.data) { el.textContent = ""; return; }
-  el.className = "dirty-note" + (n ? " warn" : " ok");
-  el.textContent = n ? `${n} 项改动未保存` : "与生效配置一致";
-}
-
-async function refreshSettings() {
-  cfgPanel.data = await api("/api/settings");
-  renderSettings();
-}
-
-async function openSettings() {
-  $("scrim").hidden = false;
-  $("drawer").hidden = false;
-  try {
-    await refreshSettings();
-  } catch (err) {
-    $("drawerBody").innerHTML = `<p class="hint">参数加载失败：${esc(err.message)}</p>`;
-  }
-}
-
-function closeSettings() {
-  $("drawer").hidden = true;
-  $("scrim").hidden = true;
-}
-
-async function settingsAction(path, okPrefix) {
-  const btn = $("btnCfgSave");
-  btn.disabled = true;
-  try {
-    const r = await api(path, { method: "POST" });
-    await refreshSettings();
-    await loadKb();
-    alert(`${okPrefix}：${r.message || "完成"}`);
-  } catch (err) {
-    alert(err.message);
-  } finally {
-    btn.disabled = false;
-  }
 }
 
 /* ------------------------------------------------------------------ 事件 */
@@ -3239,7 +2817,8 @@ $("kbSel").onchange = async (e) => {
     state.kbCfgDraftFor = null;
     state.kbDetail = null;
     state.docs = [];
-    state.sessionId = null;
+    state.history = [];
+    state.lastCtx = null;
     renderKbList();
     renderDocs();
     renderSessions();
@@ -3328,37 +2907,36 @@ $("noKbMode").addEventListener("change", () => {
 });
 $("btnAdvReset").onclick = resetAdv;
 
-/* ------------------------------------------------------------ 参数抽屉 */
+/* ------------------------------------------------------------ 抽屉与快捷键 */
+/*
+ * 全局参数抽屉已经退役（见上面「参数控件」那段）。现在参数只有两个落点：
+ *   · 每个库一套 —— 知识库页的「参数」栏目；
+ *   · 出厂默认 —— config/default.yaml，或直接 PATCH /api/settings。
+ * 所以这里只剩提示词抽屉的遮罩、以及把 Alt+, 还给「对话配置」。
+ */
 
-$("btnSettings").onclick = () => { toggleCfgPop(false); openSettings(); };
-$("btnSettingsFoot").onclick = openSettings;
-$("drawerClose").onclick = closeSettings;
-$("scrim").onclick = closeSettings;
-$("btnCfgSave").onclick = () => settingsAction("/api/settings/save", "保存");
-$("btnCfgReset").onclick = async () => {
-  if (await askConfirm("把所有参数恢复成出厂值？这一步不会写盘，点「保存」才生效。",
-      { title: "恢复默认参数", okLabel: "恢复默认" })) {
-    settingsAction("/api/settings/reset", "恢复默认");
-  }
+$("scrim").onclick = () => {
+  if (!$("promptDrawer").hidden) closePromptDrawer();
 };
-$("btnCfgReload").onclick = () => settingsAction("/api/settings/reload", "重读磁盘");
 
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && !$("promptDrawer").hidden) closePromptDrawer();
-  if (e.key === "Escape" && !$("drawer").hidden) closeSettings();
   if (e.key === "Escape" && !$("cfgPop").hidden) toggleCfgPop(false);
-  // Alt+, 开参数面板。输入框里也生效 —— 想调阈值的人未必先点空白处。
+  // Alt+, 开「对话配置」。顶栏那颗按钮的 title 一直这么写着，以前却接到了
+  // 全局参数抽屉上 —— 键盘和鼠标打开的是两个面板，这个不叫快捷键。
   if (e.altKey && (e.key === "," || e.code === "Comma")) {
     e.preventDefault();
-    if ($("drawer").hidden) openSettings();
-    else closeSettings();
+    // 这个浮层挂在聊天页顶栏下面，在别的页里弹出来会是一个没有锚点的空盒子
+    if (state.view === "chat") toggleCfgPop();
   }
 });
 
 document.addEventListener("click", (e) => {
+  // 检索调试面板里的「调整」：从前开全局抽屉，现在直接落到本库参数页 ——
+  // 那条调试信息本来就是"这个库这一问怎么检的"，改也该改这个库。
   if (e.target.closest("[data-open-settings]")) {
     e.preventDefault();
-    openSettings();
+    setView("kb", { tab: "params" });
   }
 });
 
@@ -3498,7 +3076,11 @@ function dotOf(status) {
    和刚刚测的"就绪"根本不是一回事。 */
 function agoText(ts) {
   if (!ts) return "";
-  const s = Math.max(0, (Date.now() / 1000) - Number(ts));
+  // 后端给的是 epoch 秒。万一下次换成 ISO 字符串，这里会算出 NaN 并在界面上
+  // 打印"NaN 天前"——宁可整段不显示，也别输出这种东西。
+  const n = Number(ts);
+  if (!Number.isFinite(n)) return "";
+  const s = Math.max(0, (Date.now() / 1000) - n);
   if (s < 60) return "刚刚";
   if (s < 3600) return `${Math.floor(s / 60)} 分钟前`;
   if (s < 86400) return `${Math.floor(s / 3600)} 小时前`;
@@ -3734,7 +3316,6 @@ async function renderKbPage(tab) {
       <button data-kbtab="params" class="${state.kbTab === "params" ? "active" : ""}">参数</button>
       <button data-kbtab="docs" class="${state.kbTab === "docs" ? "active" : ""}">内容<span class="count">${d.stats.docs}</span></button>
       <button data-kbtab="search" class="${state.kbTab === "search" ? "active" : ""}">检索</button>
-      <button data-kbtab="sessions" class="${state.kbTab === "sessions" ? "active" : ""}">会话<span class="count">${d.stats.sessions}</span></button>
     </div>
     <div id="kbPane"><p class="empty-tip">加载中…</p></div>
   </div>`;
@@ -3766,7 +3347,6 @@ async function renderKbPane() {
   if (state.kbTab === "info") return renderKbInfoPane();
   if (state.kbTab === "docs") return renderKbDocs();
   if (state.kbTab === "search") return renderKbSearch();
-  if (state.kbTab === "sessions") return renderKbSessions();
   return renderKbParamsPane();
 }
 
@@ -3945,19 +3525,12 @@ function kbRowHTML(it) {
     const STRATEGY = { size: "按长度打包", heading: "按章节切", paragraph: "按段落切" };
     const labelOf = (o) => {
       if (it.key === "chunking.strategy") return STRATEGY[o] || o;
-      if (it.key === "generation.provider") {
-        const p = state.models?.providers?.find((x) => x.name === o);
-        return p ? `${o} · ${shortModel(p.model)}` : o;
-      }
       return o;
     };
     ctl = `<select data-kbctl="${it.key}">${
       it.options.map((o) => `<option value="${esc(o)}"${o === v ? " selected" : ""}>${
         esc(labelOf(o))}</option>`).join("")
     }</select>`;
-    if (it.key === "generation.provider") {
-      ctl += `<button class="mini" data-kbnewmodel="1" title="在模型服务里新增一个后端，回来就能选">＋ 新增模型</button>`;
-    }
   } else {
     ctl = numCtlHTML(it, v, false, `data-kbctl="${it.key}"`, "data-kbpickk");
   }
@@ -4094,13 +3667,6 @@ function paintKbParams() {
         state.kbDraft[key] = el.value;
       }
       paintKbParams();
-    };
-  });
-
-  pane.querySelectorAll("[data-kbnewmodel]").forEach((btn) => {
-    btn.onclick = async () => {
-      if (!state.models) await loadModels();
-      openModelEditor(null);
     };
   });
 
@@ -4472,178 +4038,6 @@ function showHitText(cid) {
     null, { ok: false, wide: true });
 }
 
-/*
- * 会话列表。两个作用域内的变量配合这一屏：
- *   kbSessionSel   —— 当前勾中的会话 id
- *   kbSessionsShown—— 本次渲染了多少条（受接口 200 上限约束）
- * 都放模块作用域而不是 state：它们只是这一屏的临时选择，切栏目就该作废，
- * 不值得跟全局状态活得一样久。
- */
-let kbSessionSel = new Set();
-let kbSessionsShown = 0;
-
-async function renderKbSessions() {
-  const pane = $("kbPane");
-  if (!pane) return 0;
-  // 一次取到接口的 200 上限。"全选"必须是真的全选：列表默认只给 50 条，
-  // 那时点全选删掉的是"最近 50 条"，用户以为清空了，翻下去还剩一堆。
-  const list = await api(`/api/sessions?kb_id=${state.kbId}&limit=200`).catch(() => []);
-  const capped = list.length >= 200;
-  kbSessionSel = new Set();
-  kbSessionsShown = list.length;
-  if (!list.length) {
-    pane.innerHTML = `<div class="card"><p class="empty-tip">这个库还没有会话。</p></div>`;
-    return 0;
-  }
-  const meta = new Map(list.map((s) =>
-    [s.id, { title: s.title || "未命名", n: Number(s.messages || 0) }]));
-
-  pane.innerHTML = `<div class="card">
-    <div class="card-head"><h3>会话 ${list.length}${capped ? "+" : ""}</h3>
-      <span class="aside">删除只清掉对话记录，文档与索引不受影响</span></div>
-    <div class="bulk-bar">
-      <label class="pick"><input type="checkbox" id="sessAll"><span>全选</span></label>
-      <span class="bulk-txt" id="sessSelTxt">未选择</span>
-      <span class="bulk-acts">
-        <button class="mini" id="sessSelNone" disabled>取消选择</button>
-        <button class="mini del" id="sessDelete" disabled>删除选中</button>
-      </span>
-    </div>
-    ${list.map((s) => `
-      <div class="doc-row sess-row">
-        <label class="pick"><input type="checkbox" data-pick="${esc(s.id)}"></label>
-        <span class="t" title="${esc(s.title || "未命名")}">${esc(s.title || "未命名")}</span>
-        <span class="n">${s.messages} 条</span>
-        <span class="time n">${esc(String(s.updated_at || "").replace("T", " ").slice(5, 16))}</span>
-        <span class="acts">
-          <button class="mini" data-sid="${esc(s.id)}">打开</button>
-          <button class="mini del" data-del="${esc(s.id)}"
-            data-title="${esc(s.title || "未命名")}" data-n="${Number(s.messages || 0)}">删除</button>
-        </span>
-      </div>`).join("")}
-    ${capped ? `<p class="hint u-mt10">只列最近 200 条，「全选」也只覆盖这 200 条。</p>` : ""}
-  </div>`;
-
-  const all = $("sessAll");
-  const txt = $("sessSelTxt");
-  const btnDel = $("sessDelete");
-  const btnNone = $("sessSelNone");
-  const sync = () => {
-    const n = kbSessionSel.size;
-    let msgs = 0;
-    kbSessionSel.forEach((id) => { msgs += (meta.get(id) || {}).n || 0; });
-    txt.textContent = n ? `已选 ${n} 条 · ${msgs} 条消息` : "未选择";
-    btnDel.disabled = n === 0;
-    btnNone.disabled = n === 0;
-    all.checked = n > 0 && n === list.length;
-    all.indeterminate = n > 0 && n < list.length;   // 半选：勾了一部分，别显示成"全没勾"
-  };
-
-  pane.querySelectorAll("[data-pick]").forEach((cb) => {
-    cb.onchange = () => {
-      if (cb.checked) kbSessionSel.add(cb.dataset.pick);
-      else kbSessionSel.delete(cb.dataset.pick);
-      sync();
-    };
-  });
-  all.onchange = () => {
-    list.forEach((s) => {
-      if (all.checked) kbSessionSel.add(s.id); else kbSessionSel.delete(s.id);
-    });
-    pane.querySelectorAll("[data-pick]").forEach((cb) => { cb.checked = all.checked; });
-    sync();
-  };
-  btnNone.onclick = () => {
-    kbSessionSel.clear();
-    pane.querySelectorAll("[data-pick]").forEach((cb) => { cb.checked = false; });
-    sync();
-  };
-  btnDel.onclick = () => bulkRemoveSessions(meta);
-
-  pane.querySelectorAll("[data-sid]").forEach((btn) => {
-    btn.onclick = async () => {
-      setView("chat");
-      await openSession(btn.dataset.sid);
-    };
-  });
-  pane.querySelectorAll("[data-del]").forEach((btn) => {
-    btn.onclick = () => removeSession(btn.dataset.del, btn.dataset.title, Number(btn.dataset.n));
-  });
-  sync();
-  return list.length;
-}
-
-/* 批量删。确认框里必须给出"多少条消息"，不是只说"多少条会话"——
-   十条空会话和十条长对话的代价差几十倍，光看条数没法判断。 */
-async function bulkRemoveSessions(meta) {
-  const ids = [...kbSessionSel];
-  if (!ids.length) return;
-  let msgs = 0;
-  ids.forEach((id) => { msgs += (meta.get(id) || {}).n || 0; });
-  const ok = await askConfirm(
-    `选中的 <b>${ids.length}</b> 条会话、共 <b>${msgs}</b> 条消息会被删掉，无法恢复。`
-    + `<span class="del-keep" style="display:block;margin-top:8px">`
-    + `文档、chunk 与索引不受影响；如果其中正好是当前聊天用的那条，删完会自动换一条。</span>`,
-    { title: "批量删除会话", okLabel: `删除 ${ids.length} 条` });
-  if (!ok) return;
-
-  const hadCurrent = ids.includes(state.sessionId);
-  let res;
-  try {
-    res = await api("/api/sessions/bulk-delete", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ids }),
-    });
-  } catch (err) {
-    toast(err.message || "批量删除失败", "err");
-    return;
-  }
-  if (res.failed && res.failed.length) {
-    toast(`删掉 ${res.deleted} 条，${res.failed.length} 条失败（可能已在别处删掉了）`, "err");
-  } else {
-    toast(`已删除 ${res.deleted} 条会话（${res.messages} 条消息）`);
-  }
-  if (hadCurrent) await ensureSession(true);
-  // 用"渲染条数 - 删掉条数"而不是重绘后的条数：列表被 200 上限截断时，
-  // 重绘出来还是 200，那个数不是真实剩余。
-  let left = Math.max(0, kbSessionsShown - res.deleted);
-  if (hadCurrent && left === 0) left = 1;   // 当前会话被删且本库已空，服务端会补建一条
-  await renderKbSessions();
-  syncSessionTabCount(left);
-}
-
-/* 删一条会话。两条理由让人在这里停一下再点：
-   ① 消息是 CASCADE 删掉的，连引用和溯源标记一起没，没有回收站；
-   ② 后台是「每库一条固定会话」，删掉当前这条，聊天页马上会被重建出
-      一条空会话 —— 看起来像"删了个寂寞"，实际是旧记录真的没了。 */
-async function removeSession(id, title, msgs) {
-  const ok = await askConfirm(
-    `会话「<span dir="auto">${esc(title)}</span>」里的 ${msgs} 条消息会一起删掉，无法恢复。`,
-    { title: "删除会话", okLabel: "删除" });
-  if (!ok) return;
-  const wasCurrent = id === state.sessionId;
-  try {
-    await api(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
-  } catch (err) {
-    toast(err.message || "删除失败", "err");
-    return;
-  }
-  toast(`已删除「${title}」`);
-  if (wasCurrent) await ensureSession(true);   // 服务端会重建一条空会话
-  let left = Math.max(0, kbSessionsShown - 1);
-  if (wasCurrent && left === 0) left = 1;      // 删的就是最后一条，服务端补建了一条
-  await renderKbSessions();
-  syncSessionTabCount(left);
-}
-
-/* tab 上那个计数是从 detail 里带的，删完不重绘整页就得自己跟一下，
-   否则卡片写"会话 23"、标签还挂着 24。 */
-function syncSessionTabCount(left) {
-  if (state.kbDetail?.stats) state.kbDetail.stats.sessions = left;
-  const cnt = document.querySelector('[data-kbtab="sessions"] .count');
-  if (cnt) cnt.textContent = String(left);
-}
 
 /* 库的基本信息现在在知识库页的「信息」栏目里改（renderKbInfoPane），
    参数在旁边的「参数」栏目 —— 两件事各归各位，不再塞进同一个弹窗。 */
@@ -5120,35 +4514,116 @@ function modelPick(p) {
     </label>`;
 }
 
-/* 本地模型那一行：启没启、占哪个端口，以及一颗按钮。
-   这是重构后的核心交互——以前这里给的是一段"照抄的命令"，用户得自己开终端；
-   现在按钮直接起 llama.cpp，端口和 gguf 路径都从配置里读。 */
-function localModelsRow(p) {
-  const models = (p.models || []).filter((m) => m.local);
-  if (!models.length) return "";
-  return `<div class="local-models">${models.map((m) => {
-    // 卡头那行已经是端点地址（models.yaml 里的 base_url）。只有实例实际跑在
-    // 别的端口（配置端口被占时自动让位）才多给一行「直连」，否则同一串地址
-    // 会在卡上出现两遍。没启动时也不必补：地址本来就不随进程变化。
-    const direct = m.running_url && m.running_url !== (p.base_url || "")
-      ? m.running_url : "";
-    return `
-    <div class="lm-row">
-      <i class="dot ${m.state === "running" ? "ok" : m.state === "starting" ? "warn" : "off"}"></i>
-      <b class="ell" title="${esc(m.path || "")}">${esc(m.label)}</b>
-      <span class="hint">${esc(m.port ? `:${m.port}` : "端口自动")}${
-        m.context ? ` · ${m.context} ctx` : ""}</span>
-      <span class="sp"></span>
-      ${m.state === "running"
-        ? `<button class="mini" data-lmact="stop" data-name="${esc(p.name)}" data-model="${esc(m.id)}">停止</button>`
-        : `<button class="mini" data-lmact="start" data-name="${esc(p.name)}" data-model="${esc(m.id)}">启动</button>`}
-      <span class="hint">${esc(m.state === "running" ? "运行中" : m.state === "starting" ? "启动中" : "未启动")}</span>
-    </div>${direct ? `<div class="gw-line">
-      <span class="hint">实跑在</span>
-      <code>${esc(direct)}</code>
-      <button class="mini" data-copy="${esc(direct)}">复制</button>
-    </div>` : ""}`;
-  }).join("")}</div>`;
+/* 本地模型：扫描出来的东西，自己挑，挑中的摆成一张清单。
+ *
+ * 这一节原来跟着外部模型学：端点是可以新建/编辑/删除的实体，里面有地址、密钥、
+ * 提示词、模型清单。可本机跑 llama.cpp 的地址从来只有 `http://127.0.0.1:端口`，
+ * 端口是启动时自己挑的，密钥不存在，提示词在站点页配——那套端点管理在这里
+ * 一条都用不上，摆着只会让人以为"本地也得先建一个端点"。
+ *
+ * 所以在本地这一节里「端点」这个概念直接消失，只剩三件事：
+ *   扫描（磁盘上有什么）→ 挑（加进清单 / 移出）→ 启动 + 测联通。
+ * 清单不分组：一个端点一条端口，端口本来就写在行里，分组只会多一层要读的框。
+ *
+ * 「当前用哪个模型」不再是一颗按钮。本机同一时刻只有一个进程在吃显存，起了
+ * 哪个就是用哪个——后端在 start 时会把端点 model 改成它。再挂一颗「设为当前」
+ * 只会让人以为"配置里选一个"和"实际在跑的那个"可以是两回事，而它们不是。
+ */
+function localTable(list) {
+  const rows = [];
+  list.forEach((p) => (p.models || [])
+    .filter((m) => m.local)
+    .forEach((m) => rows.push({ p, m })));
+  return `<div class="lm-flat">${
+    rows.map(({ p, m }) => localItem(p, m)).join("")}</div>`;
+}
+
+/* 一个模型文件一行。
+ *
+ * 第二行那串 `:8097 · 4096 ctx · 4466 MB` 是这一节真正的信息量所在：本地模型
+ * 只有三件事会出事——端口被占、上下文开太大、文件装不进显存。三样并排写出来，
+ * 出问题的时候用户第一眼看的就是这里，而不是去翻编辑弹窗。
+ */
+function localItem(p, m) {
+  const st = m.state || "unknown";
+  const running = st === "running";
+  const starting = st === "starting";
+  const stalled = st === "stalled";
+  const waited = Number(m.waited_s || 0);
+  const stateText = running ? "运行中"
+    : starting ? (waited ? `启动 ${waited}s` : "启动中")
+    : stalled ? `卡住 ${Math.max(1, Math.floor(waited / 60))}m`
+    : "未启动";
+  const dotCls = running ? "ok" : starting ? "warn" : stalled ? "err" : "off";
+  const act = (running || starting || stalled)
+    ? `<button class="mini" data-lmact="stop" data-name="${esc(p.name)}" data-model="${esc(m.id)}">${running ? "停止" : starting ? "取消" : "停止"}</button>`
+    : `<button class="mini" data-lmact="start" data-name="${esc(p.name)}" data-model="${esc(m.id)}">启动</button>`;
+  const meta = [
+    m.port ? `:${m.port}` : "端口自动",
+    m.context ? `${m.context} ctx` : "",
+    m.size_mb ? `${m.size_mb} MB` : "",
+  ].filter(Boolean).join(" · ");
+  // 实例实际跑在别的端口（配置端口被占时自动让位）：多一行直连，不然同一串
+  // 地址在头上和行里出现两遍；没起时不必补——地址本来就不随进程变化。
+  const direct = m.running_url && m.running_url !== (p.base_url || "") ? m.running_url : "";
+  return `<div class="lm-item${running ? " is-running" : ""}">
+    <i class="dot ${dotCls}"></i>
+    <div class="lm-item-main">
+      <div class="lm-item-name">
+        <b class="ell" title="${esc(m.path || m.label)}">${esc(m.label)}</b>
+      </div>
+      <div class="lm-item-meta">${esc(meta)}</div>
+      ${direct ? `<div class="lm-item-meta">实跑在 <code>${esc(direct)}</code></div>` : ""}
+    </div>
+    <span class="lm-item-state ${dotCls}">${esc(stateText)}</span>
+    ${act}
+  </div>`;
+}
+
+/* 卡片底部那句「通不通」。
+ *
+ * 实例状态和端点探测是两条独立信息，会打架：刚点启动，实例是「启动中」，
+ * 而探测缓存里还躺着上一轮的「连接超时」。两行一起摆出来，用户根本没法判断
+ * 到底起没起。规则只有一条——**实例正在启动时，探测结论让位**，因为那条结论
+ * 描述的时刻已经过去了。
+ */
+function statusNote(p) {
+  const ls = (p.models || []).filter((m) => m.local);
+  const starting = ls.find((m) => m.state === "starting");
+  const stalled = ls.find((m) => m.state === "stalled");
+  const running = ls.find((m) => m.state === "running");
+  if (starting || stalled) {
+    const m = starting || stalled;
+    const waited = Number(m.waited_s || 0);
+    // 不重复模型名和秒数：下拉里写着是哪个模型，左边那行写着等了多少秒。
+    // 这里只补一件行里放不下的事——接下来它会自己好，还是得人来处理。
+    return `<div class="msg svc-note"><i class="dot ${starting ? "warn" : "err"}"></i>
+      <span class="txt">${starting
+        ? `正在读权重，端口 :${m.port} 通了会自动可用`
+        : `进程卡在加载：端口 :${m.port} 已经 ${Math.max(1, Math.round(waited / 60))} 分钟没通。点「停止」再启动，还不行就看日志`}</span></div>`;
+  }
+  if (running && p.status !== "ok" && p.status !== "mock") {
+    // 实例在跑、端点却探测失败：多半是刚起来，探测缓存还是启动前那次。
+    // 行里已经写着「运行中 :8097」，这句不再重复端口和"实例在跑"——只用
+    // 一句话说清这条结论是从哪来的、下一步点哪儿。
+    const why = (!p.status || p.status === "unknown")
+      ? "启动后还没探测，点 ⟳ 测一次"
+      : `上次探测没通：${statusShort(p)}。多半是启动前的旧结论，点 ⟳ 重测`;
+    return `<div class="msg svc-note"><i class="dot warn"></i>
+      <span class="txt">${esc(why)}</span></div>`;
+  }
+  // 实例根本没起，探测却报"连接超时"——端口当然没响应，因为没人监听。
+  // 这句话会把用户引向防火墙、网络配置，唯独不指向"你还没点启动"。
+  const idle = ls.length > 0 && ls.every((m) => m.state !== "running"
+    && m.state !== "starting" && m.state !== "stalled");
+  if (idle && p.status !== "ok" && p.status !== "mock") {
+    const ever = ls.some((m) => m.state === "stopped");
+    return `<div class="msg svc-note"><i class="dot"></i>
+      <span class="txt">${ever ? "实例已退出" : "实例还没启动"}，点「启动」后自动探测</span></div>`;
+  }
+  return `<div class="msg svc-note"><i class="dot ${dotOf(p.status)}"></i>
+    <span class="txt">${esc(statusShort(p))}</span>
+    ${p.checked_at ? `<span class="ago">${agoText(p.checked_at)}</span>` : ""}</div>`;
 }
 
 function statusShort(p) {
@@ -5177,7 +4652,6 @@ function modelCard(p, total, d) {
       <header>
         <i class="dot ${dotOf(p.status)}"></i>
         <b class="ell">${esc(p.name)}</b>
-        <span class="badge ${p.local ? "local" : "cloud"}">${p.local ? "本地" : "云端"}</span>
         <span class="sp"></span>
         <button class="icon-btn" data-mact="probe" data-name="${esc(p.name)}"
           title="测试联通：先拉 /models，再真发一次一句话，能出字才算通">⟳</button>
@@ -5192,16 +4666,18 @@ function modelCard(p, total, d) {
       ${p.local || !p.key_present ? "" : `<div class="url">密钥 ${
         d && d.keys_persisted ? "已存本机（密文）" : "仅本次会话"}</div>`}
       ${modelPick(p)}
-      ${localModelsRow(p)}
-      <div class="msg"><i class="dot ${dotOf(p.status)}"></i>
-        <span class="txt">${esc(statusShort(p))}</span>
-        ${p.checked_at ? `<span class="ago">${agoText(p.checked_at)}</span>` : ""}</div>
+      ${p.used_by && p.used_by.length
+        ? `<div class="model-usage">使用中：${esc(p.used_by.join(" · "))}</div>` : ""}
+      ${statusNote(p)}
       ${p.ready ? "" : `<div class="miss">${esc(p.ready_reason || "字段不全")}</div>`}
     </article>`;
 }
 
-function modelCards(d) {
-  return d.providers.map((p) => modelCard(p, d.providers.length, d)).join("");
+/* 一组端点。分开传 list 而不是从 d.providers 里自己筛：本地和外部现在各占
+   一节，谁调用谁决定放哪几个——筛的条件只写在一处，卡片本身不必知道自己是
+   "本地"还是"外部"。 */
+function modelCards(list, total, d) {
+  return list.map((p) => modelCard(p, total, d)).join("");
 }
 
 /* 固定 API 入口。本地实例一个模型一个端口，让外部程序去记 8090/8091 是不现实
@@ -5242,7 +4718,6 @@ function gatewayCard(g) {
       <button class="mini" data-copy="${esc(value)}">复制</button>
     </div>`;
   const chips = provs.length > 1 ? `<div class="gw-chips" id="gwChips">
-      <span class="hint">按后端看示例</span>
       ${provs.map((x) => `<button type="button"
         class="gw-chip${pick && x.name === pick.name ? " active" : ""}"
         data-gwpick="${esc(x.name)}"
@@ -5253,8 +4728,7 @@ function gatewayCard(g) {
   const curl = gwCurl(g.chat_url, model);
   return `<div class="card gateway-card">
     <div class="kb-actions">
-      <b>API 接入 · 固定地址</b>
-      <span class="hint">别的程序写死它，本地实例换端口 / 换模型都不用改</span>
+      <b>API 接入</b>
     </div>
     ${line("Base URL", g.base_url)}
     ${line("对话", g.chat_url)}
@@ -5266,8 +4740,7 @@ function gatewayCard(g) {
     ${curl ? `<pre class="launch" id="gwCurlText">${esc(curl)}</pre>
       <button class="mini u-mt6" id="gwCurlCopy" data-copy="${esc(curl)}"
         >复制 curl 示例</button>` : ""}
-    ${direct.length ? `<p class="hint u-mt10">实例直连（少一跳，地址写在
-      <code>config/models.yaml</code>，没启动也列在这里）：</p>
+    ${direct.length ? `<p class="hint u-mt10">实例直连</p>
       ${direct.map((a) => `<div class="gw-line${a.running ? "" : " is-off"}">
         <span class="hint">${esc(a.endpoint || "")} / ${esc(a.model || "model")}${
           a.running ? "" : `<em class="gw-off">未启动</em>`}</span>
@@ -5276,9 +4749,9 @@ function gatewayCard(g) {
         ${a.lan_base_url ? `<code>${esc(a.lan_base_url)}</code>
           <button class="mini" data-copy="${esc(a.lan_base_url)}">复制局域网</button>` : ""}
       </div>`).join("")}` : ""}
-    <label class="pick" title="勾上后本地实例绑 0.0.0.0，局域网可调（无鉴权）；主服务也要用 --host 0.0.0.0 启动">
+    <label class="pick" title="允许局域网访问">
       <input type="checkbox" id="gwLan"${gatewayLan ? " checked" : ""}>
-      启动时允许局域网调用（0.0.0.0，无鉴权）
+      允许局域网访问
     </label>
     <p class="hint u-mt8">${esc(g.hint || "")}</p>
   </div>`;
@@ -5312,6 +4785,35 @@ function bindGatewayChips(g) {
   });
 }
 
+/* 密钥记没记住，页面上必须有一句话。
+ *
+ * 这件事原先只写在编辑弹窗的一个勾选框里：取消一次就落下 `data/secrets.off`
+ * 标记，此后**每次重启都要重填密钥**，而页面上一处都不提。用户的体感只能是
+ * "我的 key 又被删了"——一条只在弹窗里出现过的选择，不该有这种长期代价。
+ *
+ * 现在两种状态各给一句话：没记住 → 提醒 + 一颗「记住到本机」；记住了 → 说明
+ * 存在哪、怎么保护的。刻意不给"改为不保存"的按钮：要关这个就去编辑弹窗里关，
+ * 页面上不摆一颗一比就能把钥匙删掉的按钮。
+ */
+function keyNoteHtml(d) {
+  const has = (d.providers || []).some((p) => p.key_present);
+  if (d.key_autosave === false) {
+    return `<div class="key-note warn">
+      <i class="dot warn"></i>
+      <span class="txt">密钥只存在本次会话，服务一重启就得重填。</span>
+      <span class="sp"></span>
+      <button class="mini" id="keysRemember">记住到本机</button>
+    </div>`;
+  }
+  if (!d.keys_persisted || !has) return "";
+  const n = (d.providers || []).filter((p) => p.key_present).length;
+  return `<div class="key-note">
+    <i class="dot ok"></i>
+    <span class="txt">${n} 个密钥已记住：${esc(d.key_cipher || "系统加密")}，存
+      <code>data/secrets.json</code>，重启自动恢复</span>
+  </div>`;
+}
+
 async function renderModels() {
   $("pageTitle").textContent = "模型服务";
   // 操作按钮不放顶栏：顶栏固定 54px 且不换行，两颗按钮加长文件名挤一行会被裁掉
@@ -5322,15 +4824,20 @@ async function renderModels() {
 
   let d;
   try {
-    [d, state.gateway] = await Promise.all([api("/api/models"), api("/api/gateway")]);
+    d = await api("/api/models");
     state.models = d;
   } catch (err) {
     box.innerHTML = `<div class="page"><p class="empty-tip">${esc(err.message)}</p></div>`;
     return;
   }
   // 副标题不再报"当前用的是谁"：页面不维护全局当前，报出来反而像在暗示
-  // 这里能改。只报规模。
-  $("pageSub").textContent = `${d.providers.length} 个后端`;
+  // 这里能改。只报规模，且按两类分开报——一页里两节，副标题说总数等于没说。
+  const localList = d.providers.filter((p) => p.local);
+  const extList = d.providers.filter((p) => !p.local);
+  // 本地这一节按"模型文件"计数，不按端点：端点在这里只是端口的容器，数它没有意义
+  const localModels = localList.flatMap((p) => (p.models || []).filter((m) => m.local));
+  const runningN = localModels.filter((m) => m.state === "running").length;
+  $("pageSub").textContent = `${localModels.length} 个本地模型 · ${extList.length} 个外部`;
   // 密钥现在默认落盘了（密文），所以这个按钮的职责是"内存 + 盘上一起抹掉"，
   // 而不是像以前那样只能靠重启进程把内存清空。
   $("pageActions").innerHTML = d.providers.some((p) => p.key_present)
@@ -5348,41 +4855,75 @@ async function renderModels() {
   syncProviderOptions(d);
 
   box.innerHTML = `<div class="page">
-    <div class="kb-actions">
-      <button class="primary-btn" id="modelsAdd">＋ 新增端点</button>
-      <button class="ghost-btn" id="modelsScan">扫描本地模型</button>
-      <button class="ghost-btn" id="modelsProbe">全部测试</button>
-      <span class="hint">${d.providers.length} 个后端 · 密钥默认密文存本机</span>
-    </div>
-    ${gatewayCard(state.gateway)}
-    <div class="svc-grid" id="modelGrid">${modelCards(d)}</div>
-    <div id="scanPanel"></div>
-    <details class="card launch-fold">
-      <summary>本地模型怎么跑起来 · 扫描 .gguf，直接起 llama.cpp</summary>
-      <p class="hint u-mb12-top8">
-        「扫描本地模型」会递归找 <code>.gguf</code>；加进端点后卡片上就有「启动 / 停止」，
-        每个模型占 <code>127.0.0.1:${esc(String((d.env && d.env.port_range && d.env.port_range[0]) || 8090))}</code> 起的一段端口。
-      </p>
-      <p class="hint" style="margin:0 0 8px">
-        可执行文件：${d.env && d.env.available
-          ? `<code>${esc(d.env.server)}</code>`
-          : `<span class="warn-text">没找到 llama-server</span> —— 用环境变量
-             <code>KNOWTUNE_LLAMA_SERVER</code> 指向它，或放进 <code>tools/llama</code>`}
-      </p>
-      ${d.env && !d.env.available ? `<pre class="launch">${esc(d.env.message)}</pre>` : ""}
-      <p class="hint u-mt8">扫描目录：${(d.env && d.env.dirs || []).map(
-        (x) => `<code>${esc(x)}</code>`).join(" · ") || "（没有可用默认目录，扫描时自己填）"}</p>
-    </details>
+    ${keyNoteHtml(d)}
+    <section class="svc-sec">
+      <header class="sec-head">
+        <h3>本地模型</h3>
+        <span class="hint">${localModels.length
+          ? `${localModels.length} 个模型文件${runningN ? ` · ${runningN} 个在跑` : ""} · 都在本机`
+          : "扫描磁盘上的 .gguf，选进来的才能启动"}</span>
+        <span class="sp"></span>
+        ${localModels.length ? `<button class="ghost-btn" id="modelsProbeLocal"
+          title="真连一次：拉 /models，再让当前模型回一句话">测试联通</button>` : ""}
+      </header>
+      <div class="svc-local-layout${scanOpen ? "" : " is-collapsed"}">
+        <div class="svc-local-main">
+          ${localModels.length
+            ? localTable(localList)
+            : `<p class="empty-tip">清单里还没有模型文件。扫描右边的 .gguf，点「＋ 加入」。</p>`}
+        </div>
+        ${scanPanelHtml(d)}
+      </div>
+    </section>
+    <section class="svc-sec">
+      <header class="sec-head">
+        <h3>外部模型</h3>
+        <span class="hint">${extList.length
+          ? `${extList.length} 个端点 · 云服务或别的机器上的 OpenAI 兼容地址`
+          : "云服务或别的机器上的 OpenAI 兼容地址"}</span>
+        <span class="sp"></span>
+        ${extList.length ? `<button class="ghost-btn" id="modelsProbe">全部测试</button>` : ""}
+        <button class="primary-btn" id="modelsAdd">＋ 新增外部端点</button>
+      </header>
+      ${extList.length
+        ? `<div class="svc-grid" id="modelGrid">${modelCards(extList, d.providers.length, d)}</div>`
+        : `<p class="empty-tip">还没有外部端点。点「＋ 新增外部端点」，填上地址和密钥。</p>`}
+    </section>
   </div>`;
 
-  $("modelsAdd").onclick = () => openModelEditor(null);
-  $("modelsProbe").onclick = probeAllModels;
+  // 按钮跟着各自的节走：在"本地"这一节点新增，编辑器就默认本地类型，
+  // 免得存完还要在类型下拉里改一次、也在意料之外落到另一节里去。
+  $("modelsAdd").onclick = () => openModelEditor(null, "openai");
+  if ($("modelsProbe")) {
+    $("modelsProbe").onclick = () => probeAllModels($("modelsProbe"), extList);
+  }
+  if ($("modelsProbeLocal")) {
+    $("modelsProbeLocal").onclick = () => probeAllModels($("modelsProbeLocal"), localList);
+  }
+  // 「记住到本机」：把"填了就写盘"打开，并把内存里现有的密钥立刻写下去——
+  // 不开这一步，用户以为按了就已经记好，重启发现还是空的。
+  if ($("keysRemember")) {
+    $("keysRemember").onclick = async (ev) => {
+      const btn = ev.currentTarget;
+      btn.disabled = true;
+      btn.textContent = "保存中…";
+      try {
+        const r = await jsonPost("/api/models/keys/autosave", { on: true });
+        if (r.error) toast(r.error, "err");
+        else toast((d.providers || []).some((p) => p.key_present)
+          ? "已记住到本机，重启不用重填"
+          : "已改为记住：下次填的密钥会存到本机");
+        await renderModels();
+      } catch (err) {
+        toast(err.message, "err");
+        btn.disabled = false;
+        btn.textContent = "记住到本机";
+      }
+    };
+  }
   if ($("gwLan")) $("gwLan").onchange = (e) => { gatewayLan = Boolean(e.target.checked); };
   bindGatewayChips(state.gateway);
-  // 不能直接 = openScanPanel：onclick 会把 PointerEvent 当第一参传进去，
-  // 函数签名收的是 dirs 字符串，拿到事件对象就会拿它去当目录扫（实测
-  // 输入框被填成 "[object PointerEvent]"，扫出 0 个模型）。
-  if ($("modelsScan")) $("modelsScan").onclick = () => openScanPanel();
+  bindScanPanel();
   bindModelCardActions();
 
   box.querySelectorAll("[data-copy]").forEach((btn) => {
@@ -5395,6 +4936,38 @@ async function renderModels() {
       }
     };
   });
+  pollLocalStates(d);
+}
+
+/* 启动中必须自己刷。
+ *
+ * 不刷的话，「启动中 12s」就永远停在 12 秒——用户只能手动刷新页面才知道到底
+ * 起没起来，而那正是他最不确定的时刻。打扰要压到最小：5 秒一次、最多 3 分钟
+ * （和 start() 的等待上限对齐）、页面在后台不刷、有输入框聚焦时不重绘（重绘会
+ * 把正在填的扫描目录冲掉）。状态一变（running / stopped），busy 为假，自然停。
+ */
+let localPollTimer = null;
+let localPollLeft = 0;
+
+function pollLocalStates(d) {
+  const busy = (d.providers || []).some((p) => (p.models || []).some(
+    (m) => m.local && m.state === "starting"));
+  if (localPollTimer) { clearTimeout(localPollTimer); localPollTimer = null; }
+  if (!busy) { localPollLeft = 0; return; }
+  if (!localPollLeft) localPollLeft = 36;
+  if (localPollLeft <= 0) return;
+  localPollTimer = setTimeout(() => {
+    localPollTimer = null;
+    localPollLeft -= 1;
+    if (localPollLeft <= 0) return;
+    const el = document.activeElement;
+    const typing = el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName);
+    if (document.hidden || typing) {
+      pollLocalStates(d);          // 这一拍让出去，别打断输入
+      return;
+    }
+    reloadModels().catch(() => { localPollLeft = 0; });
+  }, 5000);
 }
 
 async function reloadModels() {
@@ -5404,21 +4977,39 @@ async function reloadModels() {
   syncGenModelOptions();
 }
 
-async function probeAllModels() {
-  const btn = $("modelsProbe");
+/* 测一节里的端点。分节之后「全部测试」必须只测这一节：按钮摆在哪一节，
+   测的就该是哪一节——局部按钮却把全局都跑一遍，结果里一半条目根本不在
+   视野里，报数也对不上（"4 个连通"而眼前只有 1 张卡）。 */
+async function probeAllModels(btn, list) {
+  const names = (list || []).map((p) => p.name).filter(Boolean);
+  // 按钮上的字两节不一样（本地是「测试联通」、外部是「全部测试」），复位时
+  // 不能写死一个，否则本地那颗测完就变名字了。
+  const label = btn ? btn.textContent : "";
   if (btn) { btn.disabled = true; btn.textContent = "测试中…"; }
+  let got = [];
   try {
-    const r = await api("/api/services/probe", { method: "POST" });
+    if (!names.length) {
+      const r = await api("/api/services/probe", { method: "POST" });
+      got = Object.values(r.providers || {});
+    } else {
+      for (const name of names) {
+        const r = await api(
+          `/api/services/probe?name=${encodeURIComponent(name)}`, { method: "POST" });
+        got = got.concat(Object.values(r.providers || {}));
+      }
+    }
     await reloadModels();
-    const list = Object.values(r.providers || {});
-    const ok = list.filter((p) => p.ok).length;
+    const ok = got.filter((p) => p.ok).length;
     // 一句话就好：几个通、几个不通。
-    toast(`${ok}/${list.length} 连通`, ok === list.length ? "ok" : "warn");
+    toast(`${ok}/${got.length} 连通`, ok === got.length ? "ok" : "warn");
   } catch (err) {
     alert(err.message);
   } finally {
-    const again = $("modelsProbe");
-    if (again) { again.disabled = false; again.textContent = "全部测试"; }
+    // 重绘之后这颗按钮已经不在文档里了，别再往老节点上写状态。
+    if (btn && document.body.contains(btn)) {
+      btn.disabled = false;
+      btn.textContent = label || "测试";
+    }
   }
 }
 
@@ -5451,17 +5042,21 @@ function bindModelCardActions() {
       if (!want || want === p.model) return;
       sel.disabled = true;
       try {
+        // 选中的模型同时写进清单：站点那边的模型下拉只列清单里的东西，
+        // 不写进来就会出现"这里刚选过、切到站点却选不到"。
+        const known = new Set((p.models || []).map((m) => (m && m.id) || "").filter(Boolean));
+        const models = known.has(want) ? (p.models || []) : [...(p.models || []), { id: want }];
         await api(`/api/models/${encodeURIComponent(p.name)}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             base_url: p.base_url || "", model: want, kind: p.kind,
             // 带上清单，别让它因为"没传"而被当成清空
-            models: p.models || [],
+            models,
           }),
         });
         await reloadModels();
-        toast(`${p.name} 已切到 ${want}`);
+        toast(known.has(want) ? `${p.name} 已切到 ${want}` : `${p.name} 已加入并切到 ${want}`);
       } catch (err) {
         toast(err.message, "err");
         sel.disabled = false;
@@ -5488,6 +5083,11 @@ async function localModelAction(btn) {
     if (lmact === "start") {
       const addr = (r.api && r.api.base_url) || (r.instance || {}).base_url || "";
       toast(`${model} 已启动 · ${addr}${r.gateway ? ` · 固定入口 ${r.gateway}` : ""}`);
+      // 实例起来了，探测缓存里却还是启动前那次「连接超时」（TTL 15s）。不立刻
+      // 重探，卡片会继续显示连不上，看着像启动失败。失败也无所谓：下一次
+      // 手动 ⟳ 或 15s 后的自动探测会补上。
+      await api(`/api/services/probe?name=${encodeURIComponent(name)}`,
+        { method: "POST" }).catch(() => {});
     } else {
       toast(r.message || "已停止", r.stopped ? "ok" : "warn");
     }
@@ -5499,62 +5099,194 @@ async function localModelAction(btn) {
   }
 }
 
-/* 扫描本地 .gguf。
-   扫出来的东西不进配置——「我看到有哪些」和「我要用哪些」是两件事，
-   自动全加进去等于替用户做决定，还会把 30 个量化版本塞进下拉。 */
-async function openScanPanel(dirs) {
-  const box = $("scanPanel");
-  if (!box) return;
-  // 事件对象误传进来时别拿去当目录
-  if (typeof dirs !== "string") dirs = "";
-  box.innerHTML = `<div class="card"><p class="hint">扫描中…（大目录可能要十几秒）</p></div>`;
-  const q = dirs ? `?dirs=${encodeURIComponent(dirs)}` : "";
-  let r;
+/* 扫描目录由用户自己添加，写在本机浏览器里——它是「这台机器上模型放哪」，
+   属于使用者，不属于项目配置。clone 到别人机器上默认空，各自填各自的。 */
+const SCAN_DIRS_KEY = "knowtune.scanDirs";
+let scanDirs = (() => {
   try {
-    r = await api(`/api/models/local/scan${q}`);
-  } catch (err) {
-    box.innerHTML = `<div class="card"><p class="miss">${esc(err.message)}</p></div>`;
-    return;
-  }
-  const rows = r.models || [];
-  const env = r.env || {};
-  // 设备这一行不是装饰：同一个 7B，GPU 上 28 tok/s、纯 CPU 上 5 tok/s。点启动
-  // 之前就该看见这次会用哪块卡，而不是等答案一个字一个字蹦出来才怀疑。
-  const dev = (env.devices || [])[0];
-  const devText = dev
-    ? ` · ${esc(dev.name.replace(/\(.*?\)/g, "").trim())} ${Math.round(dev.total_mb / 1024)}G（可用 ${Math.round(dev.free_mb / 1024)}G）`
-    : (env.available ? " · 只有 CPU（出词会慢 5 倍以上）" : "");
-  const head = `<div class="card">
-    <div class="kb-actions">
-      <b>本地模型</b>
-      <span class="hint">${rows.length} 个 .gguf · ${
-        env.available ? `llama-server 就绪` : "没找到 llama-server（只能加进来，起不了）"}${devText}</span>
-      <span class="sp"></span>
-      <input id="scanDirs" placeholder="换目录：D:/models, E:/gguf"
-        value="${esc((r.dirs || []).join(", "))}" style="min-width:300px">
-      <button class="ghost-btn" id="scanAgain">重扫</button>
-    </div>
-    ${rows.length ? "" : `<p class="hint">这些目录里没有 .gguf：${(r.dirs || [])
-      .map((x) => `<code>${esc(x)}</code>`).join(" · ")}</p>`}
-  </div>`;
-  const list = rows.map((m) => `
-    <div class="lm-row">
-      <i class="dot off"></i>
-      <b class="ell" title="${esc(m.path)}">${esc(m.name)}</b>
-      <span class="hint">${m.size_mb ? `${m.size_mb} MB` : ""}${m.quant ? ` · ${esc(m.quant)}` : ""}</span>
-      <span class="sp"></span>
-      <button class="mini" data-add='${esc(JSON.stringify({ id: m.name, path: m.path }))}'>＋ 加入</button>
-    </div>`).join("");
-  box.innerHTML = head + (rows.length ? `<div class="card local-models">${list}</div>` : "");
+    const v = JSON.parse(localStorage.getItem(SCAN_DIRS_KEY) || "[]");
+    return Array.isArray(v) ? v.filter((x) => typeof x === "string" && x.trim()) : [];
+  } catch (_) { return []; }
+})();
+let lastScan = null;   // 最近一次结果：增删目录后还能留在面板里回看
 
-  if ($("scanAgain")) {
-    $("scanAgain").onclick = () => {
-      const raw = ($("scanDirs").value || "").trim();
-      openScanPanel(raw);
+/* 扫描区收没收起，记在这台机器的浏览器里。
+ * 扫描是「往清单里添东西」时才做的事，平时看的是清单本身——所以允许收起。
+ * 默认展开：第一次来的人得先看见"这台机器上有哪些 gguf"这扇门。 */
+const SCAN_OPEN_KEY = "knowtune.scanOpen";
+let scanOpen = (() => {
+  try { return localStorage.getItem(SCAN_OPEN_KEY) !== "0"; } catch (_) { return true; }
+})();
+
+function saveScanOpen() {
+  try { localStorage.setItem(SCAN_OPEN_KEY, scanOpen ? "1" : "0"); } catch (_) {}
+}
+
+/* 收起/展开只搬两个 class，不重画整页——重画会重新拉一次 /api/models，
+ * 而这项操作跟后端一点关系都没有，闪一下纯属白花功夫。
+ * 收起的箭头在面板里，主区的宽度却由外层栅格决定，所以两处都得改。 */
+function applyScanOpen() {
+  const panel = $("scanPanel");
+  if (!panel) return;
+  panel.classList.toggle("is-collapsed", !scanOpen);
+  const layout = panel.closest(".svc-local-layout");
+  if (layout) layout.classList.toggle("is-collapsed", !scanOpen);
+  const t = $("scanToggle");
+  if (t) {
+    t.textContent = scanOpen ? "▾" : "▸";
+    t.setAttribute("aria-expanded", scanOpen ? "true" : "false");
+    t.title = scanOpen ? "收起模型文件区" : "展开模型文件区";
+  }
+}
+
+/* 扫描本地 .gguf。扫出来的东西不进配置——「我看到有哪些」和「我要用哪些」
+   是两件事，自动全加进去等于替用户做决定，还会把 30 个量化版本塞进下拉。 */
+
+/* 输入框草稿存在内存里。整页会因为启动轮询重绘，光标不在输入框时（刚点完
+   添加、切走一下再回来）重绘会把填了一半的路径清掉。 */
+let scanDirDraft = "";
+
+function saveScanDirs() {
+  try { localStorage.setItem(SCAN_DIRS_KEY, JSON.stringify(scanDirs)); } catch (_) {}
+}
+
+/* 扫描区常驻在页面上，不藏在一颗按钮后面。
+ *
+ * 原来的形态是「点『扫描本地模型』→ 下面长出一块面板」：扫完想再扫一次还得
+ * 再点一遍，面板一关就不知道这台机器上到底有哪些 gguf。要看的和要改的本来
+ * 就是同一件事，摆在一起才不用来回点——目录、扫描、结果、加入，一条线走完。
+ *
+ * llama-server 的位置和 GPU 也从底部折叠块搬进来了：它决定"扫出来的能不能
+ * 起"，和扫描结果是一回事；藏起来只会让"点了启动没反应"变成谜。
+ */
+function scanPanelHtml(d) {
+  const dd = d || state.models || {};
+  const env = dd.env || {};
+  const dirRows = scanDirs.length
+    ? scanDirs.map((dir, i) => `
+        <span class="chip scan-dir" title="${esc(dir)}">${esc(dir)}
+          <button class="chip-x" data-rmdir="${i}" title="移除目录">×</button>
+        </span>`).join("")
+    : `<span class="scan-empty">还没添加目录，点「浏览…」选一个放 .gguf 的文件夹</span>`;
+  const dev = (env.devices || [])[0];
+  // 显卡名原样是 "NVIDIA GeForce RTX 3060 Laptop GPU"：这串里能帮人判断"够不够"
+  // 的只有 "RTX 3060" 和显存。NVIDIA / GeForce 前缀与 GPU 尾巴每块卡都带着，
+  // 留着只是把这行推到第二行，让 "6G" 孤零零掉下去。
+  const devText = dev
+    ? `${dev.name.replace(/\(.*?\)/g, "")
+      .replace(/^NVIDIA\s+/i, "")
+      .replace(/^GeForce\s+/i, "")
+      .replace(/\s+GPU$/i, "").trim()} · ${Math.round(dev.total_mb / 1024)}G`
+    : (env.available ? "只有 CPU，出词会慢" : "");
+  const envText = env.available
+    ? `llama-server 就绪${devText ? ` · ${devText}` : ""}`
+    : "没找到 llama-server：能扫，但起不了";
+  // 标题行只留「这是什么 + 环境结论 + 唯一的动作」；添加目录那一整套控件
+  // 挪到下一行单独成排——挤在一行时「开始扫描」会被顶到换行、孤零零落在
+  // 左边，看着像第二个标题。环境结论单行省略，鼠标悬停看全文，这样窄窗口
+  // 下按钮也不会被文字推走。
+  //
+  // 最左那颗箭头是收起键：扫描是"要添东西"时才做的事，平时清单才是主角。
+  // 收起后整块塌成一行（名字 + 环境结论），主区顺势占满整行。
+  return `<section class="card scan-panel${scanOpen ? "" : " is-collapsed"}" id="scanPanel">
+    <div class="scan-head">
+      <button class="scan-toggle" id="scanToggle" aria-expanded="${scanOpen ? "true" : "false"}"
+        title="${scanOpen ? "收起模型文件区" : "展开模型文件区"}">${scanOpen ? "▾" : "▸"}</button>
+      <b>模型文件</b>
+      <i class="dot ${env.available ? "ok" : "warn"}"></i>
+      <span class="hint ell" title="${esc(envText)}">${esc(envText)}</span>
+      <button class="primary-btn" id="scanDo" ${scanDirs.length ? "" : "disabled"}>开始扫描</button>
+    </div>
+    <div class="scan-body">
+      <div class="scan-add">
+        <button class="ghost-btn" id="scanDirPick" title="打开系统的「选择文件夹」窗口">浏览…</button>
+        <input id="scanDirInput" class="scan-dir-input" placeholder="或粘贴路径，多个用逗号隔开"
+          title="一次可以粘多个，用逗号或换行隔开" value="${esc(scanDirDraft)}">
+        <button class="ghost-btn" id="scanDirAdd" ${scanDirDraft.trim() ? "" : "disabled"}>添加</button>
+      </div>
+      ${env.available ? "" : `<p class="hint warn-note u-mt8">把 llama-server 放进 <code>tools/llama/</code>，或用环境变量 <code>KNOWTUNE_LLAMA_SERVER</code> 指向它。</p>`}
+      <div class="chip-row">${dirRows}</div>
+      ${lastScan ? scanResultHtml(lastScan)
+        : (scanDirs.length
+          ? `<p class="hint u-mt8">扫描只读：扫出来的 .gguf 不会自动进清单，点「＋ 加入」才加。</p>`
+          : "")}
+    </div>
+  </section>`;
+}
+
+function scanResultHtml(r) {
+  const rows = r.models || [];
+  if (!rows.length) {
+    const ds = (r.dirs || []).map((x) => `<code>${esc(x)}</code>`).join(" · ");
+    return `<p class="hint u-mt8">这些目录里没有 .gguf${ds ? `：${ds}` : ""}</p>`;
+  }
+  // 已经在清单里的直接标出来。不标的话，用户会对着同一个模型反复点「加入」，
+  // 每次都弹一句"已经在清单里了"——等于界面承认自己没记住状态。
+  const known = new Set(((state.models && state.models.providers) || [])
+    .filter((p) => p.kind === "local")
+    .flatMap((p) => (p.models || []).map((m) => m.id)));
+  const list = rows.map((m) => {
+    const has = known.has(m.name);
+    return `
+    <div class="lm-row">
+      <i class="dot ${has ? "ok" : "off"}"></i>
+      <b class="ell" title="${esc(m.path)}">${esc(m.name)}</b>
+      <span class="lm-meta">${m.size_mb ? `${m.size_mb} MB` : ""}${m.quant ? ` · ${esc(m.quant)}` : ""}</span>
+      <span class="sp"></span>
+      ${has
+        ? `<button class="mini" data-rm="${esc(m.name)}" title="从清单移出，不删磁盘上的文件">移出</button>`
+        : `<button class="mini" data-add='${esc(JSON.stringify({ id: m.name, path: m.path }))}'>＋ 加入</button>`}
+    </div>`;
+  }).join("");
+  // 有几个本地端点时必须说清楚「加入」加到哪一份清单，否则用户加完了在
+  // 另一个端点上找不到，只会以为扫描没生效。
+  const eps = ((state.models && state.models.providers) || [])
+    .filter((p) => p.local || p.kind === "local");
+  const tgt = localTarget(state.models || {});
+  const where = eps.length > 1 && tgt
+    ? `，全部加进端点 <code>${esc(tgt.name)}</code> 的清单` : "";
+  return `<p class="hint u-mt8">扫到 ${rows.length} 个 .gguf${where}</p>
+    <div class="local-models">${list}</div>`;
+}
+
+function bindScanPanel() {
+  const panel = $("scanPanel");
+  if (!panel) return;
+  const toggle = $("scanToggle");
+  if (toggle) {
+    toggle.onclick = () => {
+      scanOpen = !scanOpen;
+      saveScanOpen();
+      applyScanOpen();
     };
   }
-
-  document.querySelectorAll("[data-add]").forEach((btn) => {
+  applyScanOpen();
+  const input = $("scanDirInput");
+  if (!input) return;
+  input.oninput = () => {
+    scanDirDraft = input.value;
+    // 没内容时「添加」是死按钮，灰掉比让它点出来一句"先填一个目录"更干净。
+    const add = $("scanDirAdd");
+    if (add) add.disabled = !input.value.trim();
+  };
+  $("scanDirAdd").onclick = () => addScanDirText(input.value);
+  input.onkeydown = (e) => {
+    if (e.key === "Enter") { e.preventDefault(); addScanDirText(input.value); }
+  };
+  const pickBtn = $("scanDirPick");
+  if (pickBtn) pickBtn.onclick = () => pickScanDir(pickBtn);
+  panel.querySelectorAll("[data-rmdir]").forEach((btn) => {
+    btn.onclick = () => {
+      const i = Number(btn.dataset.rmdir);
+      if (Number.isInteger(i) && i >= 0 && i < scanDirs.length) {
+        scanDirs.splice(i, 1);
+        saveScanDirs();
+        refreshScanArea();
+      }
+    };
+  });
+  $("scanDo").onclick = runScan;
+  panel.querySelectorAll("[data-add]").forEach((btn) => {
     btn.onclick = async () => {
       btn.disabled = true;
       try {
@@ -5566,13 +5298,114 @@ async function openScanPanel(dirs) {
       }
     };
   });
+  // 移出：选择权的另一半。只在扫描结果里给——清单行要留干净，删不删模型是
+  // "我挑过"这件事的反悔，发生在挑的那一刻最合理。
+  panel.querySelectorAll("[data-rm]").forEach((btn) => {
+    btn.onclick = async () => {
+      btn.disabled = true;
+      try {
+        await removeLocalModel(btn.dataset.rm);
+      } catch (err) {
+        toast(err.message, "err");
+        btn.disabled = false;
+      }
+    };
+  });
 }
 
-/* 把扫到的一个 .gguf 追加进 local 端点的模型清单。
+/* 把一段文本里的目录并进列表：一次可以粘多个（逗号/分号/换行分开）。
+   返回是否真的加了新目录——「浏览…」据此决定要不要顺手扫一次。 */
+function addScanDirText(text) {
+  const parts = String(text || "").split(/[,，;；\n]+/).map((x) => x.trim()).filter(Boolean);
+  if (!parts.length) { toast("先选一个目录，或粘贴路径", "warn"); return false; }
+  const fresh = parts.filter((x) => !scanDirs.includes(x));
+  if (!fresh.length) { toast("目录已经在列表里了", "warn"); return false; }
+  scanDirs = scanDirs.concat(fresh);
+  scanDirDraft = "";
+  saveScanDirs();
+  refreshScanArea();        // 重绘，保留上次扫描结果
+  return true;
+}
+
+/* 让系统自己弹「选择文件夹」窗口——就是资源管理器里那个。
+ *
+ * 以前这里让人手敲 "D:/models"：路径带空格、带中文、盘记错一个字符就扫不到，
+ * 用户还得先开资源管理器复制一遍再粘回来。而 Windows 的规矩从来是点「浏览…」
+ * 弹选择框，界面照抄这条规矩就行，不自己另造一套。
+ *
+ * 窗口只能由后端弹：浏览器永远不会把绝对路径交给页面（`webkitdirectory` 只给
+ * 相对路径，`showDirectoryPicker()` 连盘符都不给），而后端要照着路径扫盘。
+ * 所以这个 POST 会一直挂着，直到用户在系统窗口里点完确定。
+ */
+async function pickScanDir(btn) {
+  const old = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "选择中…";
+  try {
+    const r = await api("/api/models/local/pick-dir", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        initial: scanDirs[0] || "",          // 上次选过哪个，窗口就定位到哪
+        title: "选择放 .gguf 的目录",
+      }),
+    });
+    if (r.cancelled) return;                 // 按了取消：不用解释什么
+    if (addScanDirText(r.path)) await runScan();   // 选完就扫，省掉"再点一次"
+  } catch (err) {
+    toast(`${err.message}。也可以直接粘贴路径`, "err");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = old;
+  }
+}
+
+/* 只重画扫描这一块。整页重绘会把滚动位置和输入焦点一起冲掉——用户在填目录的
+   时候被自己的界面打断，是最没必要的那种打断。 */
+function refreshScanArea() {
+  const box = $("scanPanel");
+  if (!box) return;
+  box.outerHTML = scanPanelHtml(state.models || {});
+  bindScanPanel();
+}
+
+async function runScan() {
+  if (!scanDirs.length) { toast("先添加扫描目录", "warn"); return; }
+  const btn = $("scanDo");
+  if (btn) { btn.disabled = true; btn.textContent = "扫描中…"; }   // 大目录要十几秒
+  try {
+    lastScan = await api(`/api/models/local/scan?dirs=${encodeURIComponent(scanDirs.join(","))}`);
+  } catch (err) {
+    toast(err.message, "err");
+  }
+  refreshScanArea();
+}
+
+/* 「＋ 加入」落到哪个端点。本地端点可以有好几个（一个本地 8097、一个连
+   LM Studio 的 1234），扫出来的 gguf 只能进其中一份清单；默认给名字就叫
+   local 的那个，没有就取第一个——和扫描区里标出来的目标保持一致。 */
+function localTarget(d) {
+  const eps = ((d && d.providers) || []).filter((p) => p.local || p.kind === "local");
+  return eps.find((p) => p.name === "local") || eps[0] || null;
+}
+
+/* 给新加进来的本地模型挑一个没被占用的端口。没有 port 的条目在清单里
+   点「启动」是启不起来的（进程不知道该监听哪儿），所以必须在加的时候定下来。 */
+function nextLocalPort(d) {
+  const used = new Set();
+  ((d && d.providers) || []).forEach((p) => {
+    (p.models || []).forEach((m) => { if (m.port) used.add(Number(m.port)); });
+  });
+  let port = 8097;
+  while (used.has(port)) port += 1;
+  return port;
+}
+
+/* 把扫到的一个 .gguf 追加进本地端点的模型清单。
    已经有这个 id 就不动——重复点两次不该产生两条一样的记录。 */
 async function addScanned(m) {
   const d = state.models || (await api("/api/models"));
-  const ep = (d.providers || []).find((p) => p.kind === "local");
+  const ep = localTarget(d);
   const name = ep ? ep.name : "local";
   const list = ep
     ? (ep.models || []).map((x) => ({
@@ -5585,7 +5418,11 @@ async function addScanned(m) {
     toast("已经在清单里了", "warn");
     return;
   }
-  list.push({ id: m.id, path: m.path, context: 4096 });
+  // 路径先收编进 data/models：清单只写项目内相对路径，写盘符等于给下一个
+  // clone 的人留一个死链。同分区的文件用硬链接，零拷贝。
+  const at = await jsonPost("/api/models/local/attach", { path: m.path });
+  // 端口必须给：没有 port 的本地模型在清单里点"启动"会直接说不出话
+  list.push({ id: m.id, path: at.path, context: 4096, port: nextLocalPort(d) });
   await api(`/api/models/${encodeURIComponent(name)}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
@@ -5597,12 +5434,44 @@ async function addScanned(m) {
     }),
   });
   toast(`已加入 ${m.id}`);
+  // reloadModels 会按最新清单重绘扫描区，那一行自动变成「已在清单」——
+  // 不用再扫一遍磁盘来刷新按钮状态。
   await reloadModels();
-  await openScanPanel();
 }
 
-async function probeOneModel(name) {
-  const card = document.querySelector(`.svc-card[data-card="${CSS.escape(name)}"]`);
+/* 从清单里移出一个模型文件。只改 `models.yaml` 里这份清单，磁盘上的 .gguf
+   一个字节都不动——「移出」是"我不想在列表里看到它"，不是"删掉我的模型"。
+   移出的恰好是当前那一个时，顺手把当前改成剩下的第一个；否则配置里会留一个
+   指向已不在清单里的 id，页面上就会出现"当前"没落在任何一行上的空转状态。 */
+async function removeLocalModel(id) {
+  const d = state.models || (await api("/api/models"));
+  const p = (d.providers || []).find(
+    (x) => (x.models || []).some((m) => m.id === id && m.local));
+  if (!p) { toast("清单里没有这个模型", "warn"); return; }
+  const rest = (p.models || []).filter((m) => m.id !== id).map((x) => ({
+    id: x.id, alias: x.alias || "", context: x.context || undefined,
+    max_output: x.max_output || undefined, path: x.path || undefined,
+    port: x.port || undefined,
+  }));
+  // 最后一个不给移出：清单空了会把 path / port 一起丢掉，想加回来得重走一次
+  // 扫描 + attach，端口还可能被重新分配。真要换，先加新的再移旧的。
+  if (!rest.length) {
+    toast("清单里至少要留一个模型文件", "warn");
+    return;
+  }
+  const model = p.model === id ? (rest[0] ? rest[0].id : p.model) : p.model;
+  await api(`/api/models/${encodeURIComponent(p.name)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      base_url: p.base_url || "", model, kind: "local", models: rest,
+    }),
+  });
+  toast(`已移出 ${id}`);
+  await reloadModels();
+}
+
+async function probeOneModel(name) {  const card = document.querySelector(`.svc-card[data-card="${CSS.escape(name)}"]`);
   const btn = card?.querySelector("[data-mact=probe]");
   if (btn) { btn.disabled = true; btn.textContent = "…"; card.classList.add("probing"); }
   try {
@@ -5653,7 +5522,7 @@ async function removeModel(name) {
   }
 }
 
-async function openModelEditor(name) {
+async function openModelEditor(name, defaultKind) {
   // 从别处（知识库参数的「＋ 新增模型」）跳进来时 state.models 可能还没拉过，
   // 那时直接 return 的表现就是"点了没反应"。
   if (!state.models) await loadModels().catch(() => {});
@@ -5661,6 +5530,10 @@ async function openModelEditor(name) {
   if (!d) { toast("后端列表还没加载出来，稍等一下再点", "warn"); return; }
   const cur = name ? d.providers.find((p) => p.name === name) : null;
   const kinds = d.kinds;
+  // 从哪一节点的「＋ 新增」，就先落成哪一类：本地节新增出来的默认是本地，
+  // 外部节默认是云端。默认值写死成 local 的话，在外部节点新增要先改类型，
+  // 忘了改就多出一个 local 端点，还得回本地节去删。
+  const kindDef = defaultKind || "local";
   // 名字不是给用户出题的：新增时按类型直接给一个没被占用的（lmstudio 已存在
   // 就给 lmstudio2），想改再改。以前留空让用户自己想，想出来的"测试""MyModel"
   // 十有八九过不了校验，保存时才弹一条看不懂的英文规则。
@@ -5678,12 +5551,12 @@ async function openModelEditor(name) {
   showModal(cur ? `编辑后端 · ${name}` : "新增后端", `
     <div class="form-grid">
       <div class="form-row"><label>名字</label>
-        <input id="mName" value="${cur ? esc(cur.name) : esc(suggest("local"))}"
+        <input id="mName" value="${cur ? esc(cur.name) : esc(suggest(kindDef))}"
           placeholder="myserver" autocomplete="off" spellcheck="false">
         <span class="hint" id="mNameTip"></span></div>
       <div class="form-row"><label>类型</label>
         <select id="mKind">${kinds.map((k) =>
-          `<option value="${esc(k.id)}"${(cur ? cur.kind : "local") === k.id ? " selected" : ""}>${esc(k.label)}</option>`).join("")}</select></div>
+          `<option value="${esc(k.id)}"${(cur ? cur.kind : kindDef) === k.id ? " selected" : ""}>${esc(k.label)}</option>`).join("")}</select></div>
       <div class="form-row u-col2"><label>API 请求地址 base_url</label>
         <input id="mBase" value="${esc(cur?.base_url || "")}" placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1"
           autocomplete="off" spellcheck="false">
@@ -5696,7 +5569,10 @@ async function openModelEditor(name) {
           ${cur && cur.key_present ? `<button class="ghost-btn" id="mKeyClear" type="button">清空</button>` : ""}
         </div>
         <span class="hint" id="mKeyTip"></span>
-        <label class="remember-row"><input type="checkbox" id="mRemember"${d.key_autosave === false ? "" : " checked"}><span>记住密钥（<b>密文</b>存 data/secrets.json，${esc(d.key_cipher || "系统级加密")}；换机器即失效。不勾 = 只在本次会话有效）</span></label></div>
+        <label class="remember-row"><input type="checkbox" id="mRemember"${d.key_autosave === false ? "" : " checked"}><span>记住密钥（<b>密文</b>存 data/secrets.json，${esc(d.key_cipher || "系统级加密")}；换机器即失效。不勾 = 只在本次会话有效）</span></label>
+        ${d.key_autosave === false
+          ? `<span class="hint warn-note u-mt6">现在是「只保留本次会话」：填了也不会落盘，重启后要重填。想改就勾上这一项，或回模型页点「记住到本机」。</span>`
+          : ""}</div>
       <div class="form-row u-col2"><label>默认模型</label>
         <div class="input-row">
           <select id="mModel"></select>
@@ -5742,18 +5618,10 @@ async function openModelEditor(name) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      // 改名 = 新建一个 + 删掉旧的。顺序不能反：先删会让 models.yaml 里
-      // generation.provider 指向一个不存在的后端，而 upsert 不会自动把默认
-      // 挪过来。界面已经不展示"全局默认"了，但配置层仍然只有一条，
-      // 这里要替它搬过去。
+      // 改名 = 新建一个 + 删掉旧的。顺序不能反：先删会让引用旧名的站点角色
+      // 暂时悬空。没有"全局默认"要搬，新建完直接删旧项即可——站点角色若指
+      // 向旧名，会在下一次保存站点配置时按新名更新。
       if (cur && cur.name !== newName) {
-        if (cur.active) {
-          await api("/api/models/active", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ name: newName }),
-          });
-        }
         await api(`/api/models/${encodeURIComponent(cur.name)}`, { method: "DELETE" })
           .catch((e) => toast(`旧名删除失败：${e.message}`));
       }
@@ -6111,12 +5979,6 @@ async function newKbWizard() {
   if (!state.presets) {
     state.presets = await api("/api/kb/presets").catch(() => []);
   }
-  // 建库向导同样读注册表：用户刚在模型页加的后端，这里就必须能选。
-  // 拉不到才退回 /api/status 里的旧列表。
-  let providers = (state.models?.providers || []).map((p) => p.name);
-  if (!providers.length) {
-    providers = Object.keys(state.status?.providers?.available || {});
-  }
   const presets = state.presets || [];
   // 预设只在建库时作为**初始值**生效一次：建完之后每个库持有独立一套参数，
   // 参数页不再提供"套用预设"。这里记住选中的是哪个，提交时把 id 一起给后端
@@ -6148,10 +6010,6 @@ async function newKbWizard() {
         <input type="number" id="kbOverlap" value="80" min="0" max="1000" step="20"></div>
       <div class="form-row"><label>最终引用条数</label>
         <input type="number" id="kbTopK" value="5" min="1" max="20"></div>
-      <div class="form-row u-col2"><label>生成后端</label>
-        <select id="kbProvider">
-          ${providers.map((p) => `<option value="${esc(p)}">${esc(p)}</option>`).join("")}
-        </select></div>
     </div>
     <p class="hint u-mt8">
       分块类参数保存后会自动重建本库索引；改了全局也不会影响这个库。
@@ -6168,7 +6026,6 @@ async function newKbWizard() {
         "chunking.overlap": overlap,
         "retrieval.rerank.top_k": Number($("kbTopK").value),
       };
-      if ($("kbProvider").value) config["generation.provider"] = $("kbProvider").value;
       const kb = await jsonPost("/api/kb", {
         name, description: $("kbDesc").value.trim(), preset: picked, config,
       });
@@ -6254,28 +6111,28 @@ async function newKbWizard() {
     document.querySelector(".app").classList.toggle("panel-hidden", !dbgPref);
     renderCfgSummary();
 
-    // 深链：#home / #models / #models=new / #kb / #newkb / #settings / #s=<会话 id>
+    // 深链：#home / #models / #models=new / #kb / #newkb。
+    // 后台不再有会话 id，#s=<会话 id> 这类老链接进来就当普通聊天页，
+    // 不做任何读取——那条会话本就不属于这一页了。
     const hash = location.hash;
-    const session = hash.match(/^#s=([^&]+)/);
-    if (session) {
-      setView("chat");
-      await openSession(decodeURIComponent(session[1]));
+    renderSessions();
+    if (hash === "#home") {
+      await setView("home");
+    } else if (hash === "#models" || hash === "#models=new") {
+      await setView("models");
+      if (hash === "#models=new") openModelEditor(null, "openai");
+    } else if (hash === "#kb") {
+      await setView("kb");
     } else {
-      // 固定会话：进站就接着上次的对话，不需要用户先"点开"什么
-      await tolerate("会话", () => ensureSession(true));
-      if (hash === "#home") {
-        await setView("home");
-      } else if (hash === "#models" || hash === "#models=new") {
-        await setView("models");
-        if (hash === "#models=new") openModelEditor(null);
-      } else if (hash === "#kb") {
-        await setView("kb");
-      } else {
-        setView("chat");
-      }
+      setView("chat");
     }
     if (hash === "#newkb") await newKbWizard();
-    if (hash === "#settings") openSettings();
+    // 老书签 #settings 指的是已退役的全局参数抽屉：落到当前库的「参数」栏目，
+    // 顺手把 hash 清掉，免得每次重开又跳一次。
+    if (hash === "#settings") {
+      history.replaceState(null, "", location.pathname + location.search);
+      await setView("kb", { tab: "params" });
+    }
 
     // 首页默认就把服务状态探一遍，否则第一屏全是"未探测"，等于什么也没说
     if (state.view === "home") {
@@ -6319,7 +6176,7 @@ function siteStatusBadge(st) {
  *    等弹窗关。截图里那些参数一个都看不见，等于每次都在盲找。
  * 3. 弹窗一关，卡片上还是旧的只读摘要，改没改成功得靠记性。
  *
- * 现在一个站点一张大卡，卡内按「绑定 / 模型角色 / 答案 / 界面文案」分区，
+ * 现在一个站点一张大卡，卡内按「绑定 / 模型角色 / 答案」分区，
  * 所有字段就地可改，改完即存（后端热生效，只有端口和监听会重启）。
  */
 
@@ -6334,7 +6191,7 @@ function siteStatusBadge(st) {
  * 这个后端能用的模型。值写成「后端::模型」，只写后端名仍然合法（旧配置）。
  */
 function provSelect(role, cur, providers, meta, defProvider, headLabel) {
-  const head = `<option value="">${esc(headLabel || `跟随系统（${defProvider || "-"}）`)}</option>`;
+  const head = `<option value="">${esc(headLabel || "跟随上级")}</option>`;
   const ref = String(cur || "");
   const cut = ref.indexOf("::");
   const curBase = cut >= 0 ? ref.slice(0, cut) : ref;
@@ -6348,28 +6205,33 @@ function provSelect(role, cur, providers, meta, defProvider, headLabel) {
     else if (m.status) bits.push(statusText(m.status));
     const label = `${name}（${bits.join(" · ")}）`;
 
-    // 配置清单和探测结果两个来源都要：只认清单会漏掉"服务上确实有、只是没
-    // 登记"的模型（恰恰是最想选的那批）；只认探测则在服务没起来时一片空。
+    // 只列「模型服务」页里已经加入的模型（config/models.yaml 的 models 清单）。
+    // 探测回报的那批刻意不进来：siliconflow 61 个、aliyun 147 个，那是服务商的
+    // 全量目录，不是"我要用哪些"。站点这一列回答的是"这个入口用谁"，候选必须
+    // 是已经挑过的；想用一个没在清单里的模型，先去模型页把它加进来——那里的
+    // 下拉本来就是挑模型的地方（选一下就会进清单）。
     const seen = new Set();
     const models = [];
     for (const it of (m.models || [])) {
       const id = String((it && it.id) || "").trim();
       if (id && !seen.has(id)) { seen.add(id); models.push(id); }
     }
-    for (const id of (m.probed || [])) {
-      const s = String(id || "").trim();
-      if (s && !seen.has(s)) { seen.add(s); models.push(s); }
-    }
 
     const dftSel = curBase === name && !curModel ? " selected" : "";
     const dft = `<option value="${esc(name)}"${dftSel}>默认${
       m.model ? " · " + esc(m.model) : ""}</option>`;
+    // 当前值指向一个已经被移出清单的模型：补一条占位并让它保持选中。不补的话
+    // 浏览器会静默选中该组第一项（「默认」），用户动一下别的字段再保存，这个
+    // 角色就被悄悄换掉了，而界面上没有任何痕迹。
+    const missing = curBase === name && curModel && !seen.has(curModel)
+      ? `<option value="${esc(`${name}::${curModel}`)}" selected>${esc(curModel)}（未加入清单）</option>`
+      : "";
     const rest = models.map((id) => {
       const val = `${name}::${id}`;
       const sel = curBase === name && curModel === id ? " selected" : "";
       return `<option value="${esc(val)}"${sel}>${esc(id)}</option>`;
     }).join("");
-    return `<optgroup label="${esc(label)}">${dft}${rest}</optgroup>`;
+    return `<optgroup label="${esc(label)}">${dft}${missing}${rest}</optgroup>`;
   }).join("");
 
   // 当前值指向一个已删除/改名的后端时，它的 optgroup 根本不存在，浏览器会
@@ -6413,13 +6275,23 @@ function roleText(v) {
   return String(v || "-").replace("::", " / ");
 }
 
+async function openPrevisitPrompt() {
+  const cfg = state.pvCfg || await api("/api/previsit/config");
+  state.pvCfg = cfg;
+  const value = String((cfg.values || {})["prompts.chat"] || "");
+  showModal("预问诊提示词", `<textarea id="pvPromptEditor" rows="18"
+    style="width:100%;resize:vertical">${esc(value)}</textarea>`, async () => {
+    const text = $("pvPromptEditor").value;
+    state.pvCfg = await jsonSend("PUT", "/api/previsit/config", {
+      values: { "prompts.chat": text },
+    });
+    toast("预问诊提示词已保存");
+  }, { wide: true, okLabel: "保存" });
+}
+
 const LANG_NAME = { ug: "维吾尔语（RTL）", zh: "中文", en: "English" };
 
-/* 2026-11-13 第四次整理：站点页不再「点一下开一层窗」。
- * 旧形态是卡上三行参数 + 「全部参数」+「预问诊参数」四处入口，点谁都弹一个
- * modal，modal 里还分三个页签，提示词再叠一层抽屉 —— 改个端口要开两层窗、
- * 切一次页签。现在三段配置整段铺在卡片下面，预问诊参数也在同一页，
- * 就地改、就地存。窗口只剩「新建站点」和长文本用的提示词抽屉。
+/* 站点页把常用配置直接铺在卡片下面，就地修改和保存。
  *
  * 下面的 siteInlinePanels() 复用原弹窗那套 scfg-* 控件：data-f 字段名一个没动，
  * readSiteBlock() 照旧全量读，所以后端接口零改动。 */
@@ -6490,8 +6362,7 @@ function siteBlock(i, meta, plan, defProv, pv) {
     <div class="site-inline" data-sinline>
       ${siteInlinePanels(i, meta, plan, defProv, pv)}
       <div class="sif-savebar">
-        <span class="sif-save-hint">改动写进 <code>config/instances.yaml</code>：
-          模型、语言、文案立即生效；<b>端口</b>和<b>局域网可访问</b>动到 socket，保存后会重启这个站点。</span>
+        <span class="sif-save-hint">修改后保存即可生效</span>
         <button class="primary-btn" data-save-inline>保存并生效</button>
       </div>
     </div>
@@ -6512,7 +6383,6 @@ function siteBlock(i, meta, plan, defProv, pv) {
 function siteInlinePanels(i, meta, plan, defProv, pv) {
   const d = state.sites || {};
   const roles = i.roles || {};
-  const a = i.alt || {};
   const opt = (v, label, cur) =>
     `<option value="${v}"${String(cur) === String(v) ? " selected" : ""}>${esc(label)}</option>`;
   const kbOpts = (d.kbs || []).map((k) =>
@@ -6533,7 +6403,8 @@ function siteInlinePanels(i, meta, plan, defProv, pv) {
   const secOn = (key) => sec(key).enabled !== false;
   const sel = (field, role, cur, title, headLabel) =>
     `<select data-f="${field}" title="${esc(title)}">${
-      provSelect(role, cur, d.providers, meta, defProv, headLabel)}</select>`;
+      provSelect(role, cur, d.providers, meta, defProv,
+        headLabel || (field.startsWith("sec_") ? "跟随站点" : "跟随上级"))}</select>`;
 
   // 一行字段：标签在左、控件在右，说明放在控件下方，不再往控件行里塞小字。
   const field = (label, control, note, cls = "") => `<div class="scfg-field ${cls}">
@@ -6570,32 +6441,25 @@ function siteInlinePanels(i, meta, plan, defProv, pv) {
     <div class="scfg-cards">
       ${secCard("med", "维医问答", "维医问答",
         field("检索知识库", `<select data-f="kb_id">${kbOpts}</select>`),
-        "站点的主入口，默认绑定主知识库")}
+        "")}
       ${secCard("classic", "古籍问答", "古籍问答",
         field("检索知识库", `<select data-f="classic_kb_id">${classicOpts}</select>`,
-          "选「不单独分库」时按文档标题含「古籍」来分流"),
-        "只在这个库里检索，与维医问答互不干扰")}
+          ""),
+        "")}
       ${secCard("pv", "预问诊", "预问诊",
-        field("参数", `<button class="mini" type="button" data-goto-inline="pvInline"
-          >到本页参数 ↓</button>`,
-          "模型、轮次与提示词在本页最下面"),
-        "不检索知识库，走独立的多轮问诊引擎")}
+        `<p class="scfg-inline-note">模型与提示词在下方角色矩阵统一配置。</p>`,
+        "")}
     </div>`;
 
   /* ---------- 页 2：模型与提示词（矩阵） ---------- */
-  const resolved = (plan && plan.resolved) || {};
-  // 预问诊的两个模型位不在实例 roles 里，而在 config/previsit.yaml 的覆盖层上
-  // （全局一份，不按站点分）。这里只把当前值拼成 provSelect 认的「后端::模型」
-  // 形状，保存时再拆回 provider / model 两个键。
   const pvVals = (pv && pv.values) || {};
-  const pvRef = (prov, mdl) => {
-    const p = String(prov || "").trim();
-    const m = String(mdl || "").trim();
-    if (!p) return m;                       // 只配了模型：原样显示，别丢
-    return m ? `${p}::${m}` : p;
+  const pvRef = (provider, model) => {
+    const p = String(provider || "").trim();
+    const m = String(model || "").trim();
+    return p && m ? `${p}::${m}` : p || m;
   };
-  const pvTrCur = pvRef(pvVals.translator_provider, pvVals.translator_model);
-  const pvGenCur = pvRef(pvVals.provider, pvVals.model);
+  const pvTranslate = pvRef(pvVals.translator_provider, pvVals.translator_model);
+  const pvGenerate = pvRef(pvVals.provider, pvVals.model);
   const mrow = (label, sub, tr, gen, prompt, cls = "") => `<tr class="${cls}">
       <td class="scfg-mrow-k"><b>${esc(label)}</b><span>${esc(sub)}</span></td>
       <td>${tr}</td><td>${gen}</td><td>${prompt}</td></tr>`;
@@ -6603,15 +6467,14 @@ function siteInlinePanels(i, meta, plan, defProv, pv) {
     `<button class="mini" type="button" ${attrs}>${esc(label)}</button>`;
 
   const modelPanel = `
-    <div class="scfg-lead accent"><b>留空 = 跟随上一级</b>
-      <span>板块覆盖站点默认，表里越靠下的行越优先。</span></div>
+    <div class="scfg-lead accent"><b>模型角色</b><span>下拉只列「模型服务」里已经加入的模型——想用别的，先去那一页在端点卡的下拉里挑一下（选过就进清单）。</span></div>
     <div class="scfg-matrix-wrap">
       <table class="scfg-matrix">
         <thead><tr>
           <th>入口 / 层级</th><th>翻译模型</th><th>推理模型</th><th>提示词</th>
         </tr></thead>
         <tbody>
-          ${mrow("站点默认", "所有板块的兜底值",
+          ${mrow("站点默认", "默认",
             `<div class="scfg-cell-row">${sel("role_translate", "translate", roles.translate,
               "先把维吾尔语提问译成中文去检索，再把中文答案译回去")}
               <button class="mini" type="button" data-trtest
@@ -6619,79 +6482,47 @@ function siteInlinePanels(i, meta, plan, defProv, pv) {
             sel("role_generate", "generate", roles.generate, "读检索到的资料组织答案"),
             promptBtn("data-open-global-prompt", "角色提示词"),
             "scfg-mrow-default")}
-          ${mrow(String(sec("med").name || "").trim() || "维医问答", "板块级覆盖 · 只影响本入口",
+          ${mrow(String(sec("med").name || "").trim() || "维医问答", "维医",
             sel("sec_med_role_translate", "translate", (sec("med").roles || {}).translate,
               "维医问答的翻译模型；留空跟随站点默认"),
             sel("sec_med_role_generate", "generate", (sec("med").roles || {}).generate,
               "维医问答的推理模型；留空跟随站点默认"),
             promptBtn('data-open-prompt="med"', "板块提示词"))}
-          ${mrow(String(sec("classic").name || "").trim() || "古籍问答", "板块级覆盖 · 只影响本入口",
+          ${mrow(String(sec("classic").name || "").trim() || "古籍问答", "古籍",
             sel("sec_classic_role_translate", "translate", (sec("classic").roles || {}).translate,
               "古籍问答的翻译模型；留空跟随站点默认"),
             sel("sec_classic_role_generate", "generate", (sec("classic").roles || {}).generate,
               "古籍问答的推理模型；留空跟随站点默认"),
             promptBtn('data-open-prompt="classic"', "板块提示词"))}
-          <tr class="scfg-mrow-soft">
-            <td class="scfg-mrow-k"><b>预问诊</b><span>独立引擎 · 不随上表继承</span></td>
-            <td>${sel("pv_role_translate", "translate", pvTrCur,
-              "维语会话专用的翻译模型；留空 = 内置强模型（本地 7B 写不了维语）。只有模型名、没有后端时，按模型名路由。",
-              "内置默认（DeepSeek-V4.1-Flash）")}</td>
-            <td>${sel("pv_role_generate", "generate", pvGenCur,
-              "预问诊的推理模型；留空 = 跟随后台当前后端")}</td>
-            <td>${promptBtn('data-goto-inline="pvInline"', "本页参数 ↓")}</td>
-          </tr>
+          ${mrow("预问诊", "预问诊",
+            sel("pv_role_translate", "translate", pvTranslate,
+              "预问诊维语翻译模型", "跟随全局翻译角色"),
+            sel("pv_role_generate", "generate", pvGenerate,
+              "预问诊推理模型", "跟随全局推理角色"),
+            promptBtn('data-open-prompt="previsit"', "预问诊提示词"))}
         </tbody>
       </table>
     </div>
-    <div class="tr-out scfg-tr-out" data-trout hidden></div>
-    <div class="scfg-footnote">
-      提示词顺序与模型相反：<code>后端 &gt; 板块 &gt; 角色默认 &gt; 内置</code>，
-      同名字段两层都配时后端级胜出。当前生效：译 <b>${esc(roleText(resolved.translate))}</b>
-      · 答 <b>${esc(roleText(resolved.generate))}</b>。
-    </div>`;
+    <div class="tr-out scfg-tr-out" data-trout hidden></div>`;
 
   /* ---------- 页 3：站点设置 ---------- */
-  // 说明只写一次：两个语言栏各贴一遍同样的长句纯属重复。
-  const copyField = (lang, label, note = "") => field(label,
-    `<button class="mini" type="button" data-open-copy="copy_${esc(lang || "ug")}"
-      >打开提示词配置</button>`, note);
-
+  /* 这一页只留「运行」三件事（端口 / 监听 / 开机）。
+   *
+   * 语言、语料、产出方式原本也摆在这里，问题不是"多了一张卡"，而是**同一份
+   * 配置有两处落点**：真实值在 config/instances.yaml 的 lang / kb_lang /
+   * answer_mode，这一页又摆一遍、保存时全量 PUT 回去。页面上改完、文件里没变
+   * （或反过来），下次重启又翻回旧值，谁也不知道以哪个为准。这类部署时定一次
+   * 的东西只留配置文件一个落点（instcfg 每次请求现读，改完不用重启）。
+   */
   const sitePanel = `
-    <div class="scfg-lead"><b>不常改，但改了要清楚后果</b>
-      <span>端口与「局域网可访问」动到 socket，保存后会重启这个站点；其余立即生效。</span></div>
     <div class="scfg-cards">
-      ${card("运行", "占哪个端口、谁能连、要不要开机拉起", `
+      ${card("运行", "占哪个端口、谁能连、要不要开机拉起；语言与产出方式改 config/instances.yaml", `
         ${field("端口", `<input data-f="port" type="number" min="${lo}" max="${hi}" value="${i.port}">`,
           "改这里会重启站点")}
         ${field("监听", toggle("public", i.public, "局域网可访问"), "只监听回环时外部访问不到")}
-        ${field("开机", toggle("autostart", i.autostart, "后台启动时自动拉起"))}
-      `)}
-      ${card("语言与答案", "界面、语料、答案先走哪条路", `
-        ${field("界面与回答语言", `<select data-f="lang">
-          ${opt("ug", "维吾尔语（从右往左）", i.lang)}
-          ${opt("zh", "中文", i.lang)}
-          ${opt("en", "English", i.lang)}</select>`)}
-        ${field("知识库内容的语言", `<select data-f="kb_lang">
-          ${opt("zh", "中文语料（维语提问先译成中文）", i.kb_lang || "zh")}
-          ${opt("ug", "维吾尔语语料（直接检索）", i.kb_lang)}
-          ${opt("en", "英语语料", i.kb_lang)}</select>`)}
-        ${field("产出方式", `<select data-f="answer_mode">
-          ${opt("translate", "先中后译（稳 · 慢一倍）", i.answer_mode || "translate")}
-          ${opt("direct", "直接维语作答（快 · 易跑偏）", i.answer_mode)}</select>`,
-          "同一份资料，两种产出路径", "wide")}
-      `)}
-      ${card("界面文案", "标题、欢迎语、免责在「提示词配置」里改", `
-        ${field("侧栏库名", text("kb_name", i.kb_name, "留空用知识库名"),
-          "主语言界面左侧顶部的标题")}
-        ${copyField(i.lang, "主语言文案",
-          "标题、副标题、欢迎语、示例、免责统一在提示词配置里，保存前自动留快照、可整体回滚")}
-        ${field("另一语言", `<select data-f="alt_lang">
-          ${opt("zh", "中文", a.lang)}
-          ${opt("ug", "维吾尔语", a.lang)}
-          ${opt("en", "English", a.lang)}</select>`, "右上角切换用的那套")}
-        ${field("另一语言侧栏库名", text("alt_kb_name", a.kb_name, "留空用知识库名"))}
-        ${copyField(a.lang || "zh", "另一语言文案")}
-      `, "span-all")}
+        ${field("开机", toggle("autostart", i.autostart, "后台启动时自动拉起"),
+          "关掉后每次都要在这一页手动启动")}
+      `, "run-only")}
     </div>`;
 
   /* 三段常驻，没有页签、没有 hidden：滚动就能看全，保存一次全量提交。
@@ -6705,61 +6536,40 @@ function siteInlinePanels(i, meta, plan, defProv, pv) {
     </section>`;
 
   return `
-    <div class="scfg-summary">
-      <div class="scfg-summary-line">
-        <span class="scfg-summary-k">当前生效</span>
-        <span>译 <b>${esc(roleText(resolved.translate))}</b></span>
-        <span>答 <b>${esc(roleText(resolved.generate))}</b></span>
-        <span class="scfg-summary-side">端口 <b>${i.port}</b> · ${esc(LANG_NAME[i.lang] || i.lang)}</span>
-      </div>
-    </div>
-    ${section("01", "sections", "板块与知识库", "开关 · 显示名 · 绑定库", secPanel)}
-    ${section("02", "models", "模型与提示词", "角色矩阵 · 翻译测试 · 提示词入口", modelPanel)}
-    ${section("03", "site", "站点设置", "端口 · 语言 · 界面文案", sitePanel)}`;
+    ${section("01", "sections", "板块与知识库", "", secPanel)}
+    ${section("02", "models", "模型与提示词", "", modelPanel)}
+    ${section("03", "site", "站点设置", "", sitePanel)}`;
 }
 
-/* 内联保存。字段来自站点卡上三段配置区，payload 组装与原来的弹窗回调
- * 逐字一致（readSiteBlock 全量读 + 预问诊两个模型位拆回 previsit 覆盖层），
- * 只是提交动作从「弹窗确定」换成「页面上的保存并生效」。 */
+/* 内联保存站点的三段配置。 */
 async function saveSiteInline(name, block) {
   const payload = readSiteBlock(block);
-  // 预问诊的两个模型位是 previsit 的全局覆盖层，不属于这个站点的 spec。
-  const pvTr = payload.pv_role_translate;
-  const pvGen = payload.pv_role_generate;
+  const pvTranslate = payload.pv_role_translate;
+  const pvGenerate = payload.pv_role_generate;
   delete payload.pv_role_translate;
   delete payload.pv_role_generate;
-
   const r = await jsonSend("PUT", `/api/instances/${encodeURIComponent(name)}`, payload);
-
-  // 「后端::模型」拆成 previsit 认的 provider / model 两个键。没有 `::` 时
-  // 有可能是只选了后端，也有可能是只写了模型名（翻译模型按名字路由），
-  // 靠后端清单区分，否则配置没报错但路由头是错的。
-  const provs = (state.sites && state.sites.providers) || [];
-  const split = (v) => {
-    const s = String(v || "").trim();
-    const i = s.indexOf("::");
-    if (i >= 0) return [s.slice(0, i), s.slice(i + 2)];
-    return provs.includes(s) ? [s, ""] : ["", s];
-  };
-  let pvNote = "";
-  if (pvTr !== undefined || pvGen !== undefined) {
-    const values = {};
-    if (pvGen !== undefined) {
-      const [p, m] = split(pvGen);
-      values.provider = p;
-      values.model = m;
-    }
-    if (pvTr !== undefined) {
-      const [p, m] = split(pvTr);
-      values.translator_provider = p;
-      values.translator_model = m;
-    }
-    await jsonSend("PUT", "/api/previsit/config", { values });
-    pvNote = " · 预问诊模型已更新";
+  const values = {};
+  if (pvTranslate !== undefined) {
+    const [provider, model] = splitRoleValue(pvTranslate);
+    values.translator_provider = provider;
+    values.translator_model = model;
   }
+  if (pvGenerate !== undefined) {
+    const [provider, model] = splitRoleValue(pvGenerate);
+    values.provider = provider;
+    values.model = model;
+  }
+  if (Object.keys(values).length) await jsonSend("PUT", "/api/previsit/config", { values });
   await renderSites();
-  toast(r.restarted ? `${name} 已保存并重启${pvNote}`
-                    : `${name} 已保存 · 立即生效${pvNote}`);
+  toast(r.restarted ? `${name} 已保存并重启` : `${name} 已保存 · 立即生效`);
+}
+
+function splitRoleValue(value) {
+  const raw = String(value || "").trim();
+  const separator = raw.indexOf("::");
+  if (separator < 0) return [raw, ""];
+  return [raw.slice(0, separator), raw.slice(separator + 2)];
 }
 
 /* 站点页所有内联交互都委托给 #viewSite。容器元素本身不随重绘更换（只换
@@ -6787,62 +6597,13 @@ function bindSiteInlineEvents() {
       return;
     }
 
-    // 预问诊参数是全局一份、不属于任何站点，所以它自己有独立的保存条。
-    if (e.target.closest("[data-pv-save]")) {
-      const btn = e.target.closest("[data-pv-save]");
-      btn.disabled = true;
-      try {
-        const out = await jsonSend("PUT", "/api/previsit/config",
-          { values: collectPvValues(box) });
-        state.pvCfg = out;
-        await renderSites();
-        toast(`已保存 ${out.saved.length} 项 · 立即生效`);
-      } catch (err) {
-        toast(err.message, "err");
-        btn.disabled = false;
-      }
-      return;
-    }
-    if (e.target.closest("[data-pv-reset]")) {
-      const btn = e.target.closest("[data-pv-reset]");
-      btn.disabled = true;
-      try {
-        await jsonSend("POST", "/api/previsit/config/reset", {});
-        state.pvCfg = await api("/api/previsit/config");
-        await renderSites();
-        toast("已恢复出厂参数");
-      } catch (err) {
-        toast(err.message, "err");
-        btn.disabled = false;
-      }
-      return;
-    }
-
-    // 页面内锚点：从模型矩阵跳到本页的预问诊参数，不开窗、不切页。
-    const jump = e.target.closest("[data-goto-inline]");
-    if (jump) {
-      const target = $(jump.dataset.gotoInline);
-      if (target) {
-        if (target.tagName === "DETAILS") target.open = true;
-        target.scrollIntoView({ behavior: "smooth", block: "start" });
-        target.classList.add("sif-flash");
-        setTimeout(() => target.classList.remove("sif-flash"), 1200);
-      }
-      return;
-    }
-
     // 长文本仍走提示词抽屉，但入口直接摆在页面上，且不用先关一层弹窗。
     if (e.target.closest("[data-open-global-prompt]")) {
       await openPromptDrawer("");
       return;
     }
-    const cp = e.target.closest("[data-open-copy]");
-    if (cp) {
-      const role = cp.dataset.openCopy || "";
-      await openPromptDrawer("");
-      const sec = [...$("prBody").querySelectorAll(".pr-role")]
-        .find((s) => role && s.textContent.includes(role));
-      if (sec) sec.scrollIntoView({ block: "start" });
+    if (e.target.closest('[data-open-prompt="previsit"]')) {
+      await openPrevisitPrompt();
       return;
     }
     const op = e.target.closest("[data-open-prompt]");
@@ -6906,10 +6667,6 @@ function bindSiteInlineEvents() {
       }
       return;
     }
-    // 换后端要同步换模型候选，否则留下一个必然 404 的「后端 + 模型」组合。
-    if (e.target.dataset.pv === "provider") {
-      syncPvModelOptions(e.target.value, box);
-    }
   });
 }
 
@@ -6968,131 +6725,6 @@ function readSiteBlock(block) {
   return out;
 }
 
-/* 预问诊参数是全局一份（config/previsit.yaml 的差异层），不属于任何站点：
- * 所以它单独成段放在站点卡下面，多站点时也只渲染一次。原来它是一个 modal，
- * 需要「卡上点一下 → 弹窗 → 再关掉」，现在整段表单常驻页面。 */
-function pvGroupsHtml(cfg) {
-  const groups = cfg.groups || [];
-  const fields = cfg.fields || [];
-  const changed = new Set(cfg.overridden || []);
-  return groups.map((g) => {
-    const own = fields.filter((f) => f.group === g.key);
-    if (!own.length) return "";
-    return `<div class="pv-group">
-      <div class="pv-group-head"><b>${esc(g.label)}</b>
-        ${g.desc ? `<span class="hint">${esc(g.desc)}</span>` : ""}</div>
-      <div class="form-grid">${own.map((f) => pvFieldHTML(f, changed, cfg)).join("")}</div>
-    </div>`;
-  }).join("");
-}
-
-function previsitInlineHtml(cfg) {
-  if (!cfg) return `<section class="sif-sec sif-standalone" id="pvInline">
-      <div class="sif-head"><span class="sif-n">04</span>
-        <div class="sif-ht"><b>预问诊参数</b><span>全局配置，不随站点分</span></div></div>
-      <div class="sif-body"><p class="hint">读不到预问诊参数，刷新一下再试。</p></div>
-    </section>`;
-  const rt = cfg.runtime || {};
-  // 只报"现在真在用什么"。槽位/图谱/召回那套早删了，写回去会把真正的
-  // 故障点（维语翻译没接上）盖住。
-  const rtLine = [
-    rt.llm ? `模型 ${esc(rt.model || "已接上")}` : "模型未接上",
-    rt.translator
-      ? `维语翻译 ${esc(rt.translator_model || "已接上")}`
-      : "维语翻译未接上（维语会话会报错，不会退回中文）",
-  ].join(" · ");
-  const file = String(cfg.overrides_path || "").split(/[\\/]/).pop();
-
-  return `<section class="sif-sec sif-standalone" id="pvInline">
-    <div class="sif-head">
-      <span class="sif-n">04</span>
-      <div class="sif-ht"><b>预问诊参数</b><span>全局配置，不随站点分</span></div>
-    </div>
-    <div class="sif-body">
-      <p class="hint u-mb12-0">只记与 <code>previsit.yaml</code> 不同的键（存
-        <code title="${esc(cfg.overrides_path || "")}">config/${esc(file)}</code>），
-        改回默认值自动消失；保存立即生效，不打断问诊。</p>
-      <div class="pv-rt">${esc(rtLine)}${rt.llm_error ? ` · 上次报错：${esc(rt.llm_error)}` : ""}${rt.translator_error ? ` · 翻译报错：${esc(rt.translator_error)}` : ""}</div>
-      <div class="pv-groups">${pvGroupsHtml(cfg)}</div>
-      <div class="sif-savebar">
-        <span class="sif-save-hint">密钥在「模型」页填一次，这里跟着用。</span>
-        <button class="mini" type="button" data-pv-reset>恢复出厂值</button>
-        <button class="primary-btn" type="button" data-pv-save>保存并生效</button>
-      </div>
-    </div>
-  </section>`;
-}
-
-function pvModelCandidates(cfg, provider) {
-  const provs = ((cfg.catalog || {}).providers) || [];
-  if (!provider) return [];
-  const hit = provs.find((p) => p.name === provider);
-  return (hit && hit.models) || [];
-}
-
-function syncPvModelOptions(provider, root = document) {
-  const box = root.querySelector("#pvModelList");
-  if (!box) return;
-  const list = pvModelCandidates(state.pvCfg || {}, provider);
-  box.innerHTML = list.map((m) => `<option value="${esc(m)}"></option>`).join("");
-  const input = root.querySelector("#pv_model");
-  if (input) input.placeholder = provider ? "留空 = 该后端的默认模型" : "跟随后台默认模型";
-}
-
-function pvFieldHTML(f, changedSet, cfg) {
-  const id = `pv_${f.path.replace(/\./g, "_")}`;
-  const wide = f.type === "textarea";
-  const val = f.value;
-  const isChanged = changedSet.has(f.path);
-  let control = "";
-
-  if (f.type === "bool") {
-    control = `<label class="toggle"><input type="checkbox" id="${id}" data-pv="${esc(f.path)}"
-      ${val ? "checked" : ""}><span class="sw" aria-hidden="true"></span>
-      <span class="toggle-label">${val ? "开启" : "关闭"}</span></label>`;
-  } else if (f.type === "provider") {
-    const provs = ((cfg.catalog || {}).providers) || [];
-    const opts = [`<option value=""${!val ? " selected" : ""}>${esc(f.empty || "跟随默认")}</option>`]
-      .concat(provs.map((p) => `<option value="${esc(p.name)}"${
-        String(val) === String(p.name) ? " selected" : ""}>${esc(p.name)}${
-        p.local ? "（本地）" : ""}${p.ready ? "" : " · 未就绪"}</option>`));
-    control = `<select id="${id}" data-pv="${esc(f.path)}">${opts.join("")}</select>`;
-  } else if (f.type === "model") {
-    control = `<input id="${id}" data-pv="${esc(f.path)}" list="pvModelList"
-      value="${esc(val || "")}" placeholder="留空 = 该后端的默认模型"
-      maxlength="${f.maxlen || 120}"><datalist id="pvModelList"></datalist>`;
-  } else if (f.type === "int" || f.type === "float") {
-    const step = f.step != null ? ` step="${f.step}"` : "";
-    const lo = f.min != null ? ` min="${f.min}"` : "";
-    const hi = f.max != null ? ` max="${f.max}"` : "";
-    control = `<input id="${id}" data-pv="${esc(f.path)}" type="number"${lo}${hi}${step}
-      value="${val != null ? val : ""}">`;
-  } else if (f.type === "textarea") {
-    control = `<textarea id="${id}" data-pv="${esc(f.path)}" rows="${f.rows || 4}"
-      maxlength="${f.maxlen || 4000}">${esc(val || "")}</textarea>`;
-  } else {
-    control = `<input id="${id}" data-pv="${esc(f.path)}" type="text"
-      value="${esc(val || "")}" maxlength="${f.maxlen || 200}">`;
-  }
-
-  return `<div class="form-row${wide ? " full" : ""}" data-pvf="${esc(f.path)}">
-    <label for="${id}">${esc(f.label)}${isChanged ? '<span class="pv-chg">已改</span>' : ""}</label>
-    ${control}
-    ${f.help ? `<span class="hint">${esc(f.help)}</span>` : ""}
-  </div>`;
-}
-
-function collectPvValues(root = document) {
-  const out = {};
-  for (const el of root.querySelectorAll("[data-pv]")) {
-    const path = el.dataset.pv;
-    if (el.type === "checkbox") out[path] = el.checked;
-    else if (el.type === "number") out[path] = el.value === "" ? "" : Number(el.value);
-    else out[path] = el.value;
-  }
-  return out;
-}
-
 function paintSites(d, roles, meta, pv) {
   const data = d || state.sites;
   if (!data) return;
@@ -7117,16 +6749,13 @@ function paintSites(d, roles, meta, pv) {
   $("viewSite").innerHTML = `<div class="page">
     ${items.length
       ? items.map((i) => siteBlock(i, meta, plans.find((p) => p.name === i.name),
-        (roles && roles.default_provider) || "", pv)).join("")
+        "", pv)).join("")
       : `<div class="card"><p class="hint" style="margin:6px 0 12px">还没有前台站点。</p></div>`}
-    ${previsitInlineHtml(pv)}
   </div>`;
 
   $("btnNewSite").onclick = () => openSiteEditor(null);
   // datalist 里的模型候选要按当前 provider 填一次，否则下拉是空的。
   const box = $("viewSite");
-  const prov = box.querySelector("#pv_provider");
-  if (prov) syncPvModelOptions(prov.value, box);
 }
 
 /* 切页加速三件事：① 不撕掉上次的卡片（只有从没画过才给骨架）；
@@ -7142,8 +6771,7 @@ async function renderSites() {
   }
   let d, r, meta, pv;
   try {
-    // 角色配置、后端清单、实例列表、预问诊参数互不依赖，一起发。
-    // /api/models 是四者里最慢的那个，不再把它排在最后等。
+    // 角色配置、后端清单和实例列表并发加载。
     [d, r, meta, pv] = await Promise.all([
       api("/api/instances"),
       api("/api/model-roles").catch(() => null),
@@ -7231,11 +6859,6 @@ async function openSiteEditor(cur) {
       suggested = 8801;
     }
   }
-  let copy = {};
-  try {
-    copy = await api(`/api/instances/defaults?lang=${cur ? cur.lang : "ug"}`);
-  } catch { copy = {}; }
-
   const kbOptions = (d.kbs || []).map((k) =>
     `<option value="${k.id}" ${cur && cur.kb_id === k.id ? "selected" : ""
     }>${esc(k.name)}</option>`).join("");
@@ -7283,9 +6906,6 @@ async function openSiteEditor(cur) {
         <select id="sRoleTr">${roleOptions(cur, "translate", d.providers || [])}</select></div>
       <div class="form-row"><label>输出（作答）用哪个模型</label>
         <select id="sRoleGen">${roleOptions(cur, "generate", d.providers || [])}</select></div>
-      <div class="form-row"><label>界面文案</label>
-        <span class="hint">标题、副标题、欢迎语、示例、免责在「提示词配置 · 界面文案」里改${
-          copy && copy.title ? `；当前：${esc(String(copy.title).slice(0, 24))}` : ""}。</span></div>
       <div class="form-row"><label>板块</label>
         <span class="hint">三个板块默认全开，建好后到「模型与参数」→ 板块里改名或关掉。</span></div>
       <div class="form-row"><label class="toggle">

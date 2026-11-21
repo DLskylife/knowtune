@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
@@ -10,8 +12,8 @@ from pydantic import BaseModel, Field
 from ... import logbus, modelcfg
 from ... import roles as roles_mod
 from ... import services as services_mod
-from ... import settings as settings_mod
 from ...config import ProviderCfg
+from ...frontsite import instcfg
 from ..state import state
 
 router = APIRouter()
@@ -62,17 +64,23 @@ def list_models() -> dict:
             seen.add((p["name"], mid))
             data["catalog"].append({
                 "provider": p["name"], "model": mid,
-                "current": False, "provider_active": bool(p["active"]),
-                "ready": bool(p["ready"]),
+                "current": False, "ready": bool(p["ready"]),
             })
     for c in data["catalog"]:
         m = meta.get(c["provider"]) or {}
         c["provider_label"] = m.get("kind_label") or c["provider"]
         c["local"] = bool(m.get("local"))
-        # "当前"= 后端是当前后端 + 模型是这个后端的当前模型，缺一不可
-        c["active"] = bool(c.get("provider_active") and c.get("current"))
+    usage: dict[str, list[str]] = {name: [] for name in meta}
+    for site in instcfg.load_all():
+        for role, value in (site.roles or {}).items():
+            provider, _ = roles_mod.split(value)
+            if provider in usage:
+                usage[provider].append(f"{site.name} {role}")
+    for p in data["providers"]:
+        p["used_by"] = usage.get(p["name"], [])
+    # 没有"当前后端"可置顶，按本地优先、再按名字排，顺序稳定可预期。
     data["catalog"].sort(key=lambda c: (
-        not c["active"], not c["local"], c["provider"], c["model"]))
+        not c["local"], c["provider"], c["model"]))
     return data
 
 
@@ -201,23 +209,9 @@ def delete_model(name: str) -> dict:
         raise HTTPException(404, "后端不存在")
     if len(providers) <= 1:
         raise HTTPException(400, "至少要留一个后端：先新增一个，再删这个")
-    # 删的正好是当前在用的那个时，以前是报错让用户自己先去切——那是把系统的
-    # 内部约束变成一道手工题。这里直接切到另一个（优先本地）再删，用户点一次
-    # 就完成；切换的结果会落盘，不会重启后又指回一个已删掉的后端。
-    if state.cfg.generation.provider == name:
-        others = [n for n in providers if n != name]
-        picked = min(
-            others,
-            key=lambda n: not modelcfg.kind_of(providers[n].kind).get("local", False),
-        )
-        try:
-            settings_mod.apply(state.cfg, {"generation.provider": picked})
-        except ValueError:
-            picked = others[0]
-            settings_mod.apply(state.cfg, {"generation.provider": picked})
-        settings_mod.save_local(state.cfg)
-        state.invalidate_kb_cfg()
-        logbus.note(f"删除当前后端 {name}，自动切换到 {picked}", level="WARNING", source="models")
+    # 没有"当前后端"需要切换——项目里用谁由站点/请求自己指定，删一个端点
+    # 只是注册表少一项。引用了它的站点角色会在解析时被 known 校验跳过，
+    # 由调用方明确报错，不会静默串到另一个后端。
     try:
         result = modelcfg.remove(state.cfg, name)
     except ValueError as exc:
@@ -226,25 +220,102 @@ def delete_model(name: str) -> dict:
     from ... import secrets as secrets_mod
 
     secrets_mod.drop(name)      # 后端没了，内存里的密钥也不该留着
+    # 盘上那份也得跟着走。不落这一步的话，密钥会以"孤儿"形式留在
+    # data/secrets.json 里：端点都删了，重启还会被读回内存。
+    secrets_mod.autosync()
     logbus.note(f"后端 {name} 已删除", level="WARNING", source="models")
     return {"ok": True, **result}
 
 
+class PickDirRequest(BaseModel):
+    # 上次选过的目录：窗口一打开就定位在那儿，不用每次从「此电脑」翻下来。
+    initial: str = ""
+    title: str = "选择放 .gguf 的目录"
+
+
+@router.post("/api/models/local/pick-dir")
+def pick_local_dir(req: PickDirRequest) -> dict:
+    """弹系统原生的「选择文件夹」窗口，把绝对路径交回来。
+
+    浏览器给不了绝对路径（`webkitdirectory` 只给相对路径，
+    `showDirectoryPicker()` 连盘符都不给），而后端要照着路径扫盘，所以窗口
+    只能由本机进程弹。这是唯一能让用户「点着选」而不是「背路径」的路径。
+
+    阻塞式同步端点：用户点完才返回。它占一个线程池线程，但这是本地单人使用
+    的界面，同一时刻不会有两个人同时在选目录。
+    """
+    from ... import dirpick
+
+    try:
+        path = dirpick.pick(initial=req.initial, title=req.title)
+    except dirpick.PickError as exc:
+        # 400 而不是 500：这不是服务出错，是"这台环境弹不出窗口"。
+        # 前端据此提示"直接粘贴路径"，路没有堵死。
+        raise HTTPException(400, str(exc)) from exc
+    return {"path": path, "cancelled": not path}
+
+
 @router.get("/api/models/local/scan")
 def scan_local_models(dirs: str = "", limit: int = 300) -> dict:
-    """扫 .gguf。`dirs` 用逗号分隔；不传就按 localmodels 的默认目录。"""
+    """扫 .gguf。`dirs` 用逗号分隔，必须由调用方明确给出；没有固定默认目录。"""
     from ... import localmodels as local_mod
 
     want = [d.strip() for d in (dirs or "").split(",") if d.strip()]
+    if not want:
+        return {"models": [], "dirs": [], "env": local_mod.describe_env(),
+                "hint": "请先添加一个扫描目录"}
     try:
-        found = local_mod.scan(want or None, limit=max(1, min(limit, 1000)))
+        found = local_mod.scan(want, limit=max(1, min(limit, 1000)))
     except OSError as exc:
         raise HTTPException(400, f"扫描失败：{exc}") from exc
     return {
         "models": [m.as_dict() for m in found],
-        "dirs": want or local_mod.default_dirs(),
+        "dirs": want,
         "env": local_mod.describe_env(),
     }
+
+
+class AttachRequest(BaseModel):
+    path: str = Field(min_length=1, max_length=4096)
+
+
+@router.post("/api/models/local/attach")
+def attach_local_model(req: AttachRequest) -> dict:
+    """把一个扫到的 `.gguf` 收进 `data/models`，返回**项目内**路径。
+
+    扫描能看见任意目录里的模型，但清单不能写绝对路径：`config/models.yaml`
+    跟着仓库走，`D:\\...` 换台机器就是死链（`test_package_health` 专门拦这条，
+    也是对"clone 下来就能跑"的承诺）。所以这里用**硬链接**把文件收编：同一
+    分区上零拷贝、不占额外空间，原文件删了这份仍然在；跨分区硬链接建不了，
+    就明说原因让人自己搬，不偷偷复制几个 G。
+    """
+    from ... import paths as paths_mod
+
+    src = paths_mod.resolve_source(req.path)
+    if src.suffix.lower() != ".gguf":
+        raise HTTPException(400, "只收 .gguf 文件")
+    if not src.is_file():
+        raise HTTPException(400, f"文件不存在：{src}")
+
+    dest_dir = paths_mod.ROOT / "data" / "models"
+    try:
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / src.name
+        rel = f"data/models/{dest.name}"
+        if dest.exists():
+            # 同名同大小 = 上次已经收过，直接用，不必再链一次
+            if dest.stat().st_size != src.stat().st_size:
+                raise HTTPException(
+                    400, f"data/models 里已经有一个同名但大小不同的 {src.name}")
+            return {"path": rel, "id": dest.stem, "reused": True}
+        os.link(src, dest)
+    except OSError as exc:
+        # Windows 上跨盘 == EXDEV/OSError 17：这不是"程序出错"，是物理限制。
+        raise HTTPException(
+            400,
+            f"这个文件不在 data/models 所在的分区，建不了硬链接。"
+            f"把它复制到 data/models 再扫一次。（{exc}）") from exc
+    return {"path": rel, "id": dest.stem, "reused": False}
 
 
 class LocalAction(BaseModel):
@@ -291,8 +362,10 @@ def start_local_model(name: str, req: LocalAction, request: Request) -> dict:
     entry.port = inst.port
     p.base_url = inst.base_url
     p.kind = "local"
-    if not (p.model or "").strip():
-        p.model = entry.id
+    # 起了哪个，哪个就是"当前"。界面上没有"设为当前"这颗按钮，也不需要：
+    # 本机同一时刻只有一个进程占着显存，base_url 已经指向最后起的那个，model
+    # 却还留在旧值上的话，对话页拿到的 id 和实际在跑的模型对不上。
+    p.model = entry.id
     modelcfg.persist(state.cfg)
     services_mod.invalidate(name)
     api = local_mod.api_info(inst)
@@ -356,8 +429,7 @@ def _gateway_target(request: Request, payload: dict, allow_empty: bool = False) 
             if p.entry(model) or p.model == model:
                 want = name
                 break
-    if not want:
-        want = state.cfg.generation.provider
+    # 没有全局默认后端可退：没指定端点就是没指定，列表接口给空、其余报错。
     if not want:
         # 列表类接口（/v1/models）允许空：返回哨兵让调用方给客户端空列表，
         # 而不是 400。真正要转发的 chat/completions 不带 allow_empty，仍走 400。
@@ -403,17 +475,14 @@ def _gateway_timeout() -> float:
 def gateway_info(request: Request) -> dict:
     """给界面和文档用：现在有哪些能写死在别处的地址。
 
-    除了「当前活动端点」，这里把**每个**端点都列出来：接入卡上的示例是按
-    端点切换的，只给当前那一个，用户想调 local 就得自己去猜 model 名。
+    项目没有全局固定后端，这里把**每个**端点都列出来：接入卡上的示例是按
+    端点切换的。curl 示例只拿第一个端点的默认模型当占位，不代表"当前后端"。
     """
     from ... import localmodels as local_mod
 
     root = str(request.base_url).rstrip("/")
     v1 = root + "/v1"
     providers = state.cfg.generation.providers
-    active = state.cfg.generation.provider
-    p = providers.get(active)
-    model = (p.model if p else "") or ""
     live = {k: v for k, v in local_mod.running().items()
             if v.get("state") == "running"}
 
@@ -446,16 +515,19 @@ def gateway_info(request: Request) -> dict:
                 "running": bool(inst),
             })
 
+    # curl 示例只借第一个端点的默认模型当占位：前端接入卡的 chip 会按选中端点
+    # 重写 model。这里不再有"当前后端"，provider 字段留空由前端自己挑默认项。
+    sample_model = listed[0]["model"] if listed else ""
     curl = (
         f'curl {v1}/chat/completions -H "Content-Type: application/json" '
-        f'-d \'{{"model": "{model}", "messages": [{{"role": "user", '
+        f'-d \'{{"model": "{sample_model}", "messages": [{{"role": "user", '
         f'"content": "你好"}}]}}\''
-    ) if model else ""
+    ) if sample_model else ""
     return {
         "base_url": v1,
         "chat_url": v1 + "/chat/completions",
         "models_url": v1 + "/models",
-        "provider": active, "model": model, "curl": curl,
+        "provider": "", "model": sample_model, "curl": curl,
         "providers": listed,
         "direct": direct,
         "hint": "这个地址不随本地实例端口变化；?provider=<端点名> 或 model 里写"
@@ -529,6 +601,41 @@ async def gateway_chat(request: Request):
                     headers={"X-KnowTune-Upstream": name})
 
 
+class KeysAutosave(BaseModel):
+    on: bool = True
+
+
+@router.post("/api/models/keys/autosave")
+def set_keys_autosave(req: KeysAutosave) -> dict:
+    """在模型页上直接切换「填了就记住」。
+
+    之前这个开关只藏在编辑弹窗的一个勾选框里：取消一次就写下一个 `secrets.off`
+    标记，从此**每次重启都要重填密钥**，而页面上没有任何一处说这件事——用户
+    的体感就是"我的 key 又被删了"。现在做成页面上的一行状态 + 一颗按钮。
+    """
+    from ... import secrets as secrets_mod
+
+    secrets_mod.set_autosave(bool(req.on))
+    if req.on:
+        ok = secrets_mod.save() if secrets_mod.names() else True
+        if ok and secrets_mod.names():
+            logbus.note(f"密钥改为记住到本机：{len(secrets_mod.names())} 个已加密落盘",
+                        source="models")
+        elif not ok:
+            logbus.note(f"记住密钥失败：{secrets_mod.last_error() or '无法写入 data 目录'}",
+                        level="WARNING", source="models")
+    else:
+        logbus.note("密钥改为只保留本次会话：盘上那份已删，重启后需重填",
+                    level="WARNING", source="models")
+    return {
+        "ok": True,
+        "key_autosave": secrets_mod.autosave(),
+        "keys_persisted": secrets_mod.persisted(),
+        "error": secrets_mod.last_error(),
+        "listing": modelcfg.listing(state.cfg),
+    }
+
+
 @router.post("/api/models/keys/clear")
 def clear_all_keys() -> dict:
     """清空所有内存密钥。存在的理由：密钥的唯一归宿是内存，那就得有个
@@ -542,40 +649,3 @@ def clear_all_keys() -> dict:
     logbus.note(f"已清空 {len(gone)} 个内存密钥：{', '.join(gone) or '-'}",
                 level="WARNING", source="models")
     return {"ok": True, "cleared": gone}
-
-
-class ActiveModel(BaseModel):
-    name: str = Field(min_length=1, max_length=64)
-    # 可选：同时指定这个后端用哪个模型。"当前用什么"其实有两段——哪个后端、
-    # 这个后端的哪个模型。以前只切后端，模型停在旧值上，用户改完发现"还是
-    # 原来那个模型"，因为模型藏在后端的配置字段里，不像"当前"的一部分。
-    model: str | None = None
-
-
-@router.post("/api/models/active")
-def set_active_model(req: ActiveModel) -> dict:
-    """切换当前后端（可同时切模型），并立刻落盘。
-
-    "设为当前"是一个明确的决定，不该像滑杆那样停在内存里等用户去点保存——
-    重启一次又变回旧后端，人会以为是 bug。
-    """
-    try:
-        settings_mod.apply(state.cfg, {"generation.provider": req.name})
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    picked = ""
-    if req.model is not None:
-        prov = state.cfg.generation.providers.get(req.name)
-        want = (req.model or "").strip()
-        if prov is not None and want and prov.model != want:
-            prov.model = want
-            picked = want
-            modelcfg.persist(state.cfg)   # 模型名写进 models.yaml，重启后仍是它
-    saved = settings_mod.save_local(state.cfg)
-    state.invalidate_kb_cfg()
-    # 换了后端/模型，上一次的探测结论不再代表"现在这套能不能用"
-    services_mod.invalidate(req.name)
-    logbus.note(
-        f"当前生成后端切换为 {req.name}" + (f" · 模型 {picked}" if picked else ""),
-        source="models")
-    return {"ok": True, "active": req.name, "model": picked, "saved": saved}

@@ -7,91 +7,47 @@ import time
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from ... import logbus, modelcfg, promptcfg
+from ... import logbus, promptcfg
 from ... import roles as roles_mod
 from ..state import state
 
 router = APIRouter()
 
 
-class RolesIn(BaseModel):
-    roles: dict[str, str] = Field(default_factory=dict)
-
-
 @router.get("/api/model-roles")
 def get_model_roles() -> dict:
-    """角色分工的总览：系统默认 + 每个站点的覆盖 + 实际会用到谁。
+    """角色分工总览：每个站点自己配的角色 + 板块级覆盖 + 实际会用到谁。
 
-    界面上必须能看见"实际用了谁"：配了 hunyuan 却因为名字拼错回落到本地后端，
-    用户只会觉得"翻译质量没变"，而看不出配置根本没生效。
+    项目没有全局后端：这里不返回"系统默认后端/系统角色"，界面上也没有
+    对应入口。后端只由站点/板块自己指定，角色解析链到站点为止。
     """
     providers = state.cfg.generation.providers
-    default = state.cfg.generation.provider
     items = []
     from ...frontsite import instcfg
     for spec in instcfg.load_all():
-        # 每个站点真正会用的"当前默认"是**它自己那个库**的有效配置，不是全局那个。
-        try:
-            kb_default = state.effective_cfg(spec.kb_id).generation.provider or default
-        except Exception:
-            kb_default = default
         resolved = roles_mod.plan(
             instance_roles=spec.roles or {},
-            global_roles=state.cfg.generation.roles or {},
             instance_provider=spec.provider or "",
-            default_provider=kb_default,
             known=providers,
         )
         # 每个检索型板块各自解析出的实际后端（板块可钉一个与站点不同的后端）。
         section_resolved = {
             key: roles_mod.plan(
                 instance_roles=spec.roles or {},
-                global_roles=state.cfg.generation.roles or {},
                 instance_provider=spec.provider or "",
-                default_provider=kb_default,
                 known=providers,
                 section_roles=spec.section(key)["roles"],
             )
             for key in ("med", "classic")
         }
         items.append({"name": spec.name, "roles": spec.roles or {},
-                      "kb_default": kb_default, "resolved": resolved,
-                      "section_resolved": section_resolved})
+                      "resolved": resolved, "section_resolved": section_resolved})
     return {
         "roles": list(roles_mod.ROLES),
         "labels": roles_mod.ROLE_LABELS,
         "providers": sorted(providers.keys()),
-        "current": state.cfg.generation.roles or {},
-        "default_provider": default,
         "sites": items,
     }
-
-
-@router.put("/api/model-roles")
-def put_model_roles(req: RolesIn) -> dict:
-    """保存系统级角色分工。
-
-    只接受"还活着"的后端名：指向一个没注册的后端，界面上下拉里根本没有它，
-    留着只会让排查时多绕一圈。
-    """
-    known = state.cfg.generation.providers
-    picked = {}
-    rejected = []
-    for role, name in (req.roles or {}).items():
-        name = (name or "").strip()
-        if not name:
-            continue
-        # 值的形态是「后端::模型」，模型优先级：请求显式指定 > 角色值里的 > 后端默认。
-        base, model = roles_mod.split(name)
-        if base not in known:
-            rejected.append(f"{role}={name}")
-            continue
-        picked[role] = roles_mod.join(base, model)
-    state.cfg.generation.roles = picked
-    result = modelcfg.persist(state.cfg)
-    logbus.note("模型角色已更新：" + (", ".join(f"{k}→{v}" for k, v in picked.items()) or "（全部清空）"),
-                source="models")
-    return {"ok": True, "roles": picked, "rejected": rejected, "path": result["path"]}
 
 
 class TranslateTestIn(BaseModel):
@@ -114,7 +70,8 @@ def translate_test(req: TranslateTestIn) -> dict:
     from ... import lang as lang_mod
 
     providers = state.cfg.generation.providers
-    name = req.provider.strip() or (state.cfg.generation.roles or {}).get("translate", "")
+    # 没有系统级 translate 角色可兜底，必须显式指定。
+    name = req.provider.strip()
     if not name:
         raise HTTPException(400, "还没指定翻译模型：先在「前台站点 → 模型角色」里选一个")
     base, _model = roles_mod.split(name)
@@ -167,7 +124,7 @@ def list_prompts(provider: str = "") -> dict:
     return promptcfg.overview(
         version=state.cfg.prompt_version,
         providers=providers,
-        active=provider or state.cfg.generation.provider,
+        active=provider,
     )
 
 

@@ -111,18 +111,19 @@ du -sh data/models/bge-small-zh-v1.5 data/models/BAAI--bge-reranker-base
 
 ## 3. 配生成后端（三选一）
 
-`config/models.yaml` **已注册四个 `provider`（后端）**，不需要从零新建：
+`config/models.yaml` **已注册三个 `provider`（后端）**，不需要从零新建：
 
 | 名字 | 类型 | 说明 |
 |---|---|---|
-| `siliconflow` | 云端 OpenAI 兼容 | 默认生成后端，`Qwen/Qwen2.5-7B-Instruct`，需密钥 |
+| `siliconflow` | 云端 OpenAI 兼容 | 默认生成后端，`tencent/Hunyuan-MT-7B`，需密钥 |
 | `local` | 本机 llama.cpp | `http://127.0.0.1:8097/v1`，`autostart: true`；`path` 是标准落位 `data/models/Qwen2.5-7B-Instruct-Q4_K_M.gguf`，把 gguf 放进该目录即可。没有这个文件就把 `autostart` 删掉 |
-| `local3b` | 本机 llama.cpp | `http://127.0.0.1:8098/v1`，按需启动；`path` 是 `data/models/Qwen-3b-doctor-weiyi-light-Q4_K_M.gguf`。**独立端点**：一个端点只有一个 `base_url`，挂在 `local` 下点「启动」会把默认端点改写到 8098，预问诊会被连带切走 |
 | `deepseek` | 云端 OpenAI 兼容 | `deepseek-flash`，备用 |
+
+再加本机端点要在「模型」页独立新建。项目没有全局固定后端：每个站点（及板块）在自己的模型角色里选后端，删掉某个端点只会让引用它的角色失效，不会把别的功能带走。步骤见 [`tools/llama/README.md`](../tools/llama/README.md)。
 
 **密钥在界面填，不写进 `models.yaml`**：后台「模型」页 → 后端卡片 ✎ → 填 API Key → 保存。密文落 `data/secrets.json`，Windows 用 DPAPI 加密、绑当前账户与本机，拷走解不开；换账户 / 换机器需重填（§10）。服务器场景可在 `models.yaml` 后端下写 `api_key_env: <变量名>` 让程序读环境变量，优先级：本次填写 > 已保存密文 > 环境变量。
 
-`config/local.yaml` 里 `generation.provider: siliconflow` 是当前选中项；要换后端改这里或在界面切换。
+**没有全局固定后端**：`config/models.yaml` 只登记"有哪些后端"（`siliconflow` / `local` / `deepseek`）。具体用谁由每个站点（及板块）在「前台站点 → 模型角色」里指定，后台问答与直连测试在请求里带 provider。再没有"当前选中项"这一个开关。
 
 **完全不配密钥也能起服务**，但只能检索和返回引用、生成阶段没有答案——前台第一问会「只有编号没有正文」。判据见 §9、§10。
 
@@ -224,10 +225,10 @@ knowtune serve --port 8013
 | `classic` 古籍问答 | 独立库 RAG（或按标题分栏） | 同上，与 `med` 完全独立 |
 | `pv` 预问诊 | 纯对话：一段系统提示词 + 模型，不检索知识库、不走主问答的检索 / 精排 | 显示名、开关；「预问诊参数」面板改 `config/previsit.yaml` |
 
-- **模型按板块配**：`sections.<key>.roles.{translate,generate}`，留空跟随站点级 roles。解析链（`roles.py:81-111`）：**板块级 roles → 站点级 roles → 系统级 roles → 实例 `provider` → 默认 `provider`**，每级用已知后端名校验、不合法继续下退。当前 `sections.*.roles` 均未配置，`med` 与 `classic` 解析结果相同——能力已具备，配置为空。
-- **提示词按板块配**：解析链以 `promptcfg.py:337-344` 代码为准：**`by_provider`（后端）> `by_scope`（板块）> `default`（角色默认）> 内置（builtin）**。仅 `generate` / `translate` 支持 by_provider 与 by_scope；`copy_ug` / `copy_zh` 只读角色级。三处注释（`promptcfg.py` 头注释、`save()` docstring、`config/prompts.yaml` 头注释）曾与代码口径不一致，**本次重写已统一**；历史记录见 [ARCHITECTURE.md](ARCHITECTURE.md) §12。
+- **模型按板块配**：`sections.<key>.roles.{translate,generate}`，留空跟随站点级 roles。解析链（`roles.py`）：**板块级 roles → 站点级 roles → 站点 `provider`**，每级用已知后端名校验、不合法继续下退；没有系统级 roles / 默认 provider 这一层。当前 `sections.*.roles` 只覆盖了 `translate`，`generate` 跟随站点。
+- **提示词按板块配**：解析链以 `promptcfg.py` 代码为准：**`by_provider`（后端）> `by_scope`（板块）> `default`（角色默认）> 内置（builtin）**。只有 `generate` / `translate` 两个角色参与；界面文案不在这条链里。三处注释（`promptcfg.py` 头注释、`save()` docstring、`config/prompts.yaml` 头注释）曾与代码口径不一致，**本次重写已统一**；历史记录见 [ARCHITECTURE.md](ARCHITECTURE.md) §12。
 - **预问诊参数**：`config/previsit.yaml`（界面文案、模型参数、**一段** `prompts.chat`）+ `previsit.overrides.yaml`（运行时差异项），后台「前台站点 → 预问诊参数」写回。槽位、危险词、分诊规则、追问知识库（`previsit_kb.yaml`）、图谱库（`kg.db`）与病历/摘要生成已于 2026-11-07 全部删除——它现在只是一层壳：提示词 + 模型，每轮一次调用，把完整对话历史交过去。模型一律跟随 `/v1` 固定入口，**不在这些文件里钉后端 / 模型名**，也不写密钥。要缩短等待只能改模型侧（换更小/更快的本地模型）或调 `max_tokens`。
-- **界面文案已可配**：欢迎语、免责声明、示例问题、库名等走可配提示词 `copy_ug` / `copy_zh`，不再硬编码。
+- **界面文案固定内置**：标题、欢迎语、免责声明、示例问题等由 `instcfg.default_copy(lang)` 按语言给出出厂值，实例字段写过就沿用、空的补齐；提示词配置不再管界面文案。
 
 ---
 

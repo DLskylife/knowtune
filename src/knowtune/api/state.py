@@ -100,7 +100,6 @@ class AppState:
         # known=[]、一颗红点——用户以为没保存上，反复重填（2026-11-06 实测）。
         gen = json.dumps(
             {
-                "provider": self.cfg.generation.provider,
                 "backends": {
                     n: [p.base_url, p.model, p.kind]
                     for n, p in self.cfg.generation.providers.items()

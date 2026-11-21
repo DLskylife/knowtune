@@ -4,7 +4,7 @@
 > **本文只描述现行实现；历史决策、实现期踩坑与变更日志见附录 A「实现期记录（历史归档）」。**
 > 文档定位：现行架构、数据模型、检索/生成链、关键决策与实测数据、需求对照、代码已知不一致、历史归档。操作与部署步骤不在这里，见 [RUNBOOK.md](RUNBOOK.md)。
 
-术语约定（英文键名首次出现附中文说明）：主服务 / 后台管理台（`8013`，README 示例写 `8000`）；前台问答站（`8800`）；知识库 kb（维医 #2、临床药理 #3、古籍 #4）；板块 section（`med` 维医问答、`classic` 古籍问答、`pv` 预问诊）；后端 provider（`siliconflow` / `local` / `deepseek`）；角色 role（`translate` / `generate` / `copy_ug` / `copy_zh`）；精排 rerank、拒答 refusal、支撑度 support、降级标记 degraded、标定 calibration。
+术语约定（英文键名首次出现附中文说明）：主服务 / 后台管理台（`8013`，README 示例写 `8000`）；前台问答站（`8800`）；知识库 kb（维医 #2、临床药理 #3、古籍 #4）；板块 section（`med` 维医问答、`classic` 古籍问答、`pv` 预问诊）；后端 provider（`siliconflow` / `local` / `deepseek`）；角色 role（`translate` / `generate`）；精排 rerank、拒答 refusal、支撑度 support、降级标记 degraded、标定 calibration。
 
 ---
 
@@ -161,14 +161,15 @@ src/knowtune/            主项目
   roles.py               后端/角色解析
   promptcfg.py           提示词覆盖层（provider / scope）
   modelcfg.py / settings.py / services.py / localmodels.py
+  dirpick.py             系统原生「选择文件夹」窗口（Win IFileOpenDialog / mac osascript / Linux zenity）
   ingest/                loader / cleaner / chunker / pipeline
   index/                 embedder / vectors / sparse
   retrieve/              engine（双路召回、融合、拒答判定）/ rerank（精排 + MMR）
   generate/              prompt / llm / cite / evidence / support / think
   api/app.py             FastAPI 装配入口（生命周期 / 中间件 / 注册路由），约 270 行
-  api/routes/           94 个端点按资源域拆成 8 个模块；/v1 网关在 models.py
+  api/routes/           88 个端点按资源域拆成 8 个模块；/v1 网关在 models.py
   api/common.py / state.py / coverage.py  公共层：分片上传 / AppState / 引用覆盖率
-  api/static/            后台前端：index.html / app.js / style.css，构建号 0.9.71
+  api/static/            后台前端：index.html / app.js / style.css，构建号 0.9.97
   frontsite/             instcfg / runner / site
     static/              前台前端：index.html / app.js / style.css
   previsit/app.py        主项目装配层（注入进程内检索器、LLM 适配器、建 FastAPI app）
@@ -241,7 +242,9 @@ scripts/                  fake_llm.py / get_llama.py / shot_models.py
 
 后端注册表在 `config/models.yaml`，**密钥不写进它**。密钥由管理员在界面填写，存 `data/secrets.json`，Windows DPAPI 密文，**绑当前账户 + 本机**——换账户、换机器解不开，文件拷出去只是废数据。无系统级加密的平台直接拒绝落盘并如实报错，不拿自造的「加密」糊弄。
 
-- 默认「填了就存」；显式取消勾选「保存到本机」，意图记进空文件 `secrets.off`，重启后仍生效；`api_key_env` 指向的环境变量是优先级最低的第三来源。
+- 默认「填了就存」；显式取消勾选「保存到本机」，意图记进空文件 `secrets.off`，重启后仍生效；`api_key_env` 指向的环境变量是优先级最低的第三来源。**这个"关掉"必须在界面上看得见**：模型页顶部有一行状态（`key_autosave === false` → 黄色提醒 + 「记住到本机」），否则一条只在弹窗里出现过的选择会变成"每次重启 key 都没了"却查不到原因。
+- `POST /api/models/keys/autosave {on}` 在模型页直接切换这条策略，打开时立刻把内存里的密钥写盘（不是等下一次保存后端）；启动时 `attach()` 读到 `secrets.off` 会写一条 WARNING 日志。
+- 删除后端时密钥一起清：`drop()` 之后必须 `autosync()`——只清内存不清盘，删除的端点重启后被读回来就是"孤儿密钥"。启动时也会扫一遍不在注册表里的键名并清掉。
 - 模型页「清空密钥」→ `POST /api/models/keys/clear`，内存与文件一起清。
 - 键是**后端名**不是模型名：同一个后端换模型不该让密钥失效。
 - `_inline_key` 是 pydantic `PrivateAttr`，`model_dump()` / YAML 回写都拿不到它，密钥绝不进序列化结果。
@@ -468,10 +471,10 @@ SQLite FTS5 的默认 `unicode61` 对中文不分词，整句会被当成一个 
 
 ## 6. 会话与多轮（F4）
 
-- 历史窗口默认 **5 轮**（`chat.history_turns`），按 `history_token_budget=1500` 截断：从最旧轮开始**整轮丢弃**，不切半句。`chatctx.py` 负责占用核算，不依赖 torch。
-- 会话绑定 `kb_id`，**跨知识库提问不支持**（明确的边界，不做隐式全局检索）。板块切换会换会话、换标题、换绑定库，不是只换皮肤。
+- 历史窗口默认 **5 轮**（`chat.history_turns`），按 `history_token_budget=1500` 截断：从最旧轮开始**整轮丢弃**，不切半句。`chatctx.py` 负责占用核算与两道闸，不依赖 torch。这两项是**会话配置**，前后台共用：前台站点从浏览器 localStorage 带 history，后台问答从请求带 history，裁剪规则只有一份。
+- **会话历史不归后台**：后台不建会话、不落 `session/message` 表、没有「会话」栏目和 `/api/sessions` CRUD。后台聊天页这一页的对话只活在内存，刷新即清空；要长期接着聊用前台站点，它有浏览器 localStorage 会话列表（按板块分开、可删）。前台仍会把问答写进 SQLite 仅供反馈 `message_id` 使用。
+- 会话归属知识库，**跨知识库提问不支持**（明确的边界，不做隐式全局检索）。板块切换会换会话、换绑定库，不是只换皮肤。
 - 指代消解（F4.3）**未实现**：「它 / 这个」仍靠模型自己扛。设计上曾规划「规则 + 上一轮用户问题拼接」兜底、LLM 改写作为开关（仅对 `len(query) < 10` 且含代词触发），当前未落地（见 §13）。
-- 多会话管理已落地：`GET/PATCH/DELETE /api/sessions`、消息列表、前台侧栏历史可删（两段确认）、后台「会话」栏目单删 + 批量删除（`POST /api/sessions/bulk-delete`）。
 
 ---
 
@@ -573,9 +576,9 @@ rag.ask
 
 **切语言 = 翻译同一句话，不是让模型重答一遍**（2026-11-07 八修）。七修解决了「开场白谁来写」，但已有回答只有生成时的那个语言：中文问出来的答复，患者切到维语时没有维语版本可用，界面上就是中文正文 + 「中文作答」标记（用户原话「这两个切换每次内容不统一，我让你参照维医问答的方式，实现翻译」）。现在的口径与 `/api/ask` 完全一致——**答案存两份**：`turn` 加 `content_ug` 列（维语版本），`content_int` 始终是中文那份，`content` 是生成时的正文。中文界面问出来的回答切到维语时，前端 `pvLocalize()` 调 `POST /api/previsit/localize`，后端`ChatEngine.localize()` 只挑 **assistant 且缺 `content_ug`** 的条目（患者自己的话照原样显示），并发翻（最多 4 路、单次最多 6 条），译好写回库——**同一句话只翻一次**，第二次切过来零请求。翻译期间沿用 `t.translating`（「正在译为维吾尔语…」），气泡先显示原文 + 语言标记，译好标记自动消失；译不出来就维持原文，不报错、不拦输入。前端 `pvText()` 按 `uiLang` 挑 `dataset.ug` / `dataset.int`，`pvRepaint()` 的标记规则改成「有目标语言版本就不挂」，与答案区一致。回归见`tests/test_previsit_lang.py::test_localize_fills_ug_for_chinese_answers`（含「只翻一次」「不动患者原话」「没翻译客户端时不抛错」三条）与`scripts/check_pv_hello.py`（实测请求序列只有 `start` + 一次 `localize`）。
 
-### 9.2 角色解析链（`roles.py:81-111`）
+### 9.2 角色解析链（`roles.py`）
 
-**板块级 roles → 站点级 roles → 系统级 roles → 实例 provider → 默认 provider**，每级用已知后端名校验，不合法继续下退。当前 `sections.*.roles` 均未配置，所以 `/api/info` 里 `section_roles.med` 与 `.classic` 解析结果相同——**能力已具备，配置为空**。
+**板块级 roles → 站点级 roles → 站点 provider**，每级用已知后端名校验，不合法继续下退。**没有系统级 roles / 默认 provider 这一层**：谁都不配就是空，由调用方明确报错，不会静默串到某个后端。当前 `sections.*.roles` 只覆盖了 `translate`，`generate` 跟随站点。
 
 当前解析结果：`translate = siliconflow::tencent/Hunyuan-MT-7B`，`generate = siliconflow`（后端默认模型 `Qwen/Qwen2.5-7B-Instruct`）。
 
@@ -591,10 +594,10 @@ effective_fields(): 逐字段
   b  = builtin                           ← 兜底
 ```
 
-- 仅 `generate` / `translate` 两个角色支持 `by_provider` 与 `by_scope`；`copy_ug` / `copy_zh` **只读角色级**（代码里直接把这两层置空——文案与模型无关，不该「换个后端文案就变」）。
+- 仅 `generate` / `translate` 两个角色参与分层；界面文案不是提示词角色，不在这条链里。
 - 内置默认（`config/prompts/*.md` 与代码常量）只读，后台只写 `prompts.yaml`，「恢复默认」= 删覆盖项。解析不抛异常：YAML 写坏、字段类型不对、后端名不存在，一律往下退一层，最差退到内置兜底。
-- **当前 `config/prompts.yaml` 实配**：`translate.by_provider.siliconflow.system`（一句翻译器设定）、`copy_zh.default.samples`（三条示例问题）。`overridden_scopes` 为空，即当前没配板块级提示词覆盖。
-- **界面文案（欢迎语、免责声明、示例问题、库名等）已改为可配提示词 `copy_ug` / `copy_zh`，不再硬编码。**
+- **当前 `config/prompts.yaml` 实配**：`translate.by_provider.siliconflow.system`（一句翻译器设定）。`overridden_scopes` 为空，即当前没配板块级提示词覆盖。
+- **界面文案固定内置**（标题、欢迎语、免责声明、示例问题等）：`instcfg.default_copy(lang)` 给出两套语言的出厂值，实例字段写过就沿用、空的补齐；提示词配置与界面文案已解耦。
 
 ### 9.4 三板块（现行配置）
 
@@ -619,13 +622,13 @@ effective_fields(): 逐字段
 以下为现行后台接口，按域归类（完整逐文件路由见 [PROJECT_MAP.md](PROJECT_MAP.md)）。
 
 - **状态 / 看板**：`/api/status`、`/api/dashboard`
-- **模型服务**：`/api/models`(GET/PUT/DELETE)、`/api/models/local/scan|status`、`/api/models/{name}/start|stop`、`/api/models/active`、`/api/models/keys/clear`、`/api/services/probe|probe-url`、`/api/gateway`、`/v1/models`、`/v1/chat/completions`、`/v1/completions`
-- **设置**：`/api/settings`(GET/PATCH/save/reset/reload)、`/api/model-roles`、`/api/prompts*`(GET/PUT/reset/history/rollback/preview)
+- **模型服务**：`/api/models`(GET/PUT/DELETE)、`/api/models/local/scan|status|pick-dir|attach`、`/api/models/{name}/start|stop`、`/api/models/keys/clear|autosave`、`/api/services/probe|probe-url`、`/api/gateway`、`/v1/models`、`/v1/chat/completions`、`/v1/completions`
+- **设置**：`/api/settings`(GET/PATCH/save/reset/reload，**只走接口与 `config/*.yaml`**：全局参数抽屉已退役，界面上的参数入口只有知识库的 `/api/kb/{id}/config`)、`/api/model-roles`、`/api/prompts*`(GET/PUT/reset/history/rollback/preview)
 - **知识库**：`/api/kb*`、`/api/kb/{id}/detail|config|docs|ensure`、`/api/docs/move`
 - **导入**：`/api/import/path|text|url|task|tasks|upload`、`/api/upload/*`、`/api/clean/*`、`/api/doc/{id}/source|reindex|preview|coverage|move`
 - **分块**：`/api/chunks`、`/api/chunk/{id}`(GET/PATCH/DELETE/split/merge)
 - **检索 / 问答**：`/api/search/debug`、`/api/search/debug/support`、`/api/ask`、`/api/translate-test`
-- **会话 / 日志**：`/api/sessions*`、`/api/session/current`、`/api/logs`、`/api/logs/system`、`/api/feedback`
+- **日志 / 反馈**：`/api/logs`、`/api/logs/system`、`/api/feedback`（会话路由已删，历史归前端）
 - **实例 / 预问诊**：`/api/instances*`、`/api/previsit/config`(GET/PUT/reset)
 - **前台**：`/`、`/app.js`、`/style.css`、`/api/info`、`/api/ask`、`/api/feedback`、`/previsit/api/previsit/*`
 
@@ -649,7 +652,7 @@ effective_fields(): 逐字段
 | 本地 7B 一次完整回答 **222 秒** | CPU 推理；SSE 已有，但检索完到首 token 仍静默 | 主项目 |
 | 嵌入编码约 **21 chunk/s** | 本机 CPU | 主项目 |
 
-**采集时资产（2026-11-07）**：`data/library.db` 3 库 / 32 文档全部 `ready` / 28020 chunk / 28020 条 512 维向量（§3.1）。嵌入 `BAAI/bge-small-zh-v1.5`（512 维，本地 `data/models/bge-small-zh-v1.5`，约 92 MB，目录名**无** `BAAI--` 前缀）；精排 `BAAI/bge-reranker-base`（本地 `data/models/BAAI--bge-reranker-base`，约 1.1 GB，目录名**有** `BAAI--` 前缀）。后端：`siliconflow`（当前激活，`Qwen/Qwen2.5-7B-Instruct`）、`local`（`127.0.0.1:8097`，需自己的 .gguf）、`deepseek`（`deepseek-flash`）。
+**采集时资产（2026-11-07）**：`data/library.db` 3 库 / 32 文档全部 `ready` / 28020 chunk / 28020 条 512 维向量（§3.1）。嵌入 `BAAI/bge-small-zh-v1.5`（512 维，本地 `data/models/bge-small-zh-v1.5`，约 92 MB，目录名**无** `BAAI--` 前缀）；精排 `BAAI/bge-reranker-base`（本地 `data/models/BAAI--bge-reranker-base`，约 1.1 GB，目录名**有** `BAAI--` 前缀）。后端注册表：`siliconflow`（`tencent/Hunyuan-MT-7B`）、`local`（`127.0.0.1:8097`，需自己的 .gguf）、`deepseek`（`deepseek-flash`）。**没有全局固定后端**：用谁由每个站点（及板块）的 roles/provider 或请求显式指定。
 
 ---
 
@@ -734,7 +737,7 @@ effective_fields(): 逐字段
 
 | 编号 | 状态 | 落地形式 |
 |---|---|---|
-| F4.1 多会话管理 | ✅ | `/api/sessions` CRUD + 消息列表；前台侧栏历史可删、后台单删 + 批量删除 |
+| F4.1 多会话管理 | ✅ | 前台浏览器 localStorage：会话列表、按板块分开、可删；后台无会话存储（历史由请求带 history），不落库 |
 | F4.2 多轮对话 | ✅ | 最近 5 轮进 prompt，按 token 预算整轮丢弃（§6） |
 | F4.3 对话内查询改写 | ⬜ | 未实现（「它/这个」仍靠模型自己扛，P2） |
 | F4.4 跨会话历史检索 | ⬜ | 未实现（P2） |
@@ -781,7 +784,7 @@ effective_fields(): 逐字段
   - 引用按名次取：`config/default.yaml:67` 的 `rerank.top_k: 5` 是**可配置**的条数，`retrieve/engine.py:380` 取 `candidates[:top_k]`；缺的是按精排分数设下限，当前前 5 名无论多低分都进上下文，只受 token 预算截断。改 `top_k` 能调条数，改不出「低分不送」。
   - 支撑度是主题级判据：`generate/support.py` 的窗口最大余弦对「换一批不相关文档」AUC 0.992、阈值 0.665、两侧误判 0.0435（69 样本），对**同块事实篡改**（`300ml→700ml`）只有 0.514。`anchors_of()` 刻意不收裸数字（高频、无区分度），靠数字+单位、型号、版本号等锚点兜到约 84%。要补数值一致性校验只能做弱提示：引用编号、日期、单位换算、用户问题里自带的数字都会误报。
   - 拒答是第一道筛子：kb2 的 52 组样本误拒 / 漏拒均为 0，这个满分来自样本构造，有乐观偏差；拦截主力在生成后的支撑度与 `generate/cite.py` 的引用校验。
-- **B 资产与标定边界**：现行生效文件只有 `data/calibration/kb_2.json`（`0.581` / AUC 1.0 / 52 组 `real-questions` / 2026-11-06，支撑度 `0.665` / 两侧误判 0.0435 / 69 样本），kb3、kb4 用出厂 `0.35`。`config.py:495-510` 的四个生效条件里，**模型指纹等于 `embedding.model@dim`** 最易被忽略——换嵌入模型或维度会让标定静默失效并退回出厂值，界面只提示「本库尚未标定」。旧 `data/refusal_calibration.json`（全局格式、`reliable:false`）盘上可能还在，但代码读的是 `data/calibration/kb_<id>.json`，**盘上有文件 ≠ 生效**。融合权重（两套探针 × 两个种子 × n≈300）与标定都只在维医语料测过，换语料后 BM25 与向量的强弱关系可能反转。`model-eval/calibrate.py` 已随评测台迁出，本仓库只读结果。
+- **B 资产与标定边界**：现行生效文件只有 `data/calibration/kb_2.json`（`0.581` / AUC 1.0 / 52 组 `real-questions` / 2026-11-06，支撑度 `0.665` / 两侧误判 0.0435 / 69 样本），kb3、kb4 用出厂 `0.35`。`config.py:495-510` 的四个生效条件里，**模型指纹等于 `embedding.model@dim`** 最易被忽略——换嵌入模型或维度会让标定静默失效并退回出厂值，界面只提示「本库尚未标定」。旧 `data/refusal_calibration.json`（全局格式、`reliable:false`）盘上可能还在，但代码读的是 `data/calibration/kb_<id>.json`，**盘上有文件 ≠ 生效**。融合权重（两套探针 × 两个种子 × n≈300）与标定都只在维医语料测过，换语料后 BM25 与向量的强弱关系可能反转。`model-eval/calibrate.py` 已随评测台迁出，本仓库只读结果。**2026-11-21 语料构成已变**：kb2 从 26 篇 / 322 块扩到 46 篇 / 507 块（新增 20 篇现代医学常见病参考，《默沙东诊疗手册》大众版），`kb_2.json` 的 `0.581` 是旧分布上标的，文件没重跑——阈值仍按旧分布生效，接上生成后端后应以新语料重标一次再采信误拒 / 漏拒数字。
 - **C 部署与性能取舍**：精排 `10 × 384` 在 CPU 上 3.07 s（§4.4、§11）；减候选掉 top1（8 条时 0.727 → 0.682），缩截断会让答案落在块中段时排不出（`10×128` 分数虽高但只看标题首段），所以调这两个参数消除不了延迟。单机单用户（SQLite + 进程内模型，无并发控制），本地 7B 完整回答 222 秒、嵌入编码约 21 chunk/s；SSE 五类事件里 `progress` 已覆盖检索阶段（§5.5），生成侧首 token 仍受模型速度限制。后台无入站鉴权、默认只监听 `127.0.0.1`，是既定取舍，要上公网必须先补鉴权层。`data/` 与 `tools/llama/` 被 `.gitignore` 排除，98 个受版本控制文件，clone 后须自行下载模型、初始化数据库、绑定库 id。GitHub git 端点在此网络返回 502，推送走 `api.github.com` 的 Git Data API。
 
 **两组延迟数字不是同一组实验**：3.07 s 来自 `model-eval/scan_rerank.py` 参数扫描（维医库 22 道口语题、现行 `10 × 384`、计时口径是精排这一步），19ms → 7.5s 与「候选池 12 条反跌 75%」来自另一组 R@5 收益对照实验（端到端检索延迟、更早的候选配置）。逐项对照表在 [README.md](../README.md)「两组延迟数字为什么不一样」，本节不重复。现行端到端延迟以响应里的 `timings_ms.rerank_ms` 为准。

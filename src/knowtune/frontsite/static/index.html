@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
 <title>ئۇيغۇر تېبابىتى بىلىم سوئال-جاۋاب سىستېمىسى</title>
-<link rel="stylesheet" href="/style.css?v=1.7.37">
+<link rel="stylesheet" href="/style.css?v=1.7.39">
 <link rel="icon" href="data:,">
 <script>
   /*
@@ -15,7 +15,7 @@
    * 核对 app.js 报上来的编号，对不上就强制换一次。只换一次（sessionStorage 记
    * 一笔），免得极端情况下刷成死循环。
    */
-  window.SITE_REQ_BUILD = "1.7.37";
+  window.SITE_REQ_BUILD = "1.7.39";
   addEventListener("load", function () {
     if (window.SITE_BUILD === window.SITE_REQ_BUILD) return;
     if (sessionStorage.getItem("knowtune.site.reloaded")) return;
@@ -106,6 +106,16 @@
           <!-- 只陈述事实：资料是什么语言、答案是什么语言。它不是按钮，
                放这里是告诉用户"为什么答案有时来得慢"。 -->
           <span class="tool" id="toolChip"></span>
+          <!-- 维语输入：中文电脑没有维吾尔语键盘，患者端也可能只有触屏。
+               点开就是一张字母表 + 拉丁转写——不装输入法也能提一个维语问题。 -->
+          <button class="kb-btn" id="btnKb" type="button" aria-expanded="false"
+                  aria-controls="kb">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="2.5" y="6" width="19" height="12" rx="3"/>
+              <path d="M6.5 10h.01M10 10h.01M13.5 10h.01M17 10h.01M7 14h10"/>
+            </svg>
+            <span id="kbBtnLabel"></span>
+          </button>
           <span class="grow"></span>
           <button class="send" id="btnSend" type="button" disabled>
             <svg class="ico-send" viewBox="0 0 24 24" aria-hidden="true">
@@ -117,11 +127,35 @@
             <span class="sr-only" id="sendLabel"></span>
           </button>
         </div>
+
+        <!-- 维语输入面板：上半是拉丁转写（会打拼音就会用），下半是字母表
+             （触屏、或者完全不会拉丁转写时用）。面板浮在输入框上方，不挤压
+             聊天区——展开时输入框不跳，用户的眼睛不用重新找位置。 -->
+        <div class="kb" id="kb" hidden>
+          <div class="kb-head">
+            <b id="kbTitle"></b>
+            <span class="grow"></span>
+            <button class="kb-x" id="kbClose" type="button" aria-label="close">×</button>
+          </div>
+          <p class="kb-tip" id="kbTip" dir="auto"></p>
+          <div class="kb-lat">
+            <input id="kbLat" class="kb-input" type="text" dir="ltr"
+                   autocomplete="off" spellcheck="false">
+            <span class="kb-prev" id="kbPrev" dir="rtl"></span>
+            <button class="kb-ins" id="kbIns" type="button"></button>
+          </div>
+          <div class="kb-keys" id="kbKeys"></div>
+          <div class="kb-foot">
+            <button class="kb-key kb-key-extra" type="button" data-ins="ئ">ئ</button>
+            <button class="kb-key kb-space" id="kbSpace" type="button" data-ins=" "></button>
+            <button class="kb-key kb-key-extra" id="kbDel" type="button">⌫</button>
+          </div>
+        </div>
       </div>
       <p class="disclaimer" id="disclaimer" dir="auto"></p>
     </footer>
   </div>
 </div>
-<script src="/app.js?v=1.7.37"></script>
+<script src="/app.js?v=1.7.39"></script>
 </body>
 </html>

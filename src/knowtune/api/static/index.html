@@ -4,12 +4,12 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>KnowTune · 本地知识库</title>
-  <link rel="stylesheet" href="/static/style.css?v=0.9.71">
+  <link rel="stylesheet" href="/static/style.css?v=0.9.97">
   <script>
     /* 同前台那份自检：页面是新的、app.js 被 WebView 留成旧的，就会出现
        "按钮在、点了没反应"（删库那次就这么来的）。编号对不上就强制换一次，
        只换一次，避免死循环。 */
-    window.ADMIN_REQ_BUILD = "0.9.71";
+    window.ADMIN_REQ_BUILD = "0.9.97";
     addEventListener("load", function () {
       if (window.ADMIN_BUILD === window.ADMIN_REQ_BUILD) return;
       if (sessionStorage.getItem("knowtune.admin.reloaded")) return;
@@ -94,34 +94,6 @@
           <div class="doc-list" id="docList"></div>
         </section>
       </div>
-
-      <div class="sidebar-foot">
-        <div class="foot-line">
-          <i class="dot" id="embedDot"></i>
-          <b id="statEmbed">-</b>
-          <span class="sep">·</span>
-          <b id="statChunks">-</b>
-          <span class="k">chunk</span>
-        </div>
-        <div class="foot-line">
-          <span class="k">精排</span>
-          <b class="ell" id="statRerank">-</b>
-        </div>
-        <div class="foot-line" id="genLine">
-          <i class="dot" id="genDot"></i>
-          <span class="k">生成</span>
-          <b class="ell" id="statGen">-</b>
-        </div>
-        <button class="foot-btn" id="btnSettingsFoot">
-          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"
-            stroke-linecap="round" aria-hidden="true">
-            <path d="M2.4 5.2h11.2M2.4 10.8h11.2"/>
-            <circle class="fb-knob" cx="6.2" cy="5.2" r="2"/>
-            <circle class="fb-knob" cx="9.8" cy="10.8" r="2"/>
-          </svg>
-          <span>全局检索参数</span>
-        </button>
-      </div>
     </aside>
 
     <main class="main">
@@ -141,6 +113,7 @@
       </header>
 
       <div class="cfg-pop" id="cfgPop" hidden>
+        <div class="cfg-pop-body">
         <div class="cfg-sec">
           <div class="cfg-label">挂载知识库<span class="cfg-note" id="kbMountNote"></span></div>
           <select id="kbSel"></select>
@@ -156,25 +129,27 @@
           </div>
           <div class="cfg-hint" id="noKbHint" hidden></div>
         </div>
+
         <div class="cfg-sec">
           <div class="cfg-label">生成后端</div>
           <select id="providerSel" title="生成后端"></select>
           <div class="cfg-hint" id="providerHint"></div>
-          <div class="cfg-row">
+          <div class="cfg-row cfg-row-gen">
             <label class="field">
               <span class="field-label">生成模型</span>
               <select id="genModelSel" title="只覆盖这一问；选中的模型自带它的后端"></select>
               <input id="genModelCustom" class="adv-input" hidden placeholder="手打模型 id，如 qwen-plus"
                 autocomplete="off" spellcheck="false">
             </label>
-            <button class="mini" id="btnTrTest" style="align-self:flex-end"
+            <button class="mini" id="btnTrTest"
               title="单独跑一次翻译，不碰知识库。翻译挂了在问答里只表现为答非所问">测翻译</button>
           </div>
           <div class="cfg-hint" id="trTestOut" hidden></div>
         </div>
+
         <div class="cfg-sec">
           <div class="cfg-label">本次提问的检索参数</div>
-          <div class="cfg-row">
+          <div class="cfg-row cfg-row-topk">
             <label class="field">
               <span class="field-label">引用条数</span>
               <select id="topKSel">
@@ -212,17 +187,19 @@
                 <span class="field-label">最大输出</span>
                 <input type="number" id="optMaxTok" min="64" max="8192" step="64" placeholder="跟随">
               </label>
-              <label class="toggle" title="关掉则等服务端生成完一次性返回">
-                <input type="checkbox" id="optStream" checked>
-                <span class="sw" aria-hidden="true"></span>
-                <span class="toggle-label">流式</span>
-              </label>
             </div>
             <div class="cfg-row">
               <label class="field">
                 <span class="field-label">带历史轮数</span>
                 <input type="number" id="optTurns" min="0" max="20" step="1" placeholder="跟随">
               </label>
+              <div class="cfg-switches">
+                <label class="toggle" title="关掉则等服务端生成完一次性返回">
+                  <input type="checkbox" id="optStream" checked>
+                  <span class="sw" aria-hidden="true"></span>
+                  <span class="toggle-label">流式</span>
+                </label>
+              </div>
             </div>
           </div>
           <div class="cfg-sec">
@@ -241,7 +218,7 @@
                 <input type="number" id="optWdense" min="0" max="1" step="0.05" placeholder="跟随">
               </label>
             </div>
-            <div class="cfg-row">
+            <div class="cfg-row cfg-row-mm">
               <label class="field">
                 <span class="field-label">候选池</span>
                 <input type="number" id="optPool" min="5" max="100" step="5" placeholder="跟随">
@@ -261,14 +238,15 @@
               </label>
             </div>
           </div>
-          <div class="cfg-row cfg-foot">
+          <div class="cfg-foot cfg-foot-adv">
             <button class="mini" id="btnAdvReset">重置为跟随配置</button>
           </div>
         </details>
 
+        </div>
+
         <div class="cfg-foot">
           <button class="mini" id="btnKbConfigQuick">库参数</button>
-          <button class="mini" id="btnSettings">全局参数</button>
           <button class="mini" data-goto="models">模型管理</button>
         </div>
       </div>
@@ -294,7 +272,7 @@
             <p>先导入文档，再直接提问。每个回答都标注来源编号，点编号可回查原文片段。</p>
             <div class="es-keys">
               <span><kbd>Enter</kbd> 发送</span>
-              <span><kbd>Alt</kbd>+<kbd>,</kbd> 全局参数</span>
+              <span><kbd>Alt</kbd>+<kbd>,</kbd> 对话配置</span>
               <span><kbd>Esc</kbd> 关闭面板</span>
             </div>
           </div>
@@ -339,29 +317,11 @@
 
   <div class="scrim" id="scrim" hidden></div>
 
-  <aside class="drawer" id="drawer" hidden aria-label="检索参数">
-    <header class="drawer-head">
-      <div>
-        <b class="drawer-title">全局检索参数</b>
-        <div class="drawer-sub" id="drawerSub">没有单独设置的知识库都跟随这一套</div>
-      </div>
-      <button class="icon-btn lg" id="drawerClose" title="关闭（Esc）" aria-label="关闭">×</button>
-    </header>
-    <div class="drawer-body" id="drawerBody">
-      <p class="hint">加载中…</p>
-    </div>
-    <footer class="drawer-foot">
-      <span class="dirty-note" id="dirtyNote"></span>
-      <div class="foot-actions">
-        <button class="ghost-btn" id="btnCfgReload" title="丢弃运行时改动，按磁盘上的配置重读">重读</button>
-        <button class="ghost-btn" id="btnCfgReset" title="恢复出厂值（不会写盘）">恢复默认</button>
-        <button class="primary-btn" id="btnCfgSave" title="写入 config/local.yaml，重启后依然生效">保存</button>
-      </div>
-    </footer>
-  </aside>
-
-  <!-- 提示词编辑器。跟「全局检索参数」抽屉并列但完全独立：那个抽屉绑着一套
-       dirty/重读/恢复出厂的逻辑，提示词混进去会让"保存到底存了什么"变得说不清。 -->
+  <!-- 提示词编辑器。原先旁边还挂着一个「全局检索参数」抽屉，已经退役：
+       每个知识库现在持有完整一套参数（见 kbconfig.py），全局那一套只剩
+       「建库时的初值」，界面上再开一列全局值只会让人以为改它能影响所有库。
+       想改初值请直接改 config/default.yaml，或 PATCH /api/settings。
+       提示词抽屉自己带一套 dirty/历史/预览逻辑，跟它无关。 -->
   <aside class="drawer prompt-drawer" id="promptDrawer" hidden aria-label="提示词配置">
     <header class="drawer-head">
       <div>
@@ -395,6 +355,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=0.9.71"></script>
+  <script src="/static/app.js?v=0.9.97"></script>
 </body>
 </html>

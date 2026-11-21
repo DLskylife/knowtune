@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 import yaml
 from pydantic import BaseModel, Field, PrivateAttr
@@ -87,7 +87,7 @@ class RerankCfg(BaseModel):
     # 与 embedding 同理：本地目录优先，找不到就不碰网络（见 allow_download）
     local_path: str | None = None
     allow_download: bool = False
-    top_k: int = 5
+    top_k: int = 8
     batch_size: int = 8
     max_length: int = 512
     timeout_s: float = 10.0
@@ -311,14 +311,11 @@ class RetryCfg(BaseModel):
 
 
 class GenerationCfg(BaseModel):
-    # 空字符串 = 还没配任何端点。这是合法状态：全新安装时配置里一条模型都没有，
-    # 界面上引导用户「扫描本地模型」或「加一个 OpenAI 兼容地址」，而不是先塞一个
-    # 指向某个端口的占位后端——那种占位在用户机器上永远是红的，只会让人以为坏了。
-    provider: str = ""
+    # 后端注册表：这里只回答"有哪些后端可用"，不回答"当前用哪个"。
+    # 项目没有全局固定后端——用谁由每个站点（及板块）在自己的 roles/provider 里指定，
+    # 后台问答与直连测试则在请求里显式带 provider。所以这里没有 provider/roles 字段：
+    # 一旦有，就会被当成"默认那一个"，换站点时悄悄串味。
     providers: dict[str, ProviderCfg] = {}
-    # 角色分工：{"translate": "local::qwen2.5-3b", "generate": "local::qwen2.5-3b"}。
-    # 留空 = 所有活儿都由 provider 干，配了才分工。
-    roles: dict[str, str] = {}
     # 0.1 会让 7B 这一档的输出高度模板化（三条短句 + 一句空话收尾），
     # 事实约束靠下方【资料】与引用校验，不靠把温度压到接近贪心。
     temperature: float = 0.3
@@ -335,14 +332,6 @@ class GenerationCfg(BaseModel):
     disable_thinking: bool = True
     timeout: TimeoutCfg = TimeoutCfg()
     retry: RetryCfg = RetryCfg()
-
-    def active(self) -> tuple[str, ProviderCfg]:
-        if self.provider not in self.providers:
-            raise KeyError(
-                f"generation.provider={self.provider!r} 不在 providers 中；"
-                f"可选：{sorted(self.providers)}"
-            )
-        return self.provider, self.providers[self.provider]
 
 
 class ChatCfg(BaseModel):
@@ -630,28 +619,10 @@ def _apply_models_file(tree: dict[str, Any]) -> dict[str, Any]:
         # 一条都没配不是错误，是全新安装的默认状态。以前这里塞一个 mock 兜底，
         # 于是界面上永远挂着一个"能选但没用"的后端，用户分不清那是占位还是故障。
         providers = {}
-    if gen.get("provider") not in providers:
-        gen["provider"] = next(iter(providers), "")
     gen["providers"] = providers
-    # 角色分工和后端清单同住 models.yaml：它们说的是同一件事（哪个后端干什么），
-    # 分两份文件的话，删一个后端就可能留下一份指向空气的 roles。
-    roles = _clean_roles(data.get("roles"), providers)
-    if roles:
-        gen["roles"] = roles
     tree = dict(tree)
     tree["generation"] = gen
     return tree
-
-
-def _clean_roles(raw: Any, providers: Mapping[str, Any]) -> dict[str, str]:
-    """只留"还活着"的后端名。配置指向一个已经删掉的后端时，静默当没配。
-
-    这里 import 放在函数里：roles 模块不依赖 config，但两者互相都只是工具层，
-    顶层互引会在将来某次重构时变成环。
-    """
-    from .roles import normalize
-
-    return normalize(raw, known=providers)
 
 
 def load_config(

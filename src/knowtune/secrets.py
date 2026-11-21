@@ -288,6 +288,11 @@ def set_autosave(on: bool) -> None:
         if on:
             if marker.exists():
                 marker.unlink()
+            # 打开开关的这一拍就把内存里的密钥写下去。等"下次保存后端"再写是个
+            # 陷阱：界面已经显示"已记住"，重启却什么都没有——那正是"我的密钥
+            # 又被你们删了"的来源。
+            if _KEYS:
+                save()
         else:
             _PATH.parent.mkdir(parents=True, exist_ok=True)
             marker.write_text("", encoding="utf-8")

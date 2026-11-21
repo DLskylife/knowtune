@@ -130,9 +130,9 @@ class VectorStore:
         if self._ids.shape[0] == 0:
             return []
 
-        scores = self._mat @ qvec.astype(np.float32, copy=False)
-
-        mask = np.ones(scores.shape[0], dtype=bool)
+        # 先筛选候选行，再做矩阵乘法。站点通常只绑定一个知识库，
+        # 过滤后再编码可以避免为其它库计算无用的相似度。
+        mask = np.ones(self._ids.shape[0], dtype=bool)
         if kb_id is not None:
             mask &= self._kb_ids == kb_id
         if doc_ids:
@@ -140,14 +140,21 @@ class VectorStore:
         allowed = self._allowed_docs(source_types, imported_after, imported_before)
         if allowed is not None:
             mask &= np.isin(self._doc_ids, allowed)
-        if min_score > -1.0:
-            mask &= scores >= min_score
-
         idx = np.flatnonzero(mask)
         if idx.size == 0:
             return []
 
-        candidate_scores = scores[idx]
+        qvec = qvec.astype(np.float32, copy=False)
+        # 没有过滤条件时保留连续矩阵乘法，避免为了优化过滤路径引入额外拷贝。
+        candidate_scores = (
+            self._mat @ qvec if idx.size == self._ids.size else self._mat[idx] @ qvec
+        )
+        if min_score > -1.0:
+            keep = candidate_scores >= min_score
+            idx = idx[keep]
+            candidate_scores = candidate_scores[keep]
+            if idx.size == 0:
+                return []
         k = min(top_k, idx.size)
         if k < idx.size:
             top_local = np.argpartition(-candidate_scores, k - 1)[:k]

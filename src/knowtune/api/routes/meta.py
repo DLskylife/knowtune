@@ -117,24 +117,16 @@ def status(kb_id: int | None = None) -> dict:
         },
         "vectors": state.vectors.stats,
         "providers": {
-            "active": cfg.generation.provider,
             "available": {
                 name: {"model": p.model, "base_url": p.base_url}
                 for name, p in cfg.generation.providers.items()
             },
         },
-        # 库参数里写的后端名可能压根不存在（参数面板允许先填名字、后加端点）。
-        # 那一步不会报错，报错发生在用户提问的那一刻——所以这里提前说出来。
+        # 项目没有全局固定后端：这里只报"注册了哪些后端"，界面据此显示数量。
+        # 具体用谁由站点/请求自己指定，不在这里挑一个当"当前"。
         "generation": {
-            "provider": cfg.generation.provider,
-            "configured": bool(cfg.generation.provider)
-            and cfg.generation.provider in cfg.generation.providers,
             "known": sorted(cfg.generation.providers),
-            # 库参数里没填后端名时跟随全局。界面要说清这一点，否则用户看到一个
-            # 自己没选过的名字会以为串库了；反过来，空字段也不该亮红点说"未选择"。
-            "follows_global": bool(kb_id) and not str(
-                (state.overrides(kb_id) or {}).get("generation.provider") or ""
-            ).strip(),
+            "count": len(cfg.generation.providers),
         },
         "rerank": {
             "enabled": cfg.retrieval.rerank.enabled,

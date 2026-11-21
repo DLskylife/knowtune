@@ -134,15 +134,14 @@ class LLMClient:
         # 每个调用方自己拆——漏一处就是"未知 provider"，而且报错信息里带着
         # `::`，看起来像后端名字打错了，排查会跑偏。
         name, _model = roles_mod.split(provider)
-        name = name or self.cfg.generation.provider
         if not name:
             # 空名字不能拼进"模型服务「」不存在"里：那句话看着像名字写错了，
-            # 实际是"根本没选"。两者的处理动作完全不同（选一个 vs 改拼写）。
+            # 实际是"根本没选"。项目没有全局默认后端可退，必须让调用方显式指定。
             known = "、".join(self.cfg.generation.providers) or "一个都没配"
             raise LLMError(
-                "这次调用没指定后端，全局默认也是空的"
+                "这次调用没指定后端（项目没有全局默认后端，每个站点/请求都要自己选）"
                 f"（已配置：{known}）。到「模型服务」页选一个，"
-                "或在参数面板给这个知识库指定生成后端。"
+                "或在站点/请求里指定后端。"
             )
         if name not in self.cfg.generation.providers:
             # 「未知 provider: siliconflow」这种话对用户零帮助：他不知道是名字

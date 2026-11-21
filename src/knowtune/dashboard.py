@@ -169,7 +169,6 @@ def build(
             "kind": p.kind,
             "model": p.model,
             "base_url": p.base_url,
-            "active": name == cfg.generation.provider,
             "status": cached.get("status", "unknown"),
             "latency_ms": cached.get("latency_ms"),
             "message": cached.get("message", "还没探测"),

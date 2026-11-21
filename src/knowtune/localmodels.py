@@ -160,44 +160,6 @@ def api_info(inst: Instance) -> dict[str, Any]:
 # ------------------------------------------------------------------ 扫描
 
 
-def default_dirs() -> list[str]:
-    """没配扫描目录时去哪找。
-
-    只放**真的常见**的几个位置，不递归整个磁盘——那会把一次点击变成几分钟的
-    磁盘 IO。LM Studio / Ollama / llama.cpp 的默认下载目录各算一个，再加上
-    项目自己的 data/models。
-    """
-    home = Path.home()
-    cands = [
-        ROOT / "data" / "models",
-        home / ".cache" / "lm-studio" / "models",
-        home / ".lmstudio" / "models",
-        home / ".ollama" / "models",
-        home / "models",
-        Path("D:/models") if os.name == "nt" else Path("/models"),
-    ]
-    # LM Studio 的模型根目录是可改的（装到 D 盘的人几乎都改过），改完只写进
-    # 它自己的 settings.json（downloadsFolder）。不去读它，默认列表就永远猜
-    # .lmstudio/models；实测模型根目录常被改到别处，默认位置是空的。
-    lm_root = _lmstudio_root(home)
-    if lm_root:
-        cands.insert(0, lm_root)
-    return [str(p) for p in cands if p.exists()]
-
-
-def _lmstudio_root(home: Path) -> Path | None:
-    """读 LM Studio settings.json 里的 downloadsFolder。读不了/没有就返回 None。"""
-    import json
-
-    try:
-        raw = (home / ".lmstudio" / "settings.json").read_text(encoding="utf-8")
-        folder = (json.loads(raw) or {}).get("downloadsFolder") or ""
-    except (OSError, ValueError):
-        return None
-    folder = folder.strip()
-    return Path(folder) if folder else None
-
-
 def _quant_of(name: str) -> str:
     """从文件名里认量化档：Q4_K_M / IQ3_XS / Q8_0 这些。
 
@@ -215,13 +177,19 @@ def _quant_of(name: str) -> str:
     return ""
 
 
-def scan(dirs: Iterable[str] | None = None, limit: int = 500) -> list[ScannedModel]:
-    """递归找 .gguf。
+def scan(dirs: Iterable[str], limit: int = 500) -> list[ScannedModel]:
+    """只在用户指定的目录里递归找 .gguf。
+
+    没有"默认扫描目录"这回事：模型放在哪是使用者机器的属性，得由调用方明确
+    传进来。没给目录就返回空——宁可让用户先填一个，也不要去猜几个固定位置
+    扫半天，结果扫出一堆别人的模型。
 
     深度上限 4：模型目录通常是 `<厂商>/<模型名>/<文件>.gguf`，四层够用；
     再深就是用户在往里塞乱七八糟的东西，扫出来的也不是模型。
     """
-    roots = [str(d) for d in (dirs or default_dirs())]
+    roots = [str(d) for d in dirs]
+    if not roots:
+        return []
     out: list[ScannedModel] = []
     seen: set[str] = set()
     for root in roots:
@@ -447,33 +415,65 @@ def _alive(port: int, timeout: float = 0.6) -> bool:
         return False
 
 
+# 启动多久还没通就算"卡住"。
+#
+# start() 自己等 180s 就会杀掉子进程，所以正常路径根本到不了这里。能出现
+# 「进程还在、端口一直不通」只剩两种情况：kill 没生效（拿不到 cmdline 就不
+# 敢杀，见 _kill），或者进程被别的东西托管着。这类实例以前永远显示「启动中」，
+# 用户以为还在读权重，其实已经废了——必须单独给一个状态，并且能手动停。
+STALL_S = 240.0
+
+
 def status(name: str) -> dict[str, Any]:
-    """这个模型现在什么状态。四个值：
+    """这个模型现在什么状态。五个值：
 
     - `running`  进程在、端口通
     - `starting` 进程在、端口还没通（刚点启动那一小会儿）
+    - `stalled`  进程在、但超过 STALL_S 还没通（起不来了，得停掉重试）
     - `stopped`  没进程，但有过启动记录
     - `unknown`  从没启动过
 
-    `api` 是外部调用方要的那一段：地址、chat 端点、model、curl 示例。
+    `started_at` / `waited_s` 是给界面报"已经等了多久"用的：没有秒数，
+    用户无法区分"正常加载"和"卡死"。
     """
     st = _read_state(name)
     if not st:
         return {"name": name, "state": "unknown", "port": None, "pid": None,
-                "base_url": "", "api": {}, "message": "还没启动过"}
+                "base_url": "", "api": {}, "started_at": 0, "waited_s": 0,
+                "message": "还没启动过"}
     pid = int(st.get("pid") or 0)
     port = int(st.get("port") or 0)
+    started_at = float(st.get("started_at") or 0)
     api = _api_from_state(st)
     if not _pid_alive(pid):
         return {"name": name, "state": "stopped", "port": port, "pid": pid,
                 "base_url": api.get("base_url", ""), "api": api,
+                "started_at": started_at, "waited_s": 0,
                 "message": "进程已退出（显存不足或手动关闭）"}
     ok = _alive(port)
+    waited = time.time() - started_at if started_at else 0.0
+    if ok:
+        return {
+            "name": name, "state": "running",
+            "port": port, "pid": pid, "base_url": api.get("base_url", ""),
+            "api": api, "log": st.get("log", ""),
+            "started_at": started_at, "waited_s": int(waited),
+            "message": "",
+        }
+    if waited > STALL_S:
+        return {
+            "name": name, "state": "stalled",
+            "port": port, "pid": pid, "base_url": api.get("base_url", ""),
+            "api": api, "log": st.get("log", ""),
+            "started_at": started_at, "waited_s": int(waited),
+            "message": f"进程 {pid} 在，但端口 {port} 已经 {int(waited // 60)} 分钟没通",
+        }
     return {
-        "name": name, "state": "running" if ok else "starting",
+        "name": name, "state": "starting",
         "port": port, "pid": pid, "base_url": api.get("base_url", ""),
         "api": api, "log": st.get("log", ""),
-        "message": "" if ok else "进程在，端口还没就绪",
+        "started_at": started_at, "waited_s": int(waited),
+        "message": "进程在，端口还没就绪",
     }
 
 
@@ -606,6 +606,10 @@ def start(
     cur = status(name)
     if cur["state"] in ("running", "starting"):
         raise LocalError(f"「{name}」已经在跑（端口 {cur['port']}），先停掉再启动")
+    if cur["state"] == "stalled":
+        # 上次启动卡死的进程还占着显存。让它先自己掐掉再起——否则用户得先点
+        # 「停止」再点「启动」，中间那一步不提供任何信息，只会让人以为坏了。
+        stop(name)
 
     exe = find_server(server)
     chosen = _pick_port(port, strict=bool(port))
@@ -743,7 +747,6 @@ def describe_env() -> dict[str, Any]:
         "server": exe,
         "available": ok,
         "message": msg,
-        "dirs": default_dirs(),
         "port_range": [PORT_MIN, PORT_MAX],
         "platform": sys.platform,
         "devices": devices(exe) if ok else [],

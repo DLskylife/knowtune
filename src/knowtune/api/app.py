@@ -1,7 +1,7 @@
 """HTTP 接口装配入口。
 
 路由按资源域拆分到 `routes/` 目录下：meta（基础/设置）、docs（文档/chunk/导入）、
-models（模型服务/网关）、kb（知识库）、search（检索/问答/日志）、sessions（会话/反馈）、
+models（模型服务/网关）、kb（知识库）、search（检索/问答/日志）、sessions（反馈）、
 prompts（提示词/角色）、sites（前台站点实例）。
 
 本文件只负责：创建 FastAPI 实例、启动/关闭生命周期、挂载中间件、注册各路由模块。
@@ -179,15 +179,31 @@ def _sweep_orphan_imports() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 只有之前勾过"记住密钥"才会有这个文件；没有就是纯内存，重启即清空。
+    # 默认"填了就记住"：data/secrets.json 里是 DPAPI 密文，重启自动恢复。
+    # 只有用户显式关过（data/secrets.off）才是纯内存。
     if secrets_mod.attach(state.cfg.storage.data_dir):
         logbus.note(
-            f"已从本机密文文件恢复密钥（{secrets_mod.backend_label()}；你之前勾了『记住密钥』）",
-            source="models")
+            f"已从本机密文文件恢复密钥（{secrets_mod.backend_label()}）", source="models")
         # 换账户/换机器后密文解不开：这时候界面上"密钥已记住"是假的，
         # 提示"去模型页重填"才是有用的信息。
         if secrets_mod.last_error():
             logbus.note(secrets_mod.last_error(), level="WARNING", source="models")
+    # 关闭了"记住"是个持续生效的选择，重启后照样生效——所以要在启动时说一句，
+    # 否则用户只觉得"每次重启 key 都没了"，找不到原因。
+    if not secrets_mod.autosave():
+        logbus.note(
+            "密钥只保留本次会话（data/secrets.off）：重启后需重填。"
+            "想改：模型页点「记住到本机」", level="WARNING", source="models")
+    # 孤儿密钥：端点已经删了，密钥还留在 secrets.json 里。旧版本的删除接口只
+    # 清内存不清盘，于是重启又把它们读回来——"删掉的账号，密钥还在"。
+    known = set(state.cfg.generation.providers)
+    orphans = [n for n in secrets_mod.names() if n not in known]
+    if orphans:
+        for n in orphans:
+            secrets_mod.drop(n)
+        secrets_mod.autosync()
+        logbus.note(f"清掉 {len(orphans)} 个已删端点的残留密钥：{', '.join(orphans)}",
+                    level="WARNING", source="models")
     _sweep_orphan_imports()
     stale = _sweep_stale_parts()
     if stale:

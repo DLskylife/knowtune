@@ -16,7 +16,6 @@
 from __future__ import annotations
 
 import os
-import re
 import time
 import uuid
 from dataclasses import asdict
@@ -36,8 +35,11 @@ from ..generate import cite as cite_mod
 from ..generate import evidence
 from ..generate.prompt import build_context
 from ..ingest.chunker import estimate_tokens
-from ..roles import plan as role_plan, resolve as role_resolve
+from ..roles import plan as role_plan
 from . import instcfg
+from .answer import tidy_answer
+from .copytext import content_lang, fill_copy
+from .routing import provider_for
 from .instcfg import default_copy
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -52,61 +54,6 @@ _LANG_TAIL = {
 
 # assistant 位置的续写起点。见 _stream_answer 里的说明。
 _PREFILL = {"ug": "جاۋاب: "}
-
-
-# 中文指令模型有两个几乎改不掉的收尾习惯：正文写完了补一句「总之，……」，
-# 以及开头先交代「根据资料，……资料里没有……」。提示词里写"不要这样"没用，
-# 列了禁词反而会被它原样念出来（负向提示的反效果）。这两处用**确定性**规则收：
-# 只剪纯总结、纯检索报告句，不碰任何带 [n] 的事实句。
-_SUMMARY_OPENERS = (
-    "综上所述", "总之", "总的来说", "总的来看", "总体来说", "总体来看",
-    "概括起来", "概括来说", "简而言之", "综上",
-)
-_REPORT_STARTS = (
-    "根据资料", "资料显示", "资料中提到", "资料中未找到", "资料里没有",
-    "资料并未", "资料主要", "资料未提及", "以上资料", "资料不足以",
-)
-_ID_RE = re.compile(r"\[\d+\]")
-
-
-def tidy_answer(text: str) -> str:
-    """收尾清理：删检索报告句、删末尾总结段。删到没内容时原样退回。"""
-    if not text.strip():
-        return text
-    # ① 报告句：按句拆、保留标点与换行。只删不带编号的短句——带 [n] 的
-    #   句子往往夹着真正的事实，删了会把引用一起丢掉。
-    sentences = re.split(r"(?<=[。！？])", text)
-    kept = [
-        s for s in sentences
-        if not (s.strip() and s.strip().startswith(_REPORT_STARTS)
-                and len(s.strip()) <= 100 and not _ID_RE.search(s))
-    ]
-    out = "".join(kept)
-    if not out.strip():
-        return text
-    # ② 末尾总结段
-    paras = out.split("\n\n")
-    while len(paras) > 1:
-        tail = paras[-1].strip()
-        if len(tail) <= 160 and tail.startswith(_SUMMARY_OPENERS):
-            paras.pop()
-            continue
-        break
-    out = "\n\n".join(paras).rstrip()
-    # 总结句挂在上一段末尾（没有空行）的情形：只认最后 160 字里的那个开头，
-    # 避免把正文中间一句正常的「总之」也切掉。
-    start = max(0, len(out) - 160)
-    last = out[start:]
-    hit = None
-    for opener in _SUMMARY_OPENERS:
-        idx = last.find(opener)
-        # 前面得有正文，且「总之」是另起一句（前面是句末标点 / 引用编号 / 空白）。
-        if idx >= 0 and (idx == 0 or last[:idx].strip()
-                         and last[:idx].rstrip()[-1] in "。！？\n]"):
-            hit = idx if hit is None else min(hit, idx)
-    if hit is not None:
-        out = out[: start + hit].rstrip()
-    return out or text
 
 
 class SiteAsk(BaseModel):
@@ -143,66 +90,6 @@ def _draft_messages(bundle, question: str, history: list[dict] | None,
     return msgs
 
 
-_COPY_KEYS = ("title", "subtitle", "welcome", "disclaimer")
-
-
-def _content_lang(texts: list[Any], fallback: str = "") -> str:
-    """按**文字内容**判语言，而不是按配置里那个 `lang` 字段。
-
-    配置是手填的，文案也是手填的，两者之间没有任何机制保证一致——实测就
-    撞上过 `lang: zh` 而标题/欢迎语/示例全是维吾尔语、另一套字段反过来是中
-    文的情况。前端拿 `lang` 决定高亮哪颗按钮、拿文案渲染页面，于是"高亮
-    中文、内容是维语"；点一下切换，内容换了、标签没换。这类错配不该靠人去
-    发现，判据只能落在字符集上。
-    """
-    blob = " ".join(str(x) for x in texts if x)
-    got = lang_mod.detect(blob)
-    if got in ("ug", "zh", "en"):
-        return got
-    return fallback if fallback in ("ug", "zh", "en") else ""
-
-
-def _fill_copy(base: dict[str, Any], lang: str) -> dict[str, Any]:
-    """把一套文案补齐到"每种语言都有话说"，并把混进来的别的语言剔掉。
-
-    缺的字段用内置默认值（与目标语言一致的那一份）填。不这样做的话，用户
-    只填了标题、没填欢迎语，切到那套语言就会看到一片空白——比语言不对更糟，
-    因为看起来像页面挂了。
-
-    另一个坑是**字段之间**的语言混填：标题是维语、欢迎语却是中文。整套语言
-    标签只能有一个，留着这种字段就是"标签说维语、正文一半中文"。所以逐字段
-    再判一次，语言对不上的整段丢掉、用该语言的默认值补上——宁可换成一句通用
-    文案，也不要在同一页里掺两种字。
-    """
-    default = default_copy(lang)
-    out: dict[str, Any] = {}
-    for key in _COPY_KEYS:
-        val = str(base.get(key) or "").strip()
-        if val and _content_lang([val], fallback=lang) != lang:
-            val = ""
-        out[key] = val or default.get(key, "")
-    samples = [str(s).strip() for s in (base.get("samples") or []) if str(s).strip()]
-    samples = [s for s in samples if _content_lang([s], fallback=lang) == lang]
-    out["samples"] = samples or default.get("samples", [])
-    return out
-
-
-def _copy_overrides(lang: str) -> dict[str, Any]:
-    """从提示词配置里取这套语言的界面文案（只含被改过的字段）。
-
-    读失败一律当成"没配"：提示词文件被手写坏时，页面顶多显示实例里的旧文案，
-    绝不能因为一句标题读不出来就把整个站点打成 500。
-    """
-    try:
-        from .. import promptcfg
-
-        return promptcfg.copy_texts(lang)
-    except Exception as exc:  # noqa: BLE001 - 兜底必须吞掉任何读取失败
-        logbus.note(f"读取界面文案失败（{lang}），改用实例配置："
-                    f"{type(exc).__name__}: {exc}", level="ERROR", source="sites")
-        return {}
-
-
 def _split_for_translate(text: str, limit: int = 300) -> list[str]:
     """按段落/句末标点把草稿切成小段，给"整段翻不动"时的分段重试用。
 
@@ -227,29 +114,6 @@ def _split_for_translate(text: str, limit: int = 300) -> list[str]:
         if buf.strip():
             out.append(buf)
     return [p for p in out if p.strip()]
-
-
-def provider_for(role: str, *, spec: Any, kb_cfg: Any, cfg: Any,
-                 section_roles: dict[str, str] | None = None) -> str:
-    """这个站点在这个知识库上，某个角色实际会用哪个后端。
-
-    问答请求和启动自检**必须走同一条链**。自检以前直接拿 `spec.provider`
-    （多数站点是空串）去发请求，于是掉到全局默认；全局默认可以是空的，
-    结果就是：站点答得好好的，卡片上却写着"自检没跑通：未知 provider"。
-    那不是模型不会维吾尔语，是我们拿一个不存在的后端去问了它。
-
-    `section_roles` 是板块级覆盖（med/classic 各自可钉后端），比站点 roles
-    更具体，解析时排最前。
-    """
-    return role_resolve(
-        role,
-        instance_roles=getattr(spec, "roles", {}) or {},
-        global_roles=getattr(cfg.generation, "roles", {}) or {},
-        instance_provider=getattr(spec, "provider", "") or "",
-        default_provider=getattr(kb_cfg.generation, "provider", "") or "",
-        known=getattr(cfg.generation, "providers", {}) or {},
-        section_roles=section_roles or {},
-    )
 
 
 def build_site(spec, state: Any) -> FastAPI:
@@ -492,25 +356,22 @@ def build_site(spec, state: Any) -> FastAPI:
             "samples": s.samples, "disclaimer": s.disclaimer,
         }
         alt_raw = {k: v for k, v in (s.alt or {}).items() if k != "lang"}
-        # 界面文案的主来源已搬到「提示词配置」（copy_ug / copy_zh）。这里把
-        # 提示词里**配过**的字段合进来，实例里的同名字段退为兼容层：老实例
-        # 没迁移完时照样能显示，迁移过（字段清空）之后完全由提示词决定。
-        main_copy_raw.update(_copy_overrides(str(getattr(s, "lang", "ug") or "ug")))
-        alt_raw.update(_copy_overrides(str((s.alt or {}).get("lang") or "zh")))
+        # 界面文案是前台固定内置值：实例字段若有人写过就沿用，空的由 fill_copy
+        # 按语言用 instcfg.default_copy 补齐。提示词配置不再管文案。
         # 语言标签由内容决定，不由配置里的 lang 决定。详见 _content_lang：
         # 配置和文案都靠人手填，一旦填反，界面上就会出现"高亮中文、正文维语"，
         # 而且点切换只换内容不换高亮——用户完全没有办法自己纠正。
-        main_lang = _content_lang(
+        main_lang = content_lang(
             [main_copy_raw.get("title"), main_copy_raw.get("welcome"),
              main_copy_raw.get("subtitle")], fallback=lang_)
-        alt_lang = _content_lang([alt_raw.get("title"), alt_raw.get("welcome")],
+        alt_lang = content_lang([alt_raw.get("title"), alt_raw.get("welcome")],
                                  fallback=str((s.alt or {}).get("lang") or "").lower())
         # 两套内容判成同一种语言 = 这颗切换按钮点下去什么都不会变。此时把
         # 没填全的那边用内置文案补齐（_fill_copy），保证"点一下就真的换语言"。
         if not alt_lang or alt_lang == main_lang:
             alt_lang = "zh" if main_lang != "zh" else "ug"
-        main_copy = _fill_copy(main_copy_raw, main_lang)
-        alt_copy = _fill_copy(alt_raw, alt_lang)
+        main_copy = fill_copy(main_copy_raw, main_lang)
+        alt_copy = fill_copy(alt_raw, alt_lang)
         # 知识库显示名也是界面文字。库里存的是中文名，切到维语界面还挂着
         # 四个汉字，比按钮文字没翻更显眼——这套名字允许站点单独配。
         main_name = str(getattr(s, "kb_name", "") or "").strip() or kb["name"]
@@ -569,13 +430,7 @@ def build_site(spec, state: Any) -> FastAPI:
                          "mount": "previsit"},
             "roles": role_plan(
                 instance_roles=getattr(s, "roles", {}) or {},
-                global_roles=getattr(state.cfg.generation, "roles", {}) or {},
                 instance_provider=s.provider or "",
-                # 必须用**这个知识库**的有效配置，不能用全局配置：知识库可以
-                # 单独钉一个后端（kb.config_json 的 generation.provider），
-                # 用全局值来算就会"界面显示百炼、实际连本地端口"，页面上一片
-                # 正常、问答全失败，排查时人会先怀疑密钥。
-                default_provider=state.effective_cfg(s.kb_id).generation.provider,
                 known=getattr(state.cfg.generation, "providers", {}) or {},
             ),
             # 每个检索型板块（med/classic）各自解析出的实际后端。板块钉了覆盖
@@ -583,9 +438,7 @@ def build_site(spec, state: Any) -> FastAPI:
             "section_roles": {
                 key: role_plan(
                     instance_roles=getattr(s, "roles", {}) or {},
-                    global_roles=getattr(state.cfg.generation, "roles", {}) or {},
                     instance_provider=s.provider or "",
-                    default_provider=state.effective_cfg(s.kb_id).generation.provider,
                     known=getattr(state.cfg.generation, "providers", {}) or {},
                     section_roles=s.section(key)["roles"],
                 )
@@ -624,7 +477,7 @@ def build_site(spec, state: Any) -> FastAPI:
         # 判断不了。现在右上角是什么语言，答案就是什么语言，这是一条对用户
         # 可见的承诺，不该为了省几秒让位。
         ui_lang = (req.ui_lang or "").strip().lower()
-        site_lang = _content_lang([s.title, s.welcome, s.subtitle], fallback=lang)
+        site_lang = content_lang([s.title, s.welcome, s.subtitle], fallback=lang)
         if ui_lang in ("ug", "zh", "en"):
             answer_lang = ui_lang
         elif q_lang in ("ug", "zh", "en"):
@@ -704,10 +557,13 @@ def build_site(spec, state: Any) -> FastAPI:
             # 命中硬 → 严格照资料答；命中差 → 允许用自身知识，但必须标明哪句是资料。
             ref = result.refusal
             top_score = getattr(ref, "top_score", None) if ref else None
-            # 前台没有"轮数"概念，预算是唯一闸门：超出就从最早一轮整轮丢，
-            # 避免长回答把本轮资料挤成空【资料】段。
+            # 会话历史由前端带过来，两道闸都由 chat.* 配置管：轮数上限
+            # history_turns + 字符预算 history_token_budget。前端 slice(-6)
+            # 只是少传点，真正上限在这里——调配置立刻生效，不用改前端。
             hist = chatctx.trim_history(
-                list(req.history or []), budget=int(kb_cfg.chat.history_token_budget)
+                list(req.history or []),
+                turns=int(kb_cfg.chat.history_turns),
+                budget=int(kb_cfg.chat.history_token_budget),
             )
             grade = evidence.grade_of(
                 top_score,

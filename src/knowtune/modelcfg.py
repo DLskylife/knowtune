@@ -268,9 +268,7 @@ def upsert(
         # 而是这份端点"怎么跑"的约定，只有手改 models.yaml 才能改。
         autostart=prev.autostart if prev else False,
     )
-    if cfg.generation.provider not in cfg.generation.providers:
-        cfg.generation.provider = name
-    return {"name": name, **_persist(cfg), "active": cfg.generation.provider}
+    return {"name": name, **_persist(cfg)}
 
 
 def remove(cfg: Config, name: str) -> dict[str, Any]:
@@ -278,29 +276,23 @@ def remove(cfg: Config, name: str) -> dict[str, Any]:
         raise ValueError("端点不存在")
     if len(cfg.generation.providers) <= 1:
         raise ValueError("至少要留一个端点")
-    if cfg.generation.provider == name:
-        raise ValueError(f"「{name}」是当前使用的端点，先切换到别的再删")
+    # 没有"当前端点"这回事，删谁都不用先切换。引用它的站点角色会在下次
+    # 保存站点配置时由界面改成新端点；在那之前解析层会跳过已删的后端。
     del cfg.generation.providers[name]
     return {"deleted": name, **_persist(cfg)}
-
-
-def set_active(cfg: Config, name: str) -> dict[str, Any]:
-    if name not in cfg.generation.providers:
-        raise ValueError("端点不存在")
-    cfg.generation.provider = name
-    return {"active": name}
 
 
 # --------------------------------------------------------------------- 展示
 
 
-def readiness(cfg: Config, name: str | None = None) -> dict[str, Any]:
+def readiness(cfg: Config, name: str) -> dict[str, Any]:
     """这个端点"配好了没有"——注意与"连不连得通"是两件事。
 
     界面上必须把这两者分开：地址填错、端口没起是运行时故障，重试或改地址就能救；
     而没填模型名、没配密钥是配置缺失，重试一万次也没用，只能去补字段。
+    没有全局默认后端，name 必填。
     """
-    target = name or cfg.generation.provider
+    target = name
     p = cfg.generation.providers.get(target)
     if p is None:
         return {"provider": target, "ready": False, "code": "no_provider",
@@ -319,6 +311,23 @@ def readiness(cfg: Config, name: str | None = None) -> dict[str, Any]:
     return {"provider": target, "ready": True, "code": "ok", "reason": ""}
 
 
+def _size_mb(path: str | None) -> int | None:
+    """这个 .gguf 有多大。
+
+    本地模型和云端模型最大的区别是**它占你的盘和显存**：同一个 7B，Q4 是
+    1.1G、Q8 是 7G，能不能装进 6G 显存全看这个数。界面原来一处都不显示，
+    用户只能对着文件名里的量化后缀自己猜。
+
+    读不到就返回 None（文件被移走、权限不够），不让整页跟着报错。
+    """
+    if not path:
+        return None
+    try:
+        return round(Path(path).stat().st_size / 1048576)
+    except OSError:
+        return None
+
+
 def _model_view(m: ModelEntry, state: dict[str, Any] | None) -> dict[str, Any]:
     return {
         "id": m.id,
@@ -327,10 +336,15 @@ def _model_view(m: ModelEntry, state: dict[str, Any] | None) -> dict[str, Any]:
         "max_output": m.max_output,
         "path": m.path,
         "port": m.port,
+        "size_mb": _size_mb(m.path),
         "local": m.local,
         "state": (state or {}).get("state", "unknown") if m.local else "",
         "pid": (state or {}).get("pid"),
         "running_url": (state or {}).get("base_url", ""),
+        # 界面要报"启动中已经等了多久"。没有这两个数，「启动中」和「卡死」
+        # 在用户眼里长得一模一样。
+        "started_at": (state or {}).get("started_at") or 0,
+        "waited_s": (state or {}).get("waited_s") or 0,
     }
 
 
@@ -354,13 +368,12 @@ def listing(cfg: Config) -> dict[str, Any]:
             "model": p.model,
             "key_present": bool(p.api_key(name)),
             "models": [_model_view(m, live.get(_live_key(name, m))) for m in p.model_list],
-            "active": name == cfg.generation.provider,
             "builtin": name in base,
             "ready": ready["ready"],
             "ready_reason": ready["reason"],
             "hint": meta["hint"],
         })
-    items.sort(key=lambda x: (not x["active"], not x["local"], x["name"]))
+    items.sort(key=lambda x: (not x["local"], x["name"]))
 
     # 扁平目录：所有端点 × 所有模型，一条一个可选项。
     #
@@ -383,18 +396,11 @@ def listing(cfg: Config) -> dict[str, Any]:
                 "model": mid,
                 "label": entry.label if entry else mid,
                 "current": bool(p.model) and mid == p.model,
-                "provider_active": name == cfg.generation.provider,
                 "ready": ready["ready"],
                 "local": kind == "local",
             })
 
-    active_p = cfg.generation.providers.get(cfg.generation.provider)
     return {
-        "active": cfg.generation.provider,
-        "active_ready": readiness(cfg)["ready"],
-        "active_reason": readiness(cfg)["reason"],
-        # 全局"当前"是「端点 + 模型」两段，分开给，界面才能一次说清"现在在用哪套"
-        "active_model": active_p.model if active_p else "",
         "providers": items,
         "catalog": catalog,
         "kinds": [dict(k) for k in KINDS],
