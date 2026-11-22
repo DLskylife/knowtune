@@ -1,6 +1,6 @@
 /* 构建号：与 index.html 里那份一致，不一致说明浏览器拿到的是旧 JS，
    页面加载完会强制换一次（见 index.html 的自检脚本）。 */
-window.ADMIN_BUILD = "0.9.112";
+window.ADMIN_BUILD = "0.9.113";
 
 const $ = (id) => document.getElementById(id);
 
@@ -6341,7 +6341,7 @@ function siteLiveStrip(i, plan, pv) {
   return `<div class="sbk-strip${i.status === "running" ? "" : " is-off"}">
     <span class="sbk-strip-k">当前生效</span>
     <div class="sbk-strip-entries">${cells}</div>
-    <span class="sbk-strip-note">改下方配置并保存后同步</span>
+    <span class="sbk-strip-note">改下方任一配置即时同步</span>
   </div>`;
 }
 
@@ -6544,7 +6544,7 @@ function siteBlock(i, meta, plan, defProv, pv, kbCfg) {
         <div class="sbk-id">
           <span class="sbk-name">${esc(i.name)}</span>
           ${metaBits.length
-            ? `<span class="sbk-meta">${metaBits.join(" · ")}</span>` : ""}
+            ? `<span class="sbk-meta">${metaBits.join("")}</span>` : ""}
         </div>
         <a class="sbk-url" href="${esc(i.url)}" target="_blank"
           rel="noreferrer">${esc(i.url)}</a>
@@ -6603,10 +6603,6 @@ function siteInlinePanels(i, meta, plan, defProv, pv, kbCfg) {
         headLabel || (field.startsWith("sec_") ? "跟随站点" : "跟随上级"))}</select>`;
 
   // 一行字段：标签在左、控件在右，说明放在控件下方，不再往控件行里塞小字。
-  const field = (label, control, note, cls = "") => `<div class="scfg-field ${cls}">
-      <label>${esc(label)}</label>${control}${note ? `<small>${esc(note)}</small>` : ""}
-    </div>`;
-
   /* ---------- 01 只留模型列（2026-11-22）----------
    * 入口开关、显示名、检索库、提示词都不在这张表里露面，一行就两件事：
    * 这个入口用哪个翻译模型、哪个推理模型。
@@ -6628,13 +6624,14 @@ function siteInlinePanels(i, meta, plan, defProv, pv, kbCfg) {
         keepChk(`sec_${k}_enabled`, secOn(k)) + keep(`sec_${k}_name`, sec(k).name || "")
       ).join("")}
     </div>`;
-  const entryCell = (label) => `<td class="et-name is-static">
-      <b>${esc(label)}</b><span>留空跟随站点默认</span></td>`;
-  const defaultCell = `<td class="et-name is-static">
-      <b>站点默认</b><span>其它入口留空时继承这里</span></td>`;
+  /* 行首徽章：一个字就够认出是哪一行。带底色的方块比纯文字行首好扫，
+     四行连在一起时眼睛有落点，不会读串行。 */
+  const entryCell = (label, badge, note = "留空跟随站点默认") => `<td class="et-name">
+      <span class="et-av">${esc(badge)}</span>
+      <span class="et-nm"><b>${esc(label)}</b><span>${esc(note)}</span></span></td>`;
+  const defaultCell = entryCell("站点默认", "站", "其它入口留空时继承这里");
 
   const entryPanel = `
-    <div class="scfg-lead accent"><b>模型配置</b><span>每个入口用哪个翻译、哪个推理模型。下拉只列「模型服务」里已加入的模型；留空表示继承站点默认。想加新模型，先去模型服务页把它加入清单。</span></div>
     <div class="et-wrap">
       ${keepFields}
       <table class="et-table">
@@ -6647,17 +6644,17 @@ function siteInlinePanels(i, meta, plan, defProv, pv, kbCfg) {
               "先把维吾尔语提问译成中文去检索，再把中文答案译回去")}</td>
             <td>${sel("role_generate", "generate", roles.generate, "读检索到的资料组织答案")}</td>`,
           "scfg-mrow-default")}
-          ${row(`${entryCell("维医问答")}
+          ${row(`${entryCell("维医问答", "维")}
             <td>${sel("sec_med_role_translate", "translate", (sec("med").roles || {}).translate,
               "维医问答的翻译模型；留空跟随站点默认")}</td>
             <td>${sel("sec_med_role_generate", "generate", (sec("med").roles || {}).generate,
               "维医问答的推理模型；留空跟随站点默认")}</td>`)}
-          ${row(`${entryCell("古籍问答")}
+          ${row(`${entryCell("古籍问答", "古")}
             <td>${sel("sec_classic_role_translate", "translate", (sec("classic").roles || {}).translate,
               "古籍问答的翻译模型；留空跟随站点默认")}</td>
             <td>${sel("sec_classic_role_generate", "generate", (sec("classic").roles || {}).generate,
               "古籍问答的推理模型；留空跟随站点默认")}</td>`)}
-          ${row(`${entryCell("预问诊")}
+          ${row(`${entryCell("预问诊", "预")}
             <td>${sel("pv_role_translate", "translate", pvPair.translate,
               "预问诊维语翻译模型", "跟随站点默认")}</td>
             <td>${sel("pv_role_generate", "generate", pvPair.generate,
@@ -6704,7 +6701,6 @@ function siteInlinePanels(i, meta, plan, defProv, pv, kbCfg) {
   const abCalib = kbCfg && kbCfg.calibrated_keys
     ? (kbCfg.calibrated_keys || []).includes(abKeys.refuseScore) : false;
   const answerPanel = `
-    <div class="scfg-lead"><b>回答行为</b><span>站点上怎么答：拒答、随机性、多轮历史。按本站检索库保存，前台网站与调试对话共用同一份；改完保存即生效。</span></div>
     <div class="ab-grid">
       <div class="ab-block">
         <div class="ab-blk-title">拒答<span>资料不够硬时说实话，而不是编</span></div>
@@ -6746,36 +6742,44 @@ function siteInlinePanels(i, meta, plan, defProv, pv, kbCfg) {
    * （或反过来），下次重启又翻回旧值，谁也不知道以哪个为准。这类部署时定一次
    * 的东西只留配置文件一个落点（instcfg 每次请求现读，改完不用重启）。
    */
-  /* 三段同构：卡外一行纯文字引导语 + 卡内内容面板。以前这段的说明被
-   * card() 塞在 .scfg-card-head 里，视觉上在内容卡内部，和 01/02 不一致。 */
+  /* 运行三项并排成三张小卡：这三件事互不相干，摊成一张三行表会显得比
+   * 模型表还重；拆开之后一眼三格，谁在哪一格里改一目了然。 */
+  const runCard = (k, ctl, note) => `<div class="run-card">
+      <span class="run-k">${esc(k)}</span>${ctl}<span class="run-note">${esc(note)}</span></div>`;
   const sitePanel = `
-    <div class="scfg-lead"><b>运行设置</b><span>占哪个端口、谁能连、要不要开机拉起；语言与产出方式改 config/instances.yaml</span></div>
-    <div class="scfg-cards">
-      <section class="scfg-card run-only">
-        <div class="scfg-card-body">
-          ${field("端口", `<input data-f="port" type="number" min="${lo}" max="${hi}" value="${i.port}">`,
-            "改这里会重启站点")}
-          ${field("监听", toggle("public", i.public, "局域网可访问"), "只监听回环时外部访问不到")}
-          ${field("开机", toggle("autostart", i.autostart, "后台启动时自动拉起"),
-            "关掉后每次都要在这一页手动启动")}
-        </div>
-      </section>
+    <div class="run-cards">
+      ${runCard("端口", `<input data-f="port" type="number" min="${lo}" max="${hi}" value="${i.port}">`,
+        "改这里会重启站点")}
+      ${runCard("监听", `<div class="run-sw">${toggle("public", i.public, "局域网可访问")}</div>`,
+        "只监听回环时外部访问不到")}
+      ${runCard("开机", `<div class="run-sw">${toggle("autostart", i.autostart, "后台自动拉起")}</div>`,
+        "关掉后每次都要手动启动")}
     </div>`;
 
   /* 三段常驻，没有页签、没有 hidden：滚动就能看全，保存一次全量提交。
-   * 标题的副句只写定位，不与下面各自那段 scfg-lead 的说明重复。 */
-  const section = (num, key, title, sub, body) => `<section class="sif-sec" data-sif="${key}">
+   * 段头在左、内容在右：编号 → 标题 → 一句定位 → 一段说明，说明不进内容区，
+   * 免得每段内容都被一段灰字顶着。 */
+  const section = (num, key, title, sub, desc, body) =>
+    `<section class="sif-sec" data-sif="${key}">
       <div class="sif-head">
         <span class="sif-n">${num}</span>
-        <div class="sif-ht"><b>${esc(title)}</b><span>${esc(sub)}</span></div>
+        <b class="sif-title">${esc(title)}</b>
+        <span class="sif-sub">${esc(sub)}</span>
+        <p class="sif-desc">${esc(desc)}</p>
       </div>
       <div class="sif-body">${body}</div>
     </section>`;
 
   return `
-    ${section("01", "entries", "入口与模型", "每个入口的翻译 / 推理模型", entryPanel)}
-    ${section("02", "answer", "回答行为", "拒答、生成温度、会话历史", answerPanel)}
-    ${section("03", "site", "运行设置", "端口、监听、开机", sitePanel)}`;
+    ${section("01", "entries", "入口与模型", "每个入口的翻译 / 推理模型",
+      "下拉只列「模型服务」里已加入的模型；留空继承站点默认。",
+      entryPanel)}
+    ${section("02", "answer", "回答行为", "拒答、生成温度、会话历史",
+      "按本站检索库保存，前台与调试对话共用；改完即时生效。",
+      answerPanel)}
+    ${section("03", "site", "运行设置", "端口、监听、开机",
+      "语言与产出方式不在这页改，直接改 config/instances.yaml。",
+      sitePanel)}`;
 }
 
 /* 站点配置即时保存：回答行为七项写进站点主库（kb.config_json），其余写

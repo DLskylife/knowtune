@@ -335,41 +335,48 @@ for token, why in (
 admin_css = (STATIC / "api/static/style.css").read_text(encoding="utf-8")
 for token, why in (
     ('.app[data-view="site"] .ab-row .field > .field-label', "回答参数标签覆盖"),
-    ('.app[data-view="site"] .et-table tbody tr {', "入口卡片行布局"),
+    ('.app[data-view="site"] td.et-name', "入口名与徽章同一行（td 选择器要压过 display:block）"),
+    ('.app[data-view="site"] .et-table tbody tr {', "入口行网格布局"),
     ('.app[data-view="site"] .sif-save-msg.ok', "即时保存成功态"),
     ('.et-keep[hidden]', "隐藏保活区不可见"),
     ('.app[data-view="site"] .et-links', "模型自检与提示词链接条样式"),
 ):
     if token not in admin_css:
         errors.append(f"[ui] style.css 缺少{why}：{token}")
-for token, why in (
-    ('grid-template-columns: 230px repeat(2, minmax(0, 1fr))', "入口卡片行三列网格"),
-):
-    if token not in admin_css:
-        errors.append(f"[ui] style.css 缺少{why}：{token}")
-# 0.9.112 统一风格：三段共用一组 tokens，不再各套一套底色/边框/圆角/控件高度；
-# 表头与表体必须同列宽（之前表头停在 4 列 250px、表体已是 3 列 230px，对不齐）；
-# 三段引导语一律是卡外纯文字，03 段的说明不许再被 card() 塞回内容卡里。
+# 0.9.113 版式：左说明栏 + 右内容区。表头与表体共用 --s-et-cols 这一组列宽，
+# 不再各写一遍（写两遍就会重演 0.9.111 的对不齐）。
 for token, why in (
     ("--s-panel:", "站点内容面板统一底色"),
     ("--s-panel-bd:", "站点内容面板统一边框"),
     ("--s-ctl-h:", "站点控件统一高度"),
-    ('.app[data-view="site"] .scfg-lead {', "段内引导语样式"),
+    ("--s-et-cols:", "入口表列宽变量"),
+    ('.app[data-view="site"] .sif-desc {', "段说明落位"),
+    ("grid-template-columns: var(--s-rail) minmax(0, 1fr)", "段级左说明栏 + 右内容区"),
 ):
     if token not in admin_css:
         errors.append(f"[ui] style.css 缺少{why}：{token}")
-if admin_css.count("grid-template-columns: 230px repeat(2, minmax(0, 1fr))") != 2:
-    errors.append("[ui] 入口表表头与表体必须共用同一组三列列宽（各 1 处，共 2 处）")
+if admin_css.count("grid-template-columns: var(--s-et-cols)") != 2:
+    errors.append("[ui] 入口表表头与表体必须共用 --s-et-cols（各 1 处，共 2 处）")
 for gone, why in (
     ("250px repeat(3", "旧四列表头列宽"),
+    ("230px repeat(2", "旧硬编码三列列宽"),
     ('.app[data-view="site"] .scfg-card.run-only .scfg-card-head', "03 段卡内说明头"),
     ('card("运行", "占哪个端口', "03 段说明被塞进内容卡"),
 ):
     if gone in admin_css or gone in admin_js:
         errors.append(f"[ui] 不该再有{why}：{gone}")
-LEAD_CLS = 'class="scfg-lead'
-if admin_js.count(LEAD_CLS) != 3:
-    errors.append(f"[ui] 三段引导语应各一条，实为 {admin_js.count(LEAD_CLS)} 条")
+# 段说明只在 sif-head 里出现一次：内容区顶上不再压一段引导语。
+if admin_js.count('class="scfg-lead') != 0:
+    errors.append(f"[ui] 站点页不应再有内容区引导语 scfg-lead，实为 {admin_js.count('class=\"scfg-lead')} 条")
+if admin_js.count('class="sif-desc"') != 1:
+    errors.append("[ui] 段说明应由 section() 统一渲染（模板 1 处）")
+for token, why in (
+    ('class="et-av"', "入口行首徽章"),
+    ('class="run-cards"', "运行设置三卡容器"),
+    ('class="ab-grid"', "回答行为分组面板"),
+):
+    if token not in admin_js:
+        errors.append(f"[ui] app.js 缺少{why}：{token}")
 # 8 个保活字段一个都不能少：kb / classic_kb + 三个板块的 enabled / name。
 for token, why in (
     ('keep("kb_id", i.kb_id || 0)', "站点主库保活"),
