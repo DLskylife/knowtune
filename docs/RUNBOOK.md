@@ -217,13 +217,13 @@ knowtune serve --port 8013
 
 ## 8. 三板块：开关、模型与提示词
 
-三个板块都在后台「站点」页的内联配置区里配，不改代码：
+三个板块的模型在后台「站点 → 入口与模型」配，不改代码。**0.9.111 起这一页只配模型**：入口开关、显示名、检索库下拉、表内提示词按钮已撤下，站点页只提供 `translate` / `generate` 两个下拉；翻译自检与四个提示词入口收在表格下方的轻链接里。开关 / 显示名 / 检索库仍由 `config/instances.yaml` 的 `sections` / `kb_id` 持有（前端以 `.et-keep` 隐藏字段原样保活，改模型不会重置），要改就改配置文件；**不要以为页面上没摆就是没了**。
 
-| `section`（板块） | 引擎 | 可配内容 |
-|---|---|---|
-| `med` 维医问答 | 主库 RAG | 显示名、开关、`translate` / `generate` 后端、专属提示词（`scope=med`） |
-| `classic` 古籍问答 | 独立库 RAG（或按标题分栏） | 同上，与 `med` 完全独立 |
-| `pv` 预问诊 | 纯对话：一段系统提示词 + 模型，不检索知识库、不走主问答的检索 / 精排 | 显示名、开关；「预问诊参数」面板改 `config/previsit.yaml` |
+| `section`（板块） | 引擎 | 站点页这一行能改的 | 其余配置落点 |
+|---|---|---|---|
+| `med` 维医问答 | 主库 RAG | `translate` / `generate` 后端 | 显示名 / 开关 / 主库在 `instances.yaml`；专属提示词（`scope=med`）在表格下方「维医板块」链接 |
+| `classic` 古籍问答 | 独立库 RAG（或按标题分栏） | 同上，与 `med` 完全独立 | 同上，`classic_kb_id` 决定独立库 |
+| `pv` 预问诊 | 纯对话：一段系统提示词 + 模型，不检索知识库、不走主问答的检索 / 精排 | 同上 | 显示名 / 开关在 `instances.yaml`；提示词在「预问诊」链接，`config/previsit.yaml` 管界面文案与模型参数 |
 
 - **模型按板块配**：`sections.<key>.roles.{translate,generate}`，留空跟随站点级 roles。解析链（`roles.py`）：**板块级 roles → 站点级 roles → 站点 `provider`**，每级用已知后端名校验、不合法继续下退；没有系统级 roles / 默认 provider 这一层。当前 `sections.*.roles` 只覆盖了 `translate`，`generate` 跟随站点。
 - **提示词按板块配**：解析链以 `promptcfg.py` 代码为准：**`by_provider`（后端）> `by_scope`（板块）> `default`（角色默认）> 内置（builtin）**。只有 `generate` / `translate` 两个角色参与；界面文案不在这条链里。三处注释（`promptcfg.py` 头注释、`save()` docstring、`config/prompts.yaml` 头注释）曾与代码口径不一致，**本次重写已统一**；历史记录见 [ARCHITECTURE.md](ARCHITECTURE.md) §12。

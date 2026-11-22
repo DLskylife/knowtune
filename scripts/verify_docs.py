@@ -308,6 +308,9 @@ for token, why in (
     ("function queueSiteSave", "改动即保存的防抖排队"),
     ('data-save-state', "即时保存状态位"),
     ('class="et-table"', "入口与模型合并表"),
+    ('<th>入口</th><th>翻译模型</th><th>推理模型</th>', "入口表三列纯模型表头"),
+    ('class="et-keep" hidden', "非模型字段隐藏保活区"),
+    ('class="et-links"', "模型自检与提示词轻链接条"),
     ('data-open-prompt="previsit"', "预问诊提示词入口"),
     ("pv_role_translate", "预问诊翻译模型位"),
     ('class="sbk-top"', "身份头部"),
@@ -326,16 +329,46 @@ for token, why in (
 # 不能再退回调试对话页；前台网站必须真读主库温度，不能写死 0.35。
 # 0.9.109 视觉重做：全局 ≤1500px 那条隐藏 .field-label 的老规则不能吃掉站点
 # 回答参数的字段名；入口表必须是一行一张入口卡，不能退回撑高行的大表格。
+# 0.9.111 起 01 只留模型列：入口开关 / 显示名 / 检索库 / 提示词都不在表里，
+# 但值必须由 .et-keep 隐藏字段保活——后端 sections 是整份替换，少一个
+# sec_*_enabled 就会把关掉的入口回落成全开、把自定义名字清成空串。
 admin_css = (STATIC / "api/static/style.css").read_text(encoding="utf-8")
 for token, why in (
     ('.app[data-view="site"] .ab-row .field > .field-label', "回答参数标签覆盖"),
     ('.app[data-view="site"] .et-table tbody tr {', "入口卡片行布局"),
     ('.app[data-view="site"] .sif-save-msg.ok', "即时保存成功态"),
+    ('.et-keep[hidden]', "隐藏保活区不可见"),
+    ('.app[data-view="site"] .et-links', "模型自检与提示词链接条样式"),
 ):
     if token not in admin_css:
         errors.append(f"[ui] style.css 缺少{why}：{token}")
+for token, why in (
+    ('grid-template-columns: 230px repeat(2, minmax(0, 1fr))', "入口卡片行三列网格"),
+):
+    if token not in admin_css:
+        errors.append(f"[ui] style.css 缺少{why}：{token}")
+# 8 个保活字段一个都不能少：kb / classic_kb + 三个板块的 enabled / name。
+for token, why in (
+    ('keep("kb_id", i.kb_id || 0)', "站点主库保活"),
+    ('keep("classic_kb_id", classicCur)', "古籍分库保活"),
+    ('keepChk(`sec_${k}_enabled`', "板块开关保活"),
+    ('keep(`sec_${k}_name`', "板块显示名保活"),
+):
+    if token not in admin_js:
+        errors.append(f"[ui] app.js 缺少{why}：{token}")
 if admin_js.count("${section(") != 3:
     errors.append(f"[ui] 内联分区应为 3 段，实为 {admin_js.count('${section(')} 段")
+# 01 段已瘦身为纯模型配置：这些老控件的字面量不许再回到入口表里。
+for gone, why in (
+    ("入口 / 检索库", "四列表头"),
+    ("et-name-input", "入口显示名输入框"),
+    ("data-sec-card", "入口开关卡片锚点"),
+    ("scfg-badge", "入口显示/隐藏徽标"),
+    ('class="et-kb"', "检索库下拉容器"),
+    ("promptBtn(", "表格内提示词按钮"),
+):
+    if gone in admin_js:
+        errors.append(f"[ui] app.js 的 01 段又退回非模型控件（{why}）：{gone}")
 for gone, why in (
     ("data-save-inline", "站点保存按钮"),
     ("修改后保存即可生效", "站点旧保存提示"),

@@ -3293,11 +3293,12 @@ details.sbk-note-line[open] > summary::before { transform: rotate(90deg); }
 .scfg-mrow-soft .scfg-mrow-note {
   font-size: 11.5px; line-height: 1.6; color: var(--text-3);
 }
-/* 入口表：把原「板块与知识库」三张卡 + 「模型与提示词」矩阵合成一张表。
- * 第一列容纳开关、显示名、检索库三件事，后三列是翻译/推理/提示词。
+/* 入口表：0.9.111 起只留模型列——第一列是入口名，后两列是翻译 / 推理模型。
+ * 开关、显示名、检索库、提示词都不再露面（值由 .et-keep 隐藏字段保住，
+ * 不能真删，否则 sections 整份替换会把关掉的入口回落成全开）。
  * 窄屏不折成卡片（那会重新制造"两张表对不上"），改成整表横向滚动。 */
 .et-wrap { overflow-x: auto; }
-.et-table { width: 100%; border-collapse: collapse; table-layout: fixed; min-width: 780px; }
+.et-table { width: 100%; border-collapse: collapse; table-layout: fixed; min-width: 620px; }
 .et-table th, .et-table td {
   padding: 9px 12px; text-align: left; vertical-align: top;
   border-bottom: 1px solid var(--line-soft);
@@ -3307,9 +3308,10 @@ details.sbk-note-line[open] > summary::before { transform: rotate(90deg); }
   padding-top: 4px; padding-bottom: 7px;
   border-bottom: 1px solid var(--line);
 }
-.et-table th:nth-child(1) { width: 31%; }
-.et-table th:nth-child(2), .et-table th:nth-child(3) { width: 28%; }
-.et-table th:nth-child(4) { width: 13%; }
+.et-table th:nth-child(1) { width: 30%; }
+.et-table th:nth-child(2), .et-table th:nth-child(3) { width: 35%; }
+/* 非模型字段的隐藏保活区：hidden 属性之外再兜一层，防止别的规则覆盖成可见。 */
+.et-keep[hidden] { display: none !important; }
 .et-table tbody tr:last-child td { border-bottom: 0; }
 .et-table tbody tr:hover { background: rgba(91, 140, 255, .03); }
 .et-table tr.scfg-mrow-default td { background: rgba(91, 140, 255, .045); }
@@ -3647,7 +3649,7 @@ details.sbk-note-line[open] > summary::before { transform: rotate(90deg); }
   display: grid; gap: 10px;
 }
 .app[data-view="site"] .et-table tbody tr {
-  display: grid; grid-template-columns: 250px repeat(3, minmax(0, 1fr));
+  display: grid; grid-template-columns: 230px repeat(2, minmax(0, 1fr));
   gap: 12px; align-items: center;
   padding: 12px 14px;
   border: 1px solid #252d3a; border-radius: 11px;
@@ -3679,7 +3681,24 @@ details.sbk-note-line[open] > summary::before { transform: rotate(90deg); }
   }
   .app[data-view="site"] .et-table tbody td:nth-child(2)::before { content: "翻译模型"; }
   .app[data-view="site"] .et-table tbody td:nth-child(3)::before { content: "推理模型"; }
-  .app[data-view="site"] .et-table tbody td:nth-child(4)::before { content: "提示词"; }
+}
+
+/* 从入口表里挪出来的辅助动作：翻译自检 + 四个提示词入口。
+ * 不占表格列，收成一行轻链接，模型配置表保持纯两列。 */
+.app[data-view="site"] .et-links {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  margin-top: 12px;
+}
+.app[data-view="site"] .et-links-k {
+  margin-right: 2px; font-size: 11.5px; color: var(--text-3);
+}
+.app[data-view="site"] .et-links .mini {
+  height: 30px; padding: 0 11px; border-radius: 8px;
+  font-size: 11.5px; color: var(--text-2);
+  background: #1c222c; border: 1px solid #2a3342;
+}
+.app[data-view="site"] .et-links .mini:hover {
+  color: var(--text); border-color: rgba(91, 140, 255, .5);
 }
 
 @media (max-width: 560px) {

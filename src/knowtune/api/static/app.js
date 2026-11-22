@@ -1,6 +1,6 @@
 /* 构建号：与 index.html 里那份一致，不一致说明浏览器拿到的是旧 JS，
    页面加载完会强制换一次（见 index.html 的自检脚本）。 */
-window.ADMIN_BUILD = "0.9.110";
+window.ADMIN_BUILD = "0.9.111";
 
 const $ = (id) => document.getElementById(id);
 
@@ -6587,13 +6587,7 @@ function siteBlock(i, meta, plan, defProv, pv, kbCfg) {
 function siteInlinePanels(i, meta, plan, defProv, pv, kbCfg) {
   const d = state.sites || {};
   const roles = i.roles || {};
-  const opt = (v, label, cur) =>
-    `<option value="${v}"${String(cur) === String(v) ? " selected" : ""}>${esc(label)}</option>`;
-  const kbOpts = (d.kbs || []).map((k) =>
-    `<option value="${k.id}"${k.id === i.kb_id ? " selected" : ""}>${esc(k.name)}</option>`).join("");
   const classicCur = i.classic_kb_id || 0;
-  const classicOpts = opt(0, "不单独分库（按标题分）", classicCur)
-    + (d.kbs || []).map((k) => opt(k.id, k.name, classicCur)).join("");
   const lo = d.port_range ? d.port_range[0] : 8800;
   const hi = d.port_range ? d.port_range[1] : 8899;
 
@@ -6601,8 +6595,6 @@ function siteInlinePanels(i, meta, plan, defProv, pv, kbCfg) {
       <input type="checkbox" data-f="${field}"${on ? " checked" : ""}>
       <span class="sw" aria-hidden="true"></span>
       <span class="toggle-label">${esc(label)}</span></label>`;
-  const text = (field, val, ph, dir) => `<input data-f="${field}" dir="${dir || "auto"}"
-      value="${esc(val || "")}" placeholder="${esc(ph || "留空用默认")}">`;
   const sec = (key) => (i.sections && i.sections[key]) || {};
   const secOn = (key) => sec(key).enabled !== false;
   const sel = (field, role, cur, title, headLabel) =>
@@ -6621,73 +6613,72 @@ function siteInlinePanels(i, meta, plan, defProv, pv, kbCfg) {
       <div class="scfg-card-body">${body}</div>
     </section>`;
 
-  /* ---------- 入口表：一个入口一行，名字 / 库 / 模型 / 提示词不再跨两段对照 ----------
-   * 以前「板块与知识库」写一遍维医、古籍、预问诊，「模型与提示词」又写一遍，
-   * 用户得记住两张表里哪一行对哪一行。现在合成一张表，横向读就是某个入口
-   * 的全部配置。字段名（data-f）一个没动，readSiteBlock 照旧全量读。
-   * data-sec-card / .scfg-badge / data-trtest / data-trout 是事件锚点，保留。 */
+  /* ---------- 01 只留模型列（2026-11-22）----------
+   * 入口开关、显示名、检索库、提示词都不在这张表里露面，一行就两件事：
+   * 这个入口用哪个翻译模型、哪个推理模型。
+   *
+   * 但这些字段不能从 DOM 里凭空消失：readSiteBlock 是全量提交，后端 sections
+   * 又是整份替换（coerce_sections 对缺的 enabled 回落成「全开」、name 回落成
+   * 空串）。少一个 sec_*_enabled，用户改一次模型，被关掉的入口就自己回来了。
+   * 所以把被移除的字段原样塞进 .et-keep 隐藏区——payload 一行不改，后端零改动，
+   * 只是这一页不再提供编辑入口。data-f 字段名一个没动。 */
   const pvPair = pvRolePair(pv);
-  const promptBtn = (attrs, label) =>
-    `<button class="mini" type="button" ${attrs}>${esc(label)}</button>`;
   const row = (cells, cls = "") => `<tr class="${cls}">${cells}</tr>`;
-  const entryCell = (key, label, kb) => {
-    const on = secOn(key);
-    return `<td class="et-name" data-sec-card="${key}">
-      <div class="et-name-top">
-        <label class="toggle" title="关掉后这个入口在站点上真的消失（连地址一起）">
-          <input type="checkbox" data-f="sec_${key}_enabled"${on ? " checked" : ""}>
-          <span class="sw" aria-hidden="true"></span>
-          <span class="toggle-label">显示</span></label>
-        <span class="scfg-badge${on ? " on" : ""}">${on ? "已显示" : "已隐藏"}</span>
-      </div>
-      <input class="et-name-input" data-f="sec_${key}_name" dir="auto"
-        value="${esc(sec(key).name || "")}" placeholder="${esc(label)}" maxlength="24"
-        title="站点上显示的入口名；留空用「${esc(label)}」">
-      ${kb ? `<div class="et-kb"><span>检索库</span>${kb}</div>` : ""}
-    </td>`;
-  };
+  const keep = (f, v) => `<input type="hidden" data-f="${f}" value="${esc(v)}">`;
+  const keepChk = (f, on) =>
+    `<input type="checkbox" data-f="${f}"${on ? " checked" : ""} tabindex="-1">`;
+  const keepFields = `<div class="et-keep" hidden aria-hidden="true">
+      ${keep("kb_id", i.kb_id || 0)}
+      ${keep("classic_kb_id", classicCur)}
+      ${["med", "classic", "pv"].map((k) =>
+        keepChk(`sec_${k}_enabled`, secOn(k)) + keep(`sec_${k}_name`, sec(k).name || "")
+      ).join("")}
+    </div>`;
+  const entryCell = (label) => `<td class="et-name is-static">
+      <b>${esc(label)}</b><span>留空跟随站点默认</span></td>`;
   const defaultCell = `<td class="et-name is-static">
       <b>站点默认</b><span>其它入口留空时继承这里</span></td>`;
 
   const entryPanel = `
-    <div class="scfg-lead accent"><b>入口与模型</b><span>一行就是一个入口的全部配置。模型下拉只列「模型服务」里已加入的模型；留空表示继承站点默认。想加新模型，先去模型服务页把它加入清单。</span></div>
+    <div class="scfg-lead accent"><b>模型配置</b><span>每个入口用哪个翻译、哪个推理模型。下拉只列「模型服务」里已加入的模型；留空表示继承站点默认。想加新模型，先去模型服务页把它加入清单。</span></div>
     <div class="et-wrap">
+      ${keepFields}
       <table class="et-table">
         <thead><tr>
-          <th>入口 / 检索库</th><th>翻译模型</th><th>推理模型</th><th>提示词</th>
+          <th>入口</th><th>翻译模型</th><th>推理模型</th>
         </tr></thead>
         <tbody>
           ${row(`${defaultCell}
-            <td><div class="scfg-cell-row">${sel("role_translate", "translate", roles.translate,
-              "先把维吾尔语提问译成中文去检索，再把中文答案译回去")}
-              <button class="mini" type="button" data-trtest
-                title="发一句真实翻译，验证这个模型通不通、译得对不对">测试</button></div></td>
-            <td>${sel("role_generate", "generate", roles.generate, "读检索到的资料组织答案")}</td>
-            <td>${promptBtn("data-open-global-prompt", "角色提示词")}</td>`,
+            <td>${sel("role_translate", "translate", roles.translate,
+              "先把维吾尔语提问译成中文去检索，再把中文答案译回去")}</td>
+            <td>${sel("role_generate", "generate", roles.generate, "读检索到的资料组织答案")}</td>`,
           "scfg-mrow-default")}
-          ${row(`${entryCell("med", "维医问答", `<select data-f="kb_id">${kbOpts}</select>`)}
+          ${row(`${entryCell("维医问答")}
             <td>${sel("sec_med_role_translate", "translate", (sec("med").roles || {}).translate,
               "维医问答的翻译模型；留空跟随站点默认")}</td>
             <td>${sel("sec_med_role_generate", "generate", (sec("med").roles || {}).generate,
-              "维医问答的推理模型；留空跟随站点默认")}</td>
-            <td>${promptBtn('data-open-prompt="med"', "板块提示词")}</td>`,
-          secOn("med") ? "" : "is-off")}
-          ${row(`${entryCell("classic", "古籍问答", `<select data-f="classic_kb_id">${classicOpts}</select>`)}
+              "维医问答的推理模型；留空跟随站点默认")}</td>`)}
+          ${row(`${entryCell("古籍问答")}
             <td>${sel("sec_classic_role_translate", "translate", (sec("classic").roles || {}).translate,
               "古籍问答的翻译模型；留空跟随站点默认")}</td>
             <td>${sel("sec_classic_role_generate", "generate", (sec("classic").roles || {}).generate,
-              "古籍问答的推理模型；留空跟随站点默认")}</td>
-            <td>${promptBtn('data-open-prompt="classic"', "板块提示词")}</td>`,
-          secOn("classic") ? "" : "is-off")}
-          ${row(`${entryCell("pv", "预问诊", "")}
+              "古籍问答的推理模型；留空跟随站点默认")}</td>`)}
+          ${row(`${entryCell("预问诊")}
             <td>${sel("pv_role_translate", "translate", pvPair.translate,
               "预问诊维语翻译模型", "跟随站点默认")}</td>
             <td>${sel("pv_role_generate", "generate", pvPair.generate,
-              "预问诊推理模型", "跟随站点默认")}</td>
-            <td>${promptBtn('data-open-prompt="previsit"', "预问诊提示词")}</td>`,
-          secOn("pv") ? "" : "is-off")}
+              "预问诊推理模型", "跟随站点默认")}</td>`)}
         </tbody>
       </table>
+    </div>
+    <div class="et-links">
+      <span class="et-links-k">模型自检 / 提示词</span>
+      <button class="mini" type="button" data-trtest
+        title="发一句真实翻译，验证翻译模型通不通、译得对不对">测试翻译</button>
+      <button class="mini" type="button" data-open-global-prompt>角色提示词</button>
+      <button class="mini" type="button" data-open-prompt="med">维医板块</button>
+      <button class="mini" type="button" data-open-prompt="classic">古籍板块</button>
+      <button class="mini" type="button" data-open-prompt="previsit">预问诊</button>
     </div>
     <div class="tr-out scfg-tr-out" data-trout hidden></div>`;
 
@@ -6783,7 +6774,7 @@ function siteInlinePanels(i, meta, plan, defProv, pv, kbCfg) {
     </section>`;
 
   return `
-    ${section("01", "entries", "入口与模型", "每个入口的库、模型、提示词", entryPanel)}
+    ${section("01", "entries", "入口与模型", "每个入口的翻译 / 推理模型", entryPanel)}
     ${section("02", "answer", "回答行为", "拒答、生成温度、会话历史", answerPanel)}
     ${section("03", "site", "运行设置", "端口、监听、开机", sitePanel)}`;
 }
@@ -6914,23 +6905,8 @@ function bindSiteInlineEvents() {
 
   box.addEventListener("change", (e) => {
     const el = e.target;
-    // 板块开关不只是改 checkbox：卡片灰化与徽标要跟着变。
-    const m = /^sec_(med|classic|pv)_enabled$/.exec(el.dataset.f || "");
-    if (m) {
-      const cell = el.closest("[data-sec-card]") ||
-        box.querySelector(`[data-sec-card="${m[1]}"]`);
-      if (cell) {
-        const on = Boolean(el.checked);
-        const card = cell.closest("tr") || cell;
-        card.classList.toggle("is-off", !on);
-        const badge = cell.querySelector(".scfg-badge");
-        if (badge) {
-          badge.classList.toggle("on", on);
-          badge.textContent = on ? "已显示" : "已隐藏";
-        }
-      }
-    }
     // data-f / data-ab 是站点配置控件：改动即写回，连续改动合并成一次请求。
+    // 入口开关等值由 .et-keep 里的隐藏字段原样保活，不参与交互，也不会 change。
     if (el.matches("[data-f], [data-ab]")) {
       const card = el.closest(".site-block");
       if (card) queueSiteSave(card);
