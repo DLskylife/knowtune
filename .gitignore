@@ -38,9 +38,17 @@ data/uploads/*
 data/uploads/weiyi/*
 !data/uploads/weiyi/*.pdf
 !data/uploads/weiyi/*.md
-# corpus 只是本机整理目录，仓库保留空骨架，内容一律不入库
+# corpus：整理好的语料随仓库发布。维医那批走 uploads/weiyi/，这里放的是
+# 现代医学参考（20 篇 MSD 大众版正文摘要 + 来源清单，约 356 KB）。
+# 两类仍排除：
+#   _raw/     抓取中间件，原始 PDF 与 uploads/weiyi 里的同版重复，多存一遍没意义
+#   临床药理/ 39 MB 整本教材 OCR，无版权页无 ISBN、系统删改不可核，不入公开仓库
 data/corpus/*
 !data/corpus/.gitkeep
+!data/corpus/现代医学/
+!data/corpus/现代医学_来源清单.md
+data/corpus/_raw/
+data/corpus/临床药理/
 data/vectors/*
 !data/vectors/.gitkeep
 data/tmp/*

@@ -62,7 +62,7 @@ KnowTune 是本地单机知识库问答系统：一个 FastAPI 进程（`api/app
 | `scripts/` | 三个开发期辅助脚本（假后端、下载 llama-server、截图），不参与运行时。 |
 | `docs/` | 面向人的文档，`docs/` 下 6 份 + 根 [README](../README.md) 共 7 份，各司其职见末节。 |
 | `pyproject.toml` | 打包与依赖分组（`extract` / `local` / `onnx` 可选未启用 / `dev`），入口与版本号。 |
-| `data/` | 运行数据：库、上传副本、本地模型、密钥、标定、会话库。**体积大且含个人内容，被 `.gitignore` 整目录排除，不进版本库**，clone 后由程序自建并自行下载模型。 |
+| `data/` | 运行数据：库、上传副本、本地模型、密钥、标定、会话库。**大件整体被 `.gitignore` 排除**（数据库、模型权重、密钥、本机上传的第三方文档），clone 后由程序自建并自行下载模型；随仓库发布的只有两批公开样例语料 `uploads/weiyi/`（26 篇维医指南）与 `corpus/现代医学/`（20 篇参考摘要）。 |
 | `tools/llama/` | llama.cpp 可执行文件（约 100MB，按需由 `scripts/get_llama.py` 下载），**被 `.gitignore` 排除**，不是项目代码。 |
 | `_pm/` | 立项/需求类过程文档与内部基线，**被 `.gitignore` 排除，不是项目目录**，不参与构建与运行；`.workbuddy/`、`_shot/`、`.pytest_cache/`、`.venv/`、`.idea/` 同属本机环境或过程产物。 |
 
