@@ -302,22 +302,51 @@ if cli_smoke.returncode or "serve" not in cli_smoke.stdout:
 # 既守新结构，也守"别把弹窗/页签/跳转摘要行加回来"。
 admin_js = (STATIC / "api" / "static/app.js").read_text(encoding="utf-8")
 for token, why in (
-    ("function siteInlinePanels", "三段内联配置渲染"),
+    ("function siteInlinePanels", "内联配置渲染"),
     ('class="sif-sec"', "内联分区容器"),
     ("function saveSiteInline", "页面内就地保存"),
     ("data-save-inline", "站点保存按钮"),
-    ('class="scfg-matrix"', "模型角色矩阵"),
+    ('class="et-table"', "入口与模型合并表"),
     ('data-open-prompt="previsit"', "预问诊提示词入口"),
     ("pv_role_translate", "预问诊翻译模型位"),
     ('class="sbk-top"', "身份头部"),
+    ('class="sbk-strip', "卡内当前生效条"),
     ("i.ug_capable === false && i.ug_note", "正常态自检不渲染"),
     ("function bindSiteInlineEvents", "内联交互事件委托"),
+    ("const answerPanel", "站点回答行为配置区"),
+    ('abField("分数阈值", abKeys.refuseScore', "拒答阈值写回主库"),
+    ('data-ab="${esc(key)}"', "回答参数统一用 data-ab 标记"),
+    ("function loadSiteKbConfigs", "按站点主库加载回答参数"),
+    ('PATCH", `/api/kb/${kbId}/config`', "回答行为写回 kb.config_json"),
 ):
     if token not in admin_js:
         errors.append(f"[ui] app.js 缺少站点页内联配置台的{why}：{token}")
-# 三段就是三段：板块 / 模型 / 站点，全部同时可见，不许再切页签。
+# 0.9.108 起站点页三段：入口与模型 / 回答行为 / 运行设置。回答行为属于站点主体，
+# 不能再退回调试对话页；前台网站必须真读主库温度，不能写死 0.35。
 if admin_js.count("${section(") != 3:
     errors.append(f"[ui] 内联分区应为 3 段，实为 {admin_js.count('${section(')} 段")
+for gone, why in (
+    ("function renderAnswerBar", "对话页回答参数常驻摘要"),
+    ("btnAnswerEdit", "对话页回答参数入口"),
+    ("cfgAnswerSec", "对话页回答参数浮层"),
+):
+    if gone in admin_js or gone in (STATIC / "api/static/index.html").read_text(encoding="utf-8"):
+        errors.append(f"[ui] 后台仍残留已删除的{why}：{gone}")
+site_py = (STATIC / "frontsite/site.py").read_text(encoding="utf-8")
+for token, why in (
+    ("float(kb_cfg.generation.temperature)", "前台两段式草稿读主库温度"),
+    ("temperature=gen_temp", "前台流式回答读主库温度"),
+):
+    if token not in site_py:
+        errors.append(f"[ui] frontsite/site.py 缺少{why}：{token}")
+if "temperature=0.35" in site_py:
+    errors.append("[ui] frontsite/site.py 又把生成温度写死成 0.35，站点配置不会生效")
+for gone, why in (
+    ("function siteLivePanel", "顶部独立当前运行表"),
+    ('class="site-live"', "顶部当前运行表容器"),
+):
+    if gone in admin_js:
+        errors.append(f"[ui] app.js 仍残留已删除的{why}：{gone}")
 for gone, why in (
     ("data-jumptab", "跳转型参数行"),
     ("data-scfg-tab", "弹窗页签按钮"),

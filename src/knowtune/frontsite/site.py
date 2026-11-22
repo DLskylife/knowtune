@@ -652,10 +652,13 @@ def build_site(spec, state: Any) -> FastAPI:
                 for _try in range(2):
                     try:
                         draft = state.llm.complete(
-                            # 0.2 太死：同一个问题连问三次措辞几乎逐字相同，
-                            # 而且容易只把资料里那一两句复述完就收笔。0.35 仍在
-                            # RAG 的稳妥区间，但愿意把上下文补完整。
-                            draft_msgs, provider=gen_provider, temperature=0.35
+                            # 温度取自站点主库配置（后台「站点 → 回答行为」改的
+                            # 就是它）。以前这里写死 0.35，后台那个「温度」旋钮
+                            # 从来没作用到用户真正提问的前台站点上——典型的主次
+                            # 错位：配置摆在测试台，主体网站却用常量。现在网站
+                            # 跟着配置走，默认值（0.3）也是配置里那份，改了即生效。
+                            draft_msgs, provider=gen_provider,
+                            temperature=float(kb_cfg.generation.temperature)
                         ).text or ""
                     except Exception as exc:
                         draft = ""
@@ -840,15 +843,20 @@ def build_site(spec, state: Any) -> FastAPI:
 
             不是所有服务端都认末尾的 assistant 消息（OpenAI 官方会忽略，
             个别实现直接 400），所以失败且一个字都还没出时就退回普通调用。
+
+            温度同样取自站点主库配置，和两段式草稿走同一个旋钮——否则用户
+            在「回答行为」里调了温度，切一下产出方式就又失效了。
             """
+            gen_temp = float(kb_cfg.generation.temperature)
             prefill = _PREFILL.get(want_lang)
             if not prefill:
-                yield from state.llm.stream(msgs, provider=prov)
+                yield from state.llm.stream(msgs, provider=prov, temperature=gen_temp)
                 return
             got: list[str] = []
             for attempt in (msgs + [{"role": "assistant", "content": prefill}], msgs):
                 try:
-                    for piece in state.llm.stream(attempt, provider=prov):
+                    for piece in state.llm.stream(attempt, provider=prov,
+                                                  temperature=gen_temp):
                         got.append(piece)
                         yield piece
                     return

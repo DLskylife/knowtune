@@ -300,6 +300,30 @@ kbd {
 .dot.ok { background: var(--ok); box-shadow: 0 0 0 2px rgba(62, 207, 142, .13); }
 .dot.err { background: var(--err); box-shadow: 0 0 0 2px rgba(242, 85, 90, .13); }
 
+/* 侧栏底部两条状态：回答"现在能不能提问、由谁回答"。
+ * 放在滚动区之外、flex 末尾，列表再长也不会把它顶出屏。原来这里是一排四行
+ * 统计 + 一个全局参数入口，信息重复、还占掉一截列表；只收窄成这两条。
+ * 状态用圆点表达，文字保持中性——一整行绿字会跟"成功提示"混淆。 */
+.sidebar-foot {
+  flex: none;
+  padding: 9px 16px 11px;
+  border-top: 1px solid var(--line-soft);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.foot-line {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11.5px;
+  line-height: 1.35;
+  min-width: 0;
+}
+.foot-line .k { color: var(--text-3); flex: none; }
+.foot-line b { font-weight: 500; color: var(--text-2); min-width: 0; }
+.foot-line b.ell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 
 /* ================================================================= 主区 */
 
@@ -1192,7 +1216,10 @@ input[type=number].num::-webkit-outer-spin-button { -webkit-appearance: none; ma
 /* --------------------------------------------------------------- 页面骨架 */
 
 .page { max-width: 1240px; margin: 0 auto; padding: 18px 22px 40px; }
-.page-sub { font-size: 11.5px; color: var(--text-3); white-space: nowrap; }
+.page-sub {
+  font-size: 11.5px; color: var(--text-3);
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis;
+}
 
 .kpi-grid {
   display: grid;
@@ -1882,6 +1909,11 @@ input[type=number].num::-webkit-outer-spin-button { -webkit-appearance: none; ma
 .cfg-btn.on .chev { transform: rotate(180deg); }
 .cfg-btn.on { background: var(--surface-3); border-color: var(--line); }
 .cfg-btn .dot { flex: none; }
+@media (max-width: 560px) {
+  /* 顶栏按钮的摘要文字在手机上会顶出视口——收窄，标题里写全名。 */
+  .cfg-btn { max-width: 116px; }
+  .cfg-btn .cfg-sum { max-width: 72px; }
+}
 
 /* 贴在顶栏下方、右侧「调试面板」的左边：压在面板上会挡住它自己控制的那块
    区域，改完一个开关还要关掉面板才看得见效果。
@@ -1977,9 +2009,6 @@ input[type=number].num::-webkit-outer-spin-button { -webkit-appearance: none; ma
    "内容宽度的胶囊 + 右边一块空白"整齐。 */
 .cfg-row-topk { grid-template-columns: 116px minmax(0, 1fr) minmax(0, 1fr); }
 .cfg-row > .toggle { justify-content: flex-start; }
-
-/* 候选池 / MMR / 不拒答：两个字段 + 一颗开关 */
-.cfg-row-mm { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; }
 
 /* 开关组：横排、各自按内容宽度，不拉伸成一模一样的大块 */
 .cfg-switches { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
@@ -2548,6 +2577,7 @@ input[type=number].num::-webkit-outer-spin-button { -webkit-appearance: none; ma
    自己改的设置没保存。 */
 .sbk-dim.warn { color: var(--warn, #d9a03a); }
 .sbk-meta {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0;
   font-size: 11.5px; color: var(--text-3);
   font-variant-numeric: tabular-nums;
 }
@@ -2580,6 +2610,70 @@ input[type=number].num::-webkit-outer-spin-button { -webkit-appearance: none; ma
 .sbk-foot { padding: 0 var(--card-pad-x) 13px; }
 .sbk-foot .sbk-note-line { margin: 0 0 8px; }
 .sbk-foot .sbk-note-line:last-child { margin-bottom: 0; }
+
+/* 站点卡头的状态：灯 + 状态词 + 时长并成一段，和站点名同一行只读一次。 */
+.sbk-port { font-family: var(--mono); font-size: 11.5px; color: var(--text-3); }
+.sbk-state {
+  display: inline-flex; align-items: center; gap: 6px; min-width: 0;
+  font-variant-numeric: tabular-nums;
+}
+.sbk-state b { font-size: 12px; font-weight: 600; color: var(--text-2); white-space: nowrap; }
+.sbk-state b.is-on { color: var(--ok); }
+.sbk-state > span {
+  font-size: 11px; color: var(--text-3); white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;
+}
+
+/* 卡内「当前生效」条：身份/状态已经在卡头，这里只回答"每个入口用谁"。
+ * 三个入口等宽并排，短名各自省略，标「继承/独立」区分是不是站点默认。 */
+.sbk-strip {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center; gap: 12px;
+  padding: 9px var(--card-pad-x);
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--card-line);
+  font-variant-numeric: tabular-nums;
+}
+.sbk-strip.is-off { opacity: .62; }
+.sbk-strip-k {
+  font-size: 11.5px; font-weight: 600; color: var(--text-3); white-space: nowrap;
+}
+.sbk-strip-entries {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 8px; min-width: 0;
+}
+.sl-entry {
+  display: flex; align-items: center; gap: 7px; min-width: 0;
+  padding: 5px 8px; border: 1px solid var(--line-soft);
+  border-radius: 7px; background: var(--card-bg);
+}
+.sl-entry-k {
+  flex: none; font-size: 11px; font-weight: 600; color: var(--text-2);
+  padding-right: 7px; border-right: 1px solid var(--line-soft);
+}
+.sl-entry-v {
+  display: inline-flex; align-items: baseline; gap: 3px; min-width: 0;
+  font-size: 11.5px;
+}
+.sl-entry-v em { flex: none; font-style: normal; font-size: 10px; color: var(--text-3); }
+.sl-entry-v b {
+  font-weight: 600; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sl-inherit, .sl-own {
+  flex: none; margin-left: auto; padding: 1px 5px; border-radius: 4px;
+  font-size: 9.5px; white-space: nowrap;
+}
+.sl-inherit { color: var(--text-3); background: rgba(120, 130, 145, .12); }
+.sl-own { color: var(--accent); background: rgba(91, 140, 255, .12); }
+.sbk-strip-note { font-size: 10.5px; color: var(--text-3); white-space: nowrap; }
+@media (max-width: 1080px) {
+  .sbk-strip { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .sbk-strip-note { white-space: normal; }
+}
+@media (max-width: 560px) {
+  .sbk-strip-entries { grid-template-columns: minmax(0, 1fr); }
+}
 
 /* 翻译测试输出（内联模型区里的「测试」按钮下方）：译文 dir=auto 自适应 RTL。 */
 .tr-out { padding: 8px 10px; border: 1px dashed var(--line);
@@ -3091,6 +3185,8 @@ details.sbk-note-line[open] > summary::before { transform: rotate(90deg); }
 .scfg-card.run-only .scfg-field input { max-width: 180px; }
 
 @media (max-width: 780px) {
+  /* scfg-cards 的 minmax(290px,1fr) 在手机宽度上会把卡片顶出视口。 */
+  .scfg-cards { grid-template-columns: minmax(0, 1fr); }
   .scfg-card.run-only .scfg-field {
     grid-template-columns: minmax(0, 1fr);
     gap: 6px; padding: 11px 0;
@@ -3116,6 +3212,47 @@ details.sbk-note-line[open] > summary::before { transform: rotate(90deg); }
 .scfg-field .mini { align-self: flex-start; }
 /* 开关在 flex column 里默认被拉满字段宽度，变成一条色块；收到内容宽度才像开关。 */
 .scfg-field > .toggle { align-self: flex-start; }
+
+/* 回答行为：拒答 / 生成会话两块并排，字段沿用 scfg-field 的输入外观。
+ * 每块内部用 grid，宽度足够时一行两到三列，窄屏自动堆叠。 */
+.ab-grid {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px;
+}
+.ab-block {
+  min-width: 0; padding: 13px 14px;
+  border: 1px solid var(--card-line); border-radius: 10px;
+  background: var(--surface-2);
+}
+.ab-blk-title {
+  display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap;
+  margin-bottom: 12px; font-size: 12.5px; font-weight: 600;
+}
+.ab-blk-title span { font-size: 10.5px; font-weight: 400; color: var(--text-3); }
+.ab-row {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 12px; align-items: end;
+}
+.ab-row + .ab-row { margin-top: 11px; }
+.ab-row .field { min-width: 0; }
+.ab-row .field > .field-label { font-size: 11px; color: var(--text-3); }
+.ab-row .field input[type="number"] {
+  width: 100%; min-width: 0; height: var(--ctl); padding: 0 10px;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: var(--surface-3); color: var(--text); font: inherit; font-size: 12.5px;
+}
+.ab-row .field input[type="number"]:focus {
+  outline: none; border-color: rgba(91, 140, 255, .6);
+  box-shadow: 0 0 0 3px rgba(91, 140, 255, .08);
+}
+.ab-row .field small { font-size: 10px; line-height: 1.45; color: var(--text-3); }
+/* 生成与会话那块三列，把温度 / 轮数 / 预算压在一行里。 */
+.ab-block:last-child .ab-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (max-width: 900px) {
+  .ab-grid { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 560px) {
+  .ab-row, .ab-block:last-child .ab-row { grid-template-columns: minmax(0, 1fr); }
+}
 
 /* 模型矩阵：列头把「哪个下拉管什么」写死，行顺序就是角色优先级。 */
 .scfg-matrix-wrap {
@@ -3156,6 +3293,50 @@ details.sbk-note-line[open] > summary::before { transform: rotate(90deg); }
 .scfg-mrow-soft .scfg-mrow-note {
   font-size: 11.5px; line-height: 1.6; color: var(--text-3);
 }
+/* 入口表：把原「板块与知识库」三张卡 + 「模型与提示词」矩阵合成一张表。
+ * 第一列容纳开关、显示名、检索库三件事，后三列是翻译/推理/提示词。
+ * 窄屏不折成卡片（那会重新制造"两张表对不上"），改成整表横向滚动。 */
+.et-wrap { overflow-x: auto; }
+.et-table { width: 100%; border-collapse: collapse; table-layout: fixed; min-width: 780px; }
+.et-table th, .et-table td {
+  padding: 9px 12px; text-align: left; vertical-align: top;
+  border-bottom: 1px solid var(--line-soft);
+}
+.et-table th {
+  font-size: 11px; font-weight: 600; color: var(--text-3);
+  padding-top: 4px; padding-bottom: 7px;
+  border-bottom: 1px solid var(--line);
+}
+.et-table th:nth-child(1) { width: 31%; }
+.et-table th:nth-child(2), .et-table th:nth-child(3) { width: 28%; }
+.et-table th:nth-child(4) { width: 13%; }
+.et-table tbody tr:last-child td { border-bottom: 0; }
+.et-table tbody tr:hover { background: rgba(91, 140, 255, .03); }
+.et-table tr.scfg-mrow-default td { background: rgba(91, 140, 255, .045); }
+.et-table tr.is-off { opacity: .5; }
+.et-table td select {
+  width: 100%; min-width: 0; height: var(--ctl); padding: 0 8px;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: var(--surface-3); color: var(--text);
+  font: inherit; font-size: 12px;
+}
+.et-table td > .mini { white-space: nowrap; }
+.et-name { min-width: 0; }
+.et-name-top { display: flex; align-items: center; gap: 10px; min-height: 22px; }
+.et-name-top .scfg-badge { margin-left: auto; }
+.et-name-input {
+  width: 100%; height: var(--ctl); margin-top: 8px; padding: 0 8px;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: var(--surface-3); color: var(--text);
+  font: inherit; font-size: 12px;
+}
+.et-kb { display: flex; align-items: center; gap: 8px; margin-top: 6px; min-width: 0; }
+.et-kb > span { flex: none; font-size: 10.5px; color: var(--text-3); }
+.et-kb select { flex: 1 1 auto; }
+.et-name.is-static b { display: block; font-size: 12.5px; }
+.et-name.is-static span { display: block; margin-top: 5px; font-size: 11px; color: var(--text-3); }
+.et-table .scfg-cell-row { gap: 6px; }
+.et-table .scfg-cell-row select { flex: 1 1 auto; min-width: 0; }
 .scfg-tr-out { margin-top: 12px; }
 .scfg-footnote {
   margin-top: 12px; padding: 10px 12px;
@@ -3188,4 +3369,28 @@ details.sbk-note-line[open] > summary::before { transform: rotate(90deg); }
 }
 @media (max-width: 1400px) {
   .cfg-pop #topKSel { display: inline-block; width: 100%; }
+}
+
+/* 手机宽度：侧栏不该吃掉 240px，把主区挤到 150px 后每个字段都竖着一个字一行。
+   改成顶部一条图标导航，主区独占整宽；知识库/文档列表在手机端不常驻，
+   它们的入口仍在各自页面里，不需要为了窄屏再塞一条 240px 的竖栏。 */
+@media (max-width: 560px) {
+  .app, .app.panel-hidden,
+  .app[data-view="home"], .app[data-view="chat"], .app[data-view="kb"],
+  .app[data-view="models"], .app[data-view="site"] {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: 52px minmax(0, 1fr);
+  }
+  .sidebar {
+    flex-direction: row; align-items: center;
+    padding: 0 8px;
+    border-right: 0; border-bottom: 1px solid var(--line-soft);
+  }
+  .brand { padding: 0 6px 0 2px; }
+  .brand-text, .sb-scroll, .sidebar-foot { display: none; }
+  .nav { margin-left: auto; padding: 0; gap: 4px; }
+  .nav-item { flex: 0 0 auto; flex-direction: row; padding: 9px 10px; }
+  .nav-item span { display: none; }
+  .nav-item svg { width: 18px; height: 18px; }
+  .main { min-height: 0; }
 }

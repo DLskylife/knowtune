@@ -140,11 +140,11 @@ knowtune serve --port 8013
 
 **库级参数是独立的一份全量快照**（`kb.config_json`，标 `__full__`），建库时复制一整套，之后全局改它不跟。判断「这个库手调过没有」是拿它和**出厂基线值**比，不是看键存不存在——全量快照里键永远在。参数优先级：`config/default.yaml`（唯一权威）→ `config/local.yaml`（用户改过的差异项）→ 库级 `kb.config_json` → 按库标定文件覆盖。
 
-**界面上的入口只有一个：知识库页的「参数」栏目。** 侧栏底部那颗「全局检索参数」已经删掉（2026-11-20）——既然每个库都持有完整一套，外面再摆一层"全局值"只会在「我改了这个，为什么那个库没变」上反复解释。要改出厂初值请直接改 `config/default.yaml`，或 `PATCH /api/settings`（接口保留，界面不再给入口）；老书签 `#settings` 会落到当前库的参数页。
+**界面入口按作用域分成两处**（2026-11-22）：知识库页「参数」栏目只管分块、召回、融合、精排这四组"资料怎么切、怎么检索"；拒答开关与三个阈值、生成温度、历史轮数、历史预算这七项在**「站点 → 回答行为」**，按站点主库保存，前台网站与调试对话共用同一份 `kb.config_json`。后台对话页是调试台，不再摆摘要条和「回答与会话」入口——不是删参数，是把旋钮放回真正消费它们的主体上。侧栏底部那颗「全局检索参数」也已删掉。要改出厂初值请直接改 `config/default.yaml`，或 `PATCH /api/settings`（接口保留，界面不再给入口）；老书签 `#settings` 会落到当前库的参数页。
 
 **两条优先级链别混**（以代码为准）：
 
-- 角色 `role` 解析链（`roles.py`）：**板块级 roles → 站点级 roles → 站点 `provider`（后端）**。每级用已知后端名校验，不合法继续下退；没有系统级 roles / 默认 provider 这一层，谁都不配就是空、由调用方明确报错。当前站点已配：`translate = siliconflow::tencent/Hunyuan-MT-7B`，`generate = siliconflow::Qwen/Qwen2.5-7B-Instruct`。站点这一列的下拉**只列「模型服务」页里已经加入的模型**（`config/models.yaml` 的 `models` 清单），探测回来的服务商全量目录（siliconflow 60 多个、aliyun 140 多个）不进候选——要用别的模型，先去模型页在端点卡的下拉里选一下，选过就会进清单，回来这里才看得见；配置里已有的值即使已被移出清单也仍然显示（后缀标「未加入清单」），不会被静默改掉。
+- 角色 `role` 解析链（`roles.py`）：**板块级 roles → 站点级 roles → 站点 `provider`（后端）**。每级用已知后端名校验，不合法继续下退；没有系统级 roles / 默认 provider 这一层，谁都不配就是空、由调用方明确报错。当前站点已配：`translate = siliconflow::tencent/Hunyuan-MT-7B`，`generate = siliconflow::Qwen/Qwen2.5-7B-Instruct`。站点这一列的下拉**只列「模型服务」页里已经加入的模型**（`config/models.yaml` 的 `models` 清单），探测回来的服务商全量目录（siliconflow 60 多个、aliyun 140 多个）不进候选——要用别的模型，先去模型页在端点卡的下拉里选一下，选过就会进清单，回来这里才看得见；配置里已有的值即使已被移出清单也仍然显示（后缀标「未加入清单」），不会被静默改掉。下拉里不再有「默认」项：要么留空跟随上级/后端下拉，要么选带名字的具体模型；只写了后端名的旧配置会自动落到该后端的 `model` 作为具体模型选中，保存一次写成显式 `后端::模型`。显示名为了好读做了压缩（去厂商前缀、去 `-Instruct`、全组共有的量化尾巴只留一份在悬停里），鼠标停上去始终是完整 id，保存写的也是完整值——界面短名不会改掉配置。**后台「站点」页的状态只在卡片里出现一次**（2026-11-22）：页顶那张独立的「当前运行」表已删——同一站点在页面上出现两次，还只读站点默认 `resolved`，漏掉板块自己的 `section_resolved`。现在卡头写名称 / 状态灯 / 时长 / 端口 / URL / 操作，卡头下面一条「当前生效」逐入口（维医 / 古籍 / 预问诊）显示真正解析后的模型：跟站点默认相同的标「继承」，独立配置的写实际后端名（`local` 与 `siliconflow` 都可能叫 7B，只写「独立」等于没说）。模型名沿用短名规则，悬停看完整 id；保存后即时同步。
 - 提示词解析链（`promptcfg.py`）：**`by_provider`（后端）> `by_scope`（板块）> `default`（角色默认）> 内置（builtin）**。只有 `generate` / `translate` 两个角色参与；界面文案走前台固定内置值。当前 `config/prompts.yaml` 实配只有 `translate.by_provider.siliconflow.system`，`overridden_scopes` 为空，即没配板块级提示词覆盖。
 
 源码注释曾与代码口径不一致（`promptcfg.py` 头注释与 `save()` docstring 声称板块优先于后端，`config/prompts.yaml` 头注释漏写 `by_scope`）；**本次重写已统一到代码口径**。历史记录与逐条对照见 [ARCHITECTURE.md](ARCHITECTURE.md) §12。
@@ -340,7 +340,7 @@ python scripts/fake_llm.py --port 18080 --mode bad    # 改数字，应被锚点
 
 起不来时按这三处查：二进制不在 `tools/llama` / PATH / `KNOWTUNE_LLAMA_SERVER`（重跑 `get_llama.py`）；显存不够（换更小量化或把 `context` 调小）；端口被占（配置写死的端口不会自动换，停占用者或改端口）。
 
-**自启**：在 `config/models.yaml` 给端点加 `autostart: true`，后台启动时就会自动拉起它的默认模型，不用每次手点。现行配置里 `local` 已打开，默认模型 `Qwen2.5-7B-Instruct-Q4_K_M`（:8097）。加载 4.4GB 权重约 20 秒，期间模型页显示「启动中」，这二十秒内点预问诊会报「服务暂时不可用」；自启失败（显存不够、端口被占、文件被删）在「日志」里有一条 ERROR，写明原因。
+**本地模型不自启**：重启后台服务不会拉起 llama.cpp 进程，得去「模型服务」页在清单里点「启动」。现行配置里 `local` 的默认模型是 `Qwen2.5-7B-Instruct-Q4_K_M`（:8097），加载 4.4GB 权重约 20 秒，期间那行显示「启动中」。没启就点预问诊会报「预问诊服务暂时不可用」——这是设计，不会偷偷改走云端。启动失败（显存不够、端口被占、文件被删）在「日志」里有一条 ERROR，写明原因。前台问答站的自启是另一回事，仍由 `config/instances.yaml` 控制。
 
 **预问诊推理固定走本地**：`config/previsit.overrides.yaml` 里 `provider: local` + `model: Qwen2.5-7B-Instruct-Q4_K_M`，问诊的判断**不会**把患者原话发给云端。它在 `/v1` 网关上按 `X-KnowTune-Provider` 头路由到本机，模型没起来时直接报「预问诊服务暂时不可用」，**不会**偷偷改走云端，也没有规则兜底。**预问诊只有一段系统提示词**（`config/previsit.yaml` 的 `prompts.chat`）：每轮一次模型调用，把完整对话历史交过去，问什么、问几轮、何时收尾都由模型决定。2026-11-07 实测（RTX 3060 6G）开场 1.8 s、每轮 2.3 s。
 

@@ -36,10 +36,10 @@ hf download BAAI/bge-reranker-base \
 
 | 端点 | 文件名 | 体积 | 用途 |
 |---|---|---|---|
-| `local`（8097，`autostart: true`） | `Qwen2.5-7B-Instruct-Q4_K_M.gguf` | 4.68 GB | 官方 7B Q4，预问诊默认走它 |
+| `local`（8097，需手动点「启动」） | `Qwen2.5-7B-Instruct-Q4_K_M.gguf` | 4.68 GB | 官方 7B Q4，预问诊默认走它 |
 | 自建端点（如 8098） | `Qwen-3b-doctor-weiyi-light-Q4_K_M.gguf` | 1.83 GB | 3B 维医微调 Q4_K_M，可选；出厂配置未注册，需按 `tools/llama/README.md` 独立新建 |
 
-把文件放进本目录即可，配置里已经是 `data/models/xxx.gguf`（项目根相对，从哪个工作目录启动都一样），不用改路径。没有这些文件也能用：走云端 `siliconflow` / `deepseek` 填密钥即可；不想看 `local` 自启失败，就把 `config/models.yaml` 里它的 `autostart` 删掉。
+把文件放进本目录即可，配置里已经是 `data/models/xxx.gguf`（项目根相对，从哪个工作目录启动都一样），不用改路径。没有这些文件也能用：走云端 `siliconflow` / `deepseek` 填密钥即可；本地模型不随后台服务自启：重启后到「模型服务」页点清单里的「启动」，进程才会占显存、监听端口。
 
 3B 那份的校验值（本机 2026-11-08 量化产物）：
 

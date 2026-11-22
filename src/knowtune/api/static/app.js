@@ -1,6 +1,6 @@
 /* 构建号：与 index.html 里那份一致，不一致说明浏览器拿到的是旧 JS，
    页面加载完会强制换一次（见 index.html 的自检脚本）。 */
-window.ADMIN_BUILD = "0.9.97";
+window.ADMIN_BUILD = "0.9.108";
 
 const $ = (id) => document.getElementById(id);
 
@@ -706,20 +706,25 @@ function stopWarmPoll() {
 function renderStatus() {
   const s = state.status;
   if (!s) return;
-  // 侧栏底部那排全局统计已经撤掉：chunk 数在知识库「信息」页、精排模型与
-  // 候选数在本库「参数」页、后端数量在模型页。同一件事只该有一个权威位置。
+  // 侧栏底部只留两条——「现在能不能提问」和「由谁回答」。旧版那排里 chunk
+  // 数在知识库「信息」页、精排模型与候选数在本库「参数」页、后端数量在模型页，
+  // 同一件事不该有两个权威位置，所以那几行连同全局参数按钮一起不再回来。
   //
-  // 这一节现在只负责一件事：索引器没准备好，就别让用户点发送。状态说明挪到
-  // 按钮的 title 上——需要它的人会去悬停，不需要的人不必天天看一行绿字。
+  // 这两条和「发送按钮能不能点」共用同一份判断：索引没准备好就别让点发送，
+  // 同一句话也写进侧栏，省得用户对着灰按钮猜原因。
   const ok = s.embedder.available;
   const warm = s.embedder.warmup || {};
   const send = $("btnSend");
+  const fe = $("footEmbed");
+  const fd = $("footEmbedDot");
   if (ok) {
     send.title = "";
     stopWarmPoll();
     // 就绪后必须把按钮放回来 —— 只关不开，用户会以为还卡在启动中。
     // 用 busy 兜底：正在回答时不能被状态刷新重新点亮。
     send.disabled = state.busy;
+    if (fe) fe.textContent = "就绪";
+    if (fd) fd.className = "dot ok";
   } else if (warm.state === "pending" || warm.state === "loading") {
     // 冷启动 40 秒。这段时间按钮必须是"等"而不是"点下去转圈"：
     // 用户能看见还剩多久，就不会以为程序坏了。
@@ -727,11 +732,16 @@ function renderStatus() {
     send.title = `索引器启动中 ${sec}s，就绪后按钮自动亮`;
     send.disabled = true;
     startWarmPoll();
+    if (fe) fe.textContent = `启动中 ${sec}s`;
+    if (fd) fd.className = "dot warn";
   } else {
     send.title = "嵌入模型不可用：到「模型」页把它修好再提问";
     send.disabled = state.busy;
     stopWarmPoll();
+    if (fe) fe.textContent = "不可用";
+    if (fd) fd.className = "dot err";
   }
+
   const pill = $("refusalPill");
   const pillText = $("refusalText");
   // 四种状态必须分开说，别再显示一个"看起来像个决定"的数字：
@@ -778,6 +788,31 @@ function renderStatus() {
   // /api/status 里的 providers。两处各渲染一次的结果是——在模型页新增一个
   // 后端，对话页的下拉里始终没有它，因为没人再拉一次 status。
   syncProviderOptions();
+  // 生成后端取「当前下拉选中的那个」，不是 /api/status 的 generation：
+  // 后者只剩 known/count，早就不带 configured/provider 了，照旧字段读会得到
+  // 一个永远红着写「未选择」的假故障。
+  renderFootGen();
+}
+
+/* 侧栏「生成」那行：此刻用谁回答。和下拉共用 providerNow()，切后端即时跟着变。 */
+function renderFootGen() {
+  const fg = $("footGen");
+  if (!fg) return;
+  const gd = $("footGenDot");
+  const p = providerNow();
+  if (!p) {
+    fg.textContent = "未选择";
+    fg.title = "还没有可用的生成后端，到「模型服务」页添加一个。";
+    if (gd) gd.className = "dot err";
+    return;
+  }
+  fg.textContent = p.name;
+  fg.title = `${p.name}（${p.kind_label || p.kind || "自定义"}）\n`
+    + `${p.model || "未指定模型"} @ ${p.base_url || "未配置地址"}\n`
+    + `${p.message || "还没探测"}`;
+  // 配置齐全就够了，不必等探测：本地模型没启动时 status=unknown，但后端本身
+  // 是能用的。灰点在这个位置太淡，看着像少了一个。
+  if (gd) gd.className = p.ready ? "dot ok" : dotOf(p.status);
 }
 
 /* 后端下拉的唯一数据源：/api/models。
@@ -829,12 +864,36 @@ function syncProviderOptions(d = state.models) {
   sel.title = cur ? `${cur.model} @ ${cur.base_url || "未配置"}` : "";
   // 探测完模型列表会变（比如刚探出 67 个可用模型），生成模型的下拉要跟着换
   syncGenModelOptions();
+  renderFootGen();
 }
 
 function shortModel(m) {
   return String(m || "")
     .replace(/^.*\//, "")
     .replace(/[-_ ]?(instruct|chat|it)$/i, "");
+}
+
+/* 单个模型名的极短显示：shortModel 再去掉量化尾巴。用在站点「当前运行」
+   那颗模型牌上——只有一个名字，没法像 optgroup 那样算共同后缀。 */
+function trimQuant(m) {
+  return shortModel(m).replace(/[-_ ]?Q\d[_\w]*$/i, "");
+}
+
+/* 一组模型名人人都有、且在连字符后开始的共同尾巴。只有"全体都有"才算：
+   一个组里混了 Q4/Q8 时共同后缀为空，量化信息本来就该各自留着。 */
+function commonSuffix(list) {
+  if (list.length < 2) return "";
+  let suf = list[0];
+  for (const s of list.slice(1)) {
+    let i = suf.length - 1, j = s.length - 1;
+    while (i >= 0 && j >= 0 && suf[i] === s[j]) { i--; j--; }
+    suf = suf.slice(i + 1);
+    if (!suf) return "";
+  }
+  const m = /[-_]/.exec(suf);
+  // 尾巴本身以分隔符开头（如 -Q4_K_M）时整段都要；分隔符在中间说明前面
+  // 那截也是共有的，只从分隔符起算；没有分隔符（如共同尾巴是 "7B"）不切。
+  return m ? (m.index === 0 ? suf : suf.slice(m.index)) : "";
 }
 
 /* -------------------------------------------------------- 对话配置弹层 */
@@ -871,16 +930,17 @@ function syncKbOptions() {
 /* ------------------------------------------------------ 高级参数（临时覆盖）
 
    这些旋钮的共同点：只想在这一问上试试，不想写进配置。
-   走两条路——生成侧的（模型/温度/长度/流式）本来就是 per-call 参数；
-   检索侧的走 overrides 点分路径，后端用 kbconfig.effective 合成一份临时
-   配置副本，白名单外的键直接被丢掉，所以这里传错也改不坏别的配置。 */
+   温度、历史轮数、拒答开关的落点是后台「站点 → 回答行为」，按站点主库保存；
+   调试对话不再另摆一份。这里只剩模型 / 最大输出 / 流式这类 per-call 参数，
+   以及走 overrides 点分路径的检索项。后端用 kbconfig.effective 合成临时副本，
+   白名单外的键直接丢掉。 */
 const ADV_KEY = "knowtune.chatOpts";
 
 const advEls = () => ({
-  model: $("genModelSel"), temp: $("optTemp"), maxTok: $("optMaxTok"),
-  stream: $("optStream"), turns: $("optTurns"), fusion: $("optFusion"),
+  model: $("genModelSel"), maxTok: $("optMaxTok"),
+  stream: $("optStream"), fusion: $("optFusion"),
   wdense: $("optWdense"), pool: $("optPool"), mmr: $("optMmr"),
-  noRefuse: $("optNoRefuse"), noKbMode: $("noKbMode"),
+  noKbMode: $("noKbMode"),
 });
 
 const advNum = (v) => {
@@ -900,9 +960,6 @@ function collectOverrides() {
   const pool = advNum(el.pool.value);
   if (pool !== null) ov["retrieval.fusion.top_k"] = pool;
   if (el.mmr.value !== "") ov["retrieval.mmr.enabled"] = el.mmr.value === "1";
-  if (el.noRefuse.checked) ov["refusal.enabled"] = false;
-  const turns = advNum(el.turns.value);
-  if (turns !== null) ov["chat.history_turns"] = turns;
   return ov;
 }
 
@@ -911,10 +968,9 @@ function saveAdv() {
   try {
     localStorage.setItem(ADV_KEY, JSON.stringify({
       model: el.model.value || "", modelCustom: $("genModelCustom")?.value || "",
-      temp: el.temp.value, maxTok: el.maxTok.value,
-      stream: el.stream.checked, turns: el.turns.value, fusion: el.fusion.value,
+      maxTok: el.maxTok.value, stream: el.stream.checked, fusion: el.fusion.value,
       wdense: el.wdense.value, pool: el.pool.value, mmr: el.mmr.value,
-      noRefuse: el.noRefuse.checked, noKbMode: el.noKbMode.value,
+      noKbMode: el.noKbMode.value,
     }));
   } catch (_) { /* 隐私模式下 localStorage 会抛，存不下就算了，不影响提问 */ }
 }
@@ -923,28 +979,34 @@ function restoreAdv() {
   let saved = {};
   try { saved = JSON.parse(localStorage.getItem(ADV_KEY) || "{}") || {}; } catch (_) { saved = {}; }
   const el = advEls();
-  el.temp.value = saved.temp ?? "";
   el.maxTok.value = saved.maxTok ?? "";
   el.stream.checked = saved.stream !== false;
-  el.turns.value = saved.turns ?? "";
   el.fusion.value = saved.fusion || "";
   el.wdense.value = saved.wdense ?? "";
   el.pool.value = saved.pool ?? "";
   el.mmr.value = saved.mmr ?? "";
-  el.noRefuse.checked = Boolean(saved.noRefuse);
   el.noKbMode.value = saved.noKbMode || "direct";
   const ci = $("genModelCustom");
   if (ci) ci.value = saved.modelCustom || "";
+  // 老版本存的是空字符串（那一项叫「跟随当前后端」）。默认模型这项已经撤掉，
+  // 首屏迁成明确的「后端::模型」并写回，之后换后端不会再偷偷跟着变。
+  if (!saved.model) {
+    const pv = providerNow();
+    if (pv?.name && pv?.model) {
+      saved.model = genValue(pv.name, pv.model);
+      try { localStorage.setItem(ADV_KEY, JSON.stringify(saved)); } catch (_) {}
+    }
+  }
   // 生成模型要等后端下拉填完才有选项，这里先记下，syncGenModelOptions 里回填
   el.model.dataset.want = saved.model || "";
 }
 
 function resetAdv() {
   const el = advEls();
-  el.temp.value = ""; el.maxTok.value = ""; el.turns.value = "";
+  el.maxTok.value = "";
   el.wdense.value = ""; el.pool.value = "";
   el.fusion.value = ""; el.mmr.value = "";
-  el.noRefuse.checked = false; el.stream.checked = true;
+  el.stream.checked = true;
   const ci = $("genModelCustom");
   if (ci) ci.value = "";
   saveAdv();
@@ -982,7 +1044,7 @@ function syncGenModelOptions() {
   if (!sel) return;
   const d = state.models || {};
   const cat = d.catalog || [];
-  const want = sel.dataset.want || sel.value;
+  const rawWant = sel.dataset.want || sel.value;
 
   const byProv = new Map();
   cat.forEach((c) => {
@@ -995,26 +1057,42 @@ function syncGenModelOptions() {
 
   const groups = names.map((n) => {
     const items = byProv.get(n);
-    const body = items.map((c) =>
-      `<option value="${esc(genValue(c.provider, c.model))}">${esc(c.model)}</option>`).join("");
+    // 与站点角色下拉同一套短名规则：显示去厂商前缀 / -Instruct / 全组共有的
+    // 量化尾巴，完整 id 留 title，value 一个字不动（保存读的是 value）。
+    const shorts = items.map((c) => shortModel(String(c.model || "")));
+    const common = commonSuffix(shorts);
+    const labels = shorts.map((s) =>
+      shortModel(common && s.length > common.length ? s.slice(0, -common.length) : s));
+    const counts = new Map();
+    labels.forEach((s) => counts.set(s, (counts.get(s) || 0) + 1));
+    const body = items.map((c, i) => {
+      // 短名撞车时两边都退回全名：只让后一个退回，前一个仍显示短名，
+      // 展开后仍是两个看起来一样、却指向不同模型的选项。
+      const dup = counts.get(labels[i]) > 1;
+      const text = dup ? c.model : labels[i];
+      return `<option value="${esc(genValue(c.provider, c.model))}" title="${esc(c.model)}">${
+        esc(text)}</option>`;
+    }).join("");
     return `<optgroup label="${esc(n)}">${body}</optgroup>`;
   }).join("");
 
-  // "留空"到底跟谁：跟上面那个后端下拉选中的后端。用户在对话页把后端切成 B
-  // 却看到"跟随 A"，选了等于没选，是最容易踩的坑。
-  const pv = providerNow();
-  const baseName = pv?.name || "";
-  const baseModel = pv?.model || "";
-
-  // 文案压短了一个括号的长度：这一格只有 296px 宽，写"跟随当前后端（…）"
-  // 会被截在右括号之前，看起来像坏了。现在断在模型名里，语义完整。
-  sel.innerHTML =
-    `<option value="">跟随 ${esc(baseName || "未配置")} · ${esc(shortModel(baseModel) || "没配模型")}</option>`
-    + groups
+  // 不再提供「跟随当前后端 · 默认模型」这一项：选了等于没选，换后端时
+  // 它还会偷偷跟着变。老 localStorage 里那条空值在 restoreAdv() 里一次性
+  // 迁成具体的「后端::模型」，这里只负责渲染，不在每次刷新下拉时改用户选择。
+  const has = (v) => cat.some((c) => genValue(c.provider, c.model) === v);
+  // 迁移出来的模型未必在清单里（比如后端自己的 model 没被加进 models）。
+  // 补一条占位把选中值留住，不然浏览器会退回占位，用户一保存就丢。
+  let legacy = "";
+  if (rawWant && rawWant !== GEN_CUSTOM && !has(rawWant) && rawWant.includes(GEN_SEP)) {
+    const legacyModel = rawWant.split(GEN_SEP)[1] || "";
+    legacy = `<option value="${esc(rawWant)}" title="${esc(legacyModel)}">${
+      esc(shortModel(legacyModel))}（未加入清单）</option>`;
+  }
+  sel.innerHTML = `<option value="" disabled>选择模型…</option>`
+    + groups + legacy
     + `<option value="${GEN_CUSTOM}">＋ 手动输入模型名…</option>`;
 
-  const has = (v) => [...sel.options].some((o) => o.value === v);
-  sel.value = want === GEN_CUSTOM ? GEN_CUSTOM : (has(want) ? want : "");
+  sel.value = rawWant === GEN_CUSTOM ? GEN_CUSTOM : (has(rawWant) || legacy ? rawWant : "");
   sel.dataset.want = "";
   toggleGenCustom(sel.value === GEN_CUSTOM);
 }
@@ -1326,7 +1404,8 @@ async function ask(question) {
     rerank: $("deepMode").checked ? true : null,
     rerank_model: $("deepMode").checked ? "BAAI/bge-reranker-v2-m3" : null,
     model: pickModel || null,
-    temperature: advNum(opt.temp.value),
+    // 温度由后端按库配置决定（编辑入口在「站点 → 回答行为」）；这里是检索
+    // 调试台，不另开旋钮，不传 temperature 即跟随配置。
     max_tokens: advNum(opt.maxTok.value),
     stream: opt.stream.checked ? null : false,   // 默认流式，只有关掉才需要显式传
     // 不挂载知识库 + 选了「直接问模型」才跳过检索；跨全库检索仍走正常链路
@@ -2847,6 +2926,7 @@ $("providerSel").addEventListener("change", (e) => {
   $("genModelSel").value = "";
   syncGenModelOptions();  saveAdv();
   renderCfgSummary();
+  renderFootGen();  // 侧栏那行跟着下拉即时变，不等下一次 /api/status
 });
 
 /* 拿对话页当前选中的后端单独测一次翻译。
@@ -2883,11 +2963,11 @@ $("deepMode").addEventListener("change", () => renderCfgSummary());
 
 /* 高级参数：任何一处改动都存下来并刷新摘要。逐个绑定而不是委托到整个弹层，
    是因为这些控件散在 <details> 里，委托容易把 summary 的展开也当成改动。 */
-["optTemp", "optMaxTok", "optStream", "optTurns", "optFusion",
- "optWdense", "optPool", "optMmr", "optNoRefuse"].forEach((id) => {
-  const el = $(id);
-  if (el) el.addEventListener("change", () => { saveAdv(); renderCfgSummary(); });
-});
+["optMaxTok", "optStream", "optFusion", "optWdense", "optPool", "optMmr"]
+  .forEach((id) => {
+    const el = $(id);
+    if (el) el.addEventListener("change", () => { saveAdv(); renderCfgSummary(); });
+  });
 // 生成模型：选到"手动输入"就露出输入框；选到某个后端的模型，把上面的后端
 // 下拉一起带过去——否则界面显示"用 A 后端"，实际却拿 B 后端的模型名去请求。
 $("genModelSel").addEventListener("change", () => {
@@ -3473,6 +3553,14 @@ async function openKbInfo(kb) {
  *   2. 分块类参数保存后自动重建本库索引（不然改了等于没改）。
  */
 
+/* 这一页只回答"这个库的资料怎么切、怎么检索"。拒答、生成、会话是问答行为，
+   已经挪到对话配置浮层；它们仍按库存储，所以保存时整份草稿照旧提交，
+   这里只是不把三组不属于知识库的旋钮摆出来。 */
+const KB_PAGE_GROUPS = new Set(["chunking", "recall", "fusion", "rerank"]);
+const kbVisibleGroups = (data) => (data?.groups || []).filter((g) => KB_PAGE_GROUPS.has(g.id));
+const kbVisibleKeys = (data) => new Set(
+  kbVisibleGroups(data).flatMap((g) => g.items.map((it) => it.key)));
+
 function kbFind(key) {
   const data = state.kbCfg;
   if (!data) return null;
@@ -3496,7 +3584,9 @@ function kbText(it, v) {
 /* 未保存的改动。保存按钮的可用状态、行高亮、组上的"N 项已改"都靠它。 */
 function kbDirty() {
   const base = state.kbBase || {};
-  return Object.keys(state.kbDraft).filter((k) => state.kbDraft[k] !== base[k]);
+  const visible = kbVisibleKeys(state.kbCfg);
+  return Object.keys(state.kbDraft).filter(
+    (k) => visible.has(k) && state.kbDraft[k] !== base[k]);
 }
 
 /* 组标题上的一行摘要：折叠着也能看出这个库是什么口径。
@@ -3574,9 +3664,10 @@ function paintKbParams() {
   if (!pane || !data) return;
   const dirty = kbDirty();
   const docs = state.kbDetail?.stats?.docs || 0;
-  const allOpen = data.groups.every((g) => state.kbOpen[g.id]);
+  const shown = kbVisibleGroups(data);
+  const allOpen = shown.every((g) => state.kbOpen[g.id]);
 
-  const groups = data.groups.map((g) => {
+  const groups = shown.map((g) => {
     const open = !!state.kbOpen[g.id];
     const n = g.items.filter((it) => dirty.includes(it.key)).length;
     return `<section class="card kb-group${open ? " open" : ""}">
@@ -3600,6 +3691,8 @@ function paintKbParams() {
         <span class="aside">独立一套 · 改全局不影响本库</span>
       </div>
       <p class="hint">
+        这里只管这个库的切块与检索口径。拒答、生成、会话参数在「站点 → 回答行为」，
+        按站点主库保存，前台网站与调试对话共用。<br>
         带「重建」标记的分块参数保存后重建本库索引${docs ? `（当前 ${docs} 篇）` : ""}；
         嵌入模型系统级：${esc(data.embedding.model)} @ ${data.embedding.dim}d。
       </p>
@@ -3673,8 +3766,8 @@ function paintKbParams() {
   $("kbSave").onclick = saveKbParams;
   $("kbReset").onclick = resetKbParams;
   $("kbToggleAll").onclick = () => {
-    const open = !data.groups.every((g) => state.kbOpen[g.id]);
-    data.groups.forEach((g) => { state.kbOpen[g.id] = open; });
+    const open = !shown.every((g) => state.kbOpen[g.id]);
+    shown.forEach((g) => { state.kbOpen[g.id] = open; });
     paintKbParams();
   };
 }
@@ -3714,17 +3807,28 @@ async function saveKbParams() {
 
 async function resetKbParams() {
   if (!(await askConfirm(
-      "把这个库的参数全部恢复成系统默认值？<br>（分块参数若与现在不同，会触发一次重建索引）",
+      "只把这个库的分块与检索参数恢复默认，回答、拒答、会话参数保持不动？<br>"
+      + "（分块参数若与现在不同，会触发一次重建索引）",
       { title: "恢复默认参数", okLabel: "恢复默认" }))) return;
+  // 整份提交：只把这一页可见的键换成默认值，隐藏三组照旧带回。走 DELETE 会
+  // 把回答/会话也一起清掉——那三组现在归对话配置管，不在这里顺手重置。
+  const values = { ...state.kbDraft };
+  for (const g of kbVisibleGroups(state.kbCfg)) {
+    for (const it of g.items) values[it.key] = it.default ?? it.value;
+  }
   try {
-    const r = await api(`/api/kb/${state.kbId}/config`, { method: "DELETE" });
+    const r = await api(`/api/kb/${state.kbId}/config`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ values, replace: true }),
+    });
     state.kbCfg = r.snapshot;
     state.kbBase = { ...(r.snapshot.values || {}) };
     state.kbDraft = { ...state.kbBase };
     await loadKb();
     await renderKbPage();
     followReindex(r.reindex, state.kbName || `库 #${state.kbId}`);
-    if (!r.reindex?.task_id) toast("已恢复为系统默认值");
+    if (!r.reindex?.task_id) toast("分块与检索参数已恢复默认");
   } catch (err) {
     alert(err.message);
   }
@@ -6166,6 +6270,81 @@ function siteStatusBadge(st) {
   return `<span class="badge ${cls}">${label}</span>`;
 }
 
+function siteStatusWord(st) {
+  return ({ running: "运行中", stopped: "已停止", starting: "启动中",
+    stopping: "停止中", error: "异常", external: "外部托管" })[st] || (st || "未知");
+}
+function siteStatusDot(st) {
+  return ({ running: "ok", starting: "warn", stopping: "warn", error: "err",
+    external: "warn" })[st] || "";
+}
+function siteStatusTail(i) {
+  if (i.status === "running" && i.uptime_s) return "已运行 " + uptime(i.uptime_s);
+  if (i.status === "external") return i.managed_by && i.managed_by.pid
+    ? "外部 PID " + i.managed_by.pid : "由别的后台托管";
+  return "";
+}
+
+/* 预问诊的模型不在站点 roles 里，单独存 /api/previsit/config。这里按后端
+ * 的同一套「后端::模型」拼法还原，供下面的生效条与矩阵共用。 */
+function pvRolePair(pv) {
+  const v = (pv && pv.values) || {};
+  const pair = (p, m) => (p && m ? `${p}::${m}` : p || m || "");
+  return {
+    translate: pair(v.translator_provider, v.translator_model),
+    generate: pair(v.provider, v.model),
+  };
+}
+
+/* 「当前生效」条：回答“这个站点现在每个入口用谁译、用谁答”。
+ *
+ * 上一种做法是页面顶部摆一张独立的「当前运行」表，结果同一站点在页面上
+ * 出现两次（表一行、卡一张），而且表里读的是 model-roles 的 resolved——
+ * 那只是**站点默认**，三个板块自己的覆盖（section_resolved）压根没读，
+ * 却写着“实际生效”。现在这张条挪进站点卡，状态在卡头说一次，这里只说
+ * 模型，并且逐入口读 section_resolved / 预问诊配置；跟站点默认相同的
+ * 标「继承」，不同才列真值。配置矩阵在下方负责“改”，这里负责“看”。
+ *
+ * 角色值是「后端::模型」，裸模型名是“按名路由”。显示沿用下拉那套短名
+ * 规则（去厂商前缀 / -Instruct / 量化尾巴），完整值留在 title。 */
+function siteModelName(v) {
+  const full = String(v || "").trim();
+  if (!full) return "未配置";
+  const id = full.includes("::") ? full.slice(full.indexOf("::") + 2) : full;
+  return trimQuant(shortModel(id)) || id;
+}
+function siteLiveStrip(i, plan, pv) {
+  const site = (plan && plan.resolved) || i.roles || {};
+  const sections = (plan && plan.section_resolved) || {};
+  const secs = i.sections || {};
+  const pvPair = pvRolePair(pv);
+  const entries = [
+    { label: "维医", r: sections.med || site },
+    { label: "古籍", r: sections.classic || site },
+    { label: "预问诊", r: pvPair.translate || pvPair.generate ? pvPair : site },
+  ];
+  const cells = entries.map((e) => {
+    const tr = e.r.translate || "";
+    const gen = e.r.generate || "";
+    const inherited = (!tr || tr === site.translate) && (!gen || gen === site.generate);
+    // 短名在不同后端之间会撞（local 的 7B 和 siliconflow 的 7B 同名），
+    // 所以独立配置时把后端名直接写出来，而不是只丢一个"独立"。
+    const ownBase = String(gen || tr).split("::")[0];
+    return `<div class="sl-entry" title="译：${esc(tr || "未配置")}\n答：${esc(gen || "未配置")}">
+      <span class="sl-entry-k">${esc(e.label)}</span>
+      <span class="sl-entry-v"><em>译</em><b>${esc(siteModelName(tr))}</b></span>
+      <span class="sl-entry-v"><em>答</em><b>${esc(siteModelName(gen))}</b></span>
+      ${inherited ? `<span class="sl-inherit" title="与站点默认相同">继承</span>`
+        : `<span class="sl-own" title="独立配置：${esc(ownBase)}">${esc(ownBase || "独立")}</span>`}
+    </div>`;
+  }).join("");
+  return `<div class="sbk-strip${i.status === "running" ? "" : " is-off"}">
+    <span class="sbk-strip-k">当前生效</span>
+    <div class="sbk-strip-entries">${cells}</div>
+    <span class="sbk-strip-note">改下方配置并保存后同步</span>
+  </div>`;
+}
+
 /* --------------------------------------------------------- 站点卡（一卡一站） */
 /*
  * 以前这块是「一张全局角色卡 + 一列只读站点卡 + 编辑弹窗」。三处都别扭：
@@ -6187,8 +6366,10 @@ function siteStatusBadge(st) {
  * 而且"选后端"这件事本身就不够：翻译和推理经常落在同一个本地服务上，
  * 但用不同的模型（hy-mt2-1.8b 专翻，doctor-7b 专答）。只能选后端，等于
  * 逼用户为了换个翻译模型去改后端自己的 model，然后推理也跟着一起变。
- * 所以每个后端展开成一组：组内第一项是「默认 · 后端自己的模型」，其余是
- * 这个后端能用的模型。值写成「后端::模型」，只写后端名仍然合法（旧配置）。
+ * 所以每个后端展开成一组，组里只列这个后端能用的模型，值写成「后端::模型」。
+ * 不再有「默认」项：角色要么留空跟随上级，要么钉死到一个具体模型。
+ * 旧配置里只写后端名的值会自动落到该后端的 model（仍是那个具体模型），
+ * 保存一次就变成显式值，不会被浏览器静默换成别的第一项。
  */
 function provSelect(role, cur, providers, meta, defProvider, headLabel) {
   const head = `<option value="">${esc(headLabel || "跟随上级")}</option>`;
@@ -6199,11 +6380,11 @@ function provSelect(role, cur, providers, meta, defProvider, headLabel) {
 
   const groups = (providers || []).map((name) => {
     const m = (meta || []).find((x) => x.name === name) || {};
-    const bits = [m.local === false ? "云端" : "本地"];
-    if (!m.ready) bits.push(m.ready_reason || "不可用");
-    else if (m.status === "ok") bits.push("就绪");
-    else if (m.status) bits.push(statusText(m.status));
-    const label = `${name}（${bits.join(" · ")}）`;
+    // 组名只写后端名。原来这里挂「云端 · 就绪」「本地 · 超时」，可探测状态
+    // 跟"这个角色用谁"是两件事：本地显示超时往往只是模型没启动，用户却以为
+    // 后端坏了；而且状态是上一次探测的快照，会在下拉里待到下次刷新。要看
+    // 通不通去「模型服务」页，那里是实时的。悬停仍能看到完整说明。
+    const label = name;
 
     // 只列「模型服务」页里已经加入的模型（config/models.yaml 的 models 清单）。
     // 探测回报的那批刻意不进来：siliconflow 61 个、aliyun 147 个，那是服务商的
@@ -6217,21 +6398,40 @@ function provSelect(role, cur, providers, meta, defProvider, headLabel) {
       if (id && !seen.has(id)) { seen.add(id); models.push(id); }
     }
 
-    const dftSel = curBase === name && !curModel ? " selected" : "";
-    const dft = `<option value="${esc(name)}"${dftSel}>默认${
-      m.model ? " · " + esc(m.model) : ""}</option>`;
-    // 当前值指向一个已经被移出清单的模型：补一条占位并让它保持选中。不补的话
-    // 浏览器会静默选中该组第一项（「默认」），用户动一下别的字段再保存，这个
-    // 角色就被悄悄换掉了，而界面上没有任何痕迹。
-    const missing = curBase === name && curModel && !seen.has(curModel)
-      ? `<option value="${esc(`${name}::${curModel}`)}" selected>${esc(curModel)}（未加入清单）</option>`
+    // 旧配置只有后端名、没有模型时，落到这个后端自己的 model 上——但它是
+    // 作为一个**具体模型**被选中的，界面上不再出现"默认"这项。该模型若已
+    // 不在清单里，补一条占位把 selected 留住，等用户保存时写成显式值。
+    const legacyDefault = curBase === name && !curModel && Boolean(m.model);
+    const missingModel = curBase === name
+      ? (curModel && !seen.has(curModel) ? curModel
+        : (legacyDefault && !seen.has(m.model) ? m.model : ""))
       : "";
-    const rest = models.map((id) => {
+    const missing = missingModel
+      ? `<option value="${esc(`${name}::${missingModel}`)}" selected title="${esc(missingModel)}">${esc(shortModel(missingModel))}（未加入清单）</option>`
+      : "";
+    // 后端连 model 都没配的极端旧值：不能让它静默变成第一项，留个看得见的占位。
+    const legacyNoModel = curBase === name && !curModel && !m.model
+      ? `<option value="${esc(name)}" selected>${esc(name)}（未指定模型）</option>`
+      : "";
+    // 显示名去掉「厂商/」前缀和 -Instruct 尾巴；一组里人人都带的量化后缀
+    // （本地那组五个都是 -Q4_K_M）也只留一份在 title，不重复读五遍。完整 id
+    // 始终在 title。撞名才退回全名——不同厂商的同名模型挤在一个后端下的
+    // 可能性小，但不能假设为零。
+    const shorts = models.map((id) => shortModel(id));
+    const common = commonSuffix(shorts);
+    const labels = shorts.map((s) => shortModel(common && s.length > common.length
+      ? s.slice(0, -common.length) : s));
+    const counts = new Map();
+    labels.forEach((s) => counts.set(s, (counts.get(s) || 0) + 1));
+    const rest = models.map((id, i) => {
       const val = `${name}::${id}`;
-      const sel = curBase === name && curModel === id ? " selected" : "";
-      return `<option value="${esc(val)}"${sel}>${esc(id)}</option>`;
+      const sel = (curBase === name && curModel === id)
+        || (legacyDefault && id === m.model) ? " selected" : "";
+      const dup = counts.get(labels[i]) > 1;
+      const text = dup ? id : labels[i];
+      return `<option value="${esc(val)}"${sel} title="${esc(id)}">${esc(text)}</option>`;
     }).join("");
-    return `<optgroup label="${esc(label)}">${dft}${missing}${rest}</optgroup>`;
+    return `<optgroup label="${esc(label)}">${legacyNoModel}${missing}${rest}</optgroup>`;
   }).join("");
 
   // 当前值指向一个已删除/改名的后端时，它的 optgroup 根本不存在，浏览器会
@@ -6295,7 +6495,7 @@ const LANG_NAME = { ug: "维吾尔语（RTL）", zh: "中文", en: "English" };
  *
  * 下面的 siteInlinePanels() 复用原弹窗那套 scfg-* 控件：data-f 字段名一个没动，
  * readSiteBlock() 照旧全量读，所以后端接口零改动。 */
-function siteBlock(i, meta, plan, defProv, pv) {
+function siteBlock(i, meta, plan, defProv, pv, kbCfg) {
   const running = i.status === "running";
   const external = i.status === "external";
   const busy = i.status === "starting" || i.status === "stopping";
@@ -6303,12 +6503,16 @@ function siteBlock(i, meta, plan, defProv, pv) {
     ? `<span class="sbk-dim warn" title="页面语言按文案内容判定，下拉只在判不出时兜底"
         >实际显示：${esc(LANG_NAME[i.content_lang] || i.content_lang)}</span>`
     : "";
-  const stateText = running
-    ? (i.uptime_s ? "已运行 " + uptime(i.uptime_s) : "运行中")
-    : external
-      ? ((i.managed_by && i.managed_by.pid) ? "PID " + i.managed_by.pid
-        : "另开的那个后台在跑")
-      : "未运行";
+  // 状态是卡片自己的事：一个站点一张卡，卡头把名字、状态、时长、端口、
+  // URL 和操作一次说完。以前顶部另摆一张「当前运行」表，同一站点出现两遍。
+  const metaBits = [
+    `<span class="sbk-port">:${esc(String(i.port || ""))}</span>`,
+    `<span class="sbk-state"><i class="dot ${siteStatusDot(i.status)}"></i><b${
+      running ? " class=is-on" : ""}>${esc(siteStatusWord(i.status))}</b>${
+      siteStatusTail(i) ? `<span>${esc(siteStatusTail(i))}</span>` : ""}</span>`,
+    i.public ? `<span>局域网可访问</span>` : "",
+    shown,
+  ].filter(Boolean);
 
   /* 一段说明折成一行，点开看全文。自检/备注是"要看时才看"的信息，
    * 维吾尔文样本还带 RTL 混排，默认全展开会把一张卡撑成半屏。 */
@@ -6339,9 +6543,8 @@ function siteBlock(i, meta, plan, defProv, pv) {
       <div class="sbk-idblock">
         <div class="sbk-id">
           <span class="sbk-name">${esc(i.name)}</span>
-          ${siteStatusBadge(i.status)}
-          <span class="sbk-meta">端口 ${i.port} · ${stateText}${
-            i.public ? " · 局域网可访问" : ""}${shown}</span>
+          ${metaBits.length
+            ? `<span class="sbk-meta">${metaBits.join(" · ")}</span>` : ""}
         </div>
         <a class="sbk-url" href="${esc(i.url)}" target="_blank"
           rel="noreferrer">${esc(i.url)}</a>
@@ -6359,8 +6562,9 @@ function siteBlock(i, meta, plan, defProv, pv) {
       </div>
     </div>
 
-    <div class="site-inline" data-sinline>
-      ${siteInlinePanels(i, meta, plan, defProv, pv)}
+    ${siteLiveStrip(i, plan, pv)}
+    <div class="site-inline" data-sinline data-kbid="${esc(String(i.kb_id || ""))}">
+      ${siteInlinePanels(i, meta, plan, defProv, pv, kbCfg)}
       <div class="sif-savebar">
         <span class="sif-save-hint">修改后保存即可生效</span>
         <button class="primary-btn" data-save-inline>保存并生效</button>
@@ -6380,7 +6584,7 @@ function siteBlock(i, meta, plan, defProv, pv) {
  * 关键约束：**所有 data-f 字段名一个都不改**。readSiteBlock() 遍历站点卡内的
  * [data-f] 组 payload，三段都在同一个 DOM 里，保存一次全量提交，后端零改动。
  */
-function siteInlinePanels(i, meta, plan, defProv, pv) {
+function siteInlinePanels(i, meta, plan, defProv, pv, kbCfg) {
   const d = state.sites || {};
   const roles = i.roles || {};
   const opt = (v, label, cur) =>
@@ -6417,93 +6621,136 @@ function siteInlinePanels(i, meta, plan, defProv, pv) {
       <div class="scfg-card-body">${body}</div>
     </section>`;
 
-  /* ---------- 页 1：板块与知识库 ---------- */
-  const secCard = (key, label, defName, extra, hint) => {
-    const on = secOn(key);
-    return `<article class="scfg-card${on ? "" : " is-off"}" data-sec-card="${key}">
-      <div class="scfg-card-head">
-        <label class="toggle" title="关掉后这个入口在站点上真的消失（连地址一起）">
-          <input type="checkbox" data-f="sec_${key}_enabled" ${on ? "checked" : ""}>
-          <span class="sw" aria-hidden="true"></span>
-          <span class="toggle-label">显示</span></label>
-        <div class="scfg-card-title"><b>${esc(label)}</b><span>${esc(hint)}</span></div>
-        <span class="scfg-badge${on ? " on" : ""}">${on ? "已显示" : "已隐藏"}</span>
-      </div>
-      <div class="scfg-card-body">
-        ${field("显示名", `<input data-f="sec_${key}_name" dir="auto"
-          value="${esc(sec(key).name || "")}" placeholder="留空用「${esc(defName)}」" maxlength="24">`)}
-        ${extra}
-      </div>
-    </article>`;
-  };
-
-  const secPanel = `
-    <div class="scfg-cards">
-      ${secCard("med", "维医问答", "维医问答",
-        field("检索知识库", `<select data-f="kb_id">${kbOpts}</select>`),
-        "")}
-      ${secCard("classic", "古籍问答", "古籍问答",
-        field("检索知识库", `<select data-f="classic_kb_id">${classicOpts}</select>`,
-          ""),
-        "")}
-      ${secCard("pv", "预问诊", "预问诊",
-        `<p class="scfg-inline-note">模型与提示词在下方角色矩阵统一配置。</p>`,
-        "")}
-    </div>`;
-
-  /* ---------- 页 2：模型与提示词（矩阵） ---------- */
-  const pvVals = (pv && pv.values) || {};
-  const pvRef = (provider, model) => {
-    const p = String(provider || "").trim();
-    const m = String(model || "").trim();
-    return p && m ? `${p}::${m}` : p || m;
-  };
-  const pvTranslate = pvRef(pvVals.translator_provider, pvVals.translator_model);
-  const pvGenerate = pvRef(pvVals.provider, pvVals.model);
-  const mrow = (label, sub, tr, gen, prompt, cls = "") => `<tr class="${cls}">
-      <td class="scfg-mrow-k"><b>${esc(label)}</b><span>${esc(sub)}</span></td>
-      <td>${tr}</td><td>${gen}</td><td>${prompt}</td></tr>`;
+  /* ---------- 入口表：一个入口一行，名字 / 库 / 模型 / 提示词不再跨两段对照 ----------
+   * 以前「板块与知识库」写一遍维医、古籍、预问诊，「模型与提示词」又写一遍，
+   * 用户得记住两张表里哪一行对哪一行。现在合成一张表，横向读就是某个入口
+   * 的全部配置。字段名（data-f）一个没动，readSiteBlock 照旧全量读。
+   * data-sec-card / .scfg-badge / data-trtest / data-trout 是事件锚点，保留。 */
+  const pvPair = pvRolePair(pv);
   const promptBtn = (attrs, label) =>
     `<button class="mini" type="button" ${attrs}>${esc(label)}</button>`;
+  const row = (cells, cls = "") => `<tr class="${cls}">${cells}</tr>`;
+  const entryCell = (key, label, kb) => {
+    const on = secOn(key);
+    return `<td class="et-name" data-sec-card="${key}">
+      <div class="et-name-top">
+        <label class="toggle" title="关掉后这个入口在站点上真的消失（连地址一起）">
+          <input type="checkbox" data-f="sec_${key}_enabled"${on ? " checked" : ""}>
+          <span class="sw" aria-hidden="true"></span>
+          <span class="toggle-label">显示</span></label>
+        <span class="scfg-badge${on ? " on" : ""}">${on ? "已显示" : "已隐藏"}</span>
+      </div>
+      <input class="et-name-input" data-f="sec_${key}_name" dir="auto"
+        value="${esc(sec(key).name || "")}" placeholder="${esc(label)}" maxlength="24"
+        title="站点上显示的入口名；留空用「${esc(label)}」">
+      ${kb ? `<div class="et-kb"><span>检索库</span>${kb}</div>` : ""}
+    </td>`;
+  };
+  const defaultCell = `<td class="et-name is-static">
+      <b>站点默认</b><span>其它入口留空时继承这里</span></td>`;
 
-  const modelPanel = `
-    <div class="scfg-lead accent"><b>模型角色</b><span>下拉只列「模型服务」里已经加入的模型——想用别的，先去那一页在端点卡的下拉里挑一下（选过就进清单）。</span></div>
-    <div class="scfg-matrix-wrap">
-      <table class="scfg-matrix">
+  const entryPanel = `
+    <div class="scfg-lead accent"><b>入口与模型</b><span>一行就是一个入口的全部配置。模型下拉只列「模型服务」里已加入的模型；留空表示继承站点默认。想加新模型，先去模型服务页把它加入清单。</span></div>
+    <div class="et-wrap">
+      <table class="et-table">
         <thead><tr>
-          <th>入口 / 层级</th><th>翻译模型</th><th>推理模型</th><th>提示词</th>
+          <th>入口 / 检索库</th><th>翻译模型</th><th>推理模型</th><th>提示词</th>
         </tr></thead>
         <tbody>
-          ${mrow("站点默认", "默认",
-            `<div class="scfg-cell-row">${sel("role_translate", "translate", roles.translate,
+          ${row(`${defaultCell}
+            <td><div class="scfg-cell-row">${sel("role_translate", "translate", roles.translate,
               "先把维吾尔语提问译成中文去检索，再把中文答案译回去")}
               <button class="mini" type="button" data-trtest
-                title="发一句真实翻译，验证这个模型通不通、译得对不对">测试</button></div>`,
-            sel("role_generate", "generate", roles.generate, "读检索到的资料组织答案"),
-            promptBtn("data-open-global-prompt", "角色提示词"),
-            "scfg-mrow-default")}
-          ${mrow(String(sec("med").name || "").trim() || "维医问答", "维医",
-            sel("sec_med_role_translate", "translate", (sec("med").roles || {}).translate,
-              "维医问答的翻译模型；留空跟随站点默认"),
-            sel("sec_med_role_generate", "generate", (sec("med").roles || {}).generate,
-              "维医问答的推理模型；留空跟随站点默认"),
-            promptBtn('data-open-prompt="med"', "板块提示词"))}
-          ${mrow(String(sec("classic").name || "").trim() || "古籍问答", "古籍",
-            sel("sec_classic_role_translate", "translate", (sec("classic").roles || {}).translate,
-              "古籍问答的翻译模型；留空跟随站点默认"),
-            sel("sec_classic_role_generate", "generate", (sec("classic").roles || {}).generate,
-              "古籍问答的推理模型；留空跟随站点默认"),
-            promptBtn('data-open-prompt="classic"', "板块提示词"))}
-          ${mrow("预问诊", "预问诊",
-            sel("pv_role_translate", "translate", pvTranslate,
-              "预问诊维语翻译模型", "跟随全局翻译角色"),
-            sel("pv_role_generate", "generate", pvGenerate,
-              "预问诊推理模型", "跟随全局推理角色"),
-            promptBtn('data-open-prompt="previsit"', "预问诊提示词"))}
+                title="发一句真实翻译，验证这个模型通不通、译得对不对">测试</button></div></td>
+            <td>${sel("role_generate", "generate", roles.generate, "读检索到的资料组织答案")}</td>
+            <td>${promptBtn("data-open-global-prompt", "角色提示词")}</td>`,
+          "scfg-mrow-default")}
+          ${row(`${entryCell("med", "维医问答", `<select data-f="kb_id">${kbOpts}</select>`)}
+            <td>${sel("sec_med_role_translate", "translate", (sec("med").roles || {}).translate,
+              "维医问答的翻译模型；留空跟随站点默认")}</td>
+            <td>${sel("sec_med_role_generate", "generate", (sec("med").roles || {}).generate,
+              "维医问答的推理模型；留空跟随站点默认")}</td>
+            <td>${promptBtn('data-open-prompt="med"', "板块提示词")}</td>`,
+          secOn("med") ? "" : "is-off")}
+          ${row(`${entryCell("classic", "古籍问答", `<select data-f="classic_kb_id">${classicOpts}</select>`)}
+            <td>${sel("sec_classic_role_translate", "translate", (sec("classic").roles || {}).translate,
+              "古籍问答的翻译模型；留空跟随站点默认")}</td>
+            <td>${sel("sec_classic_role_generate", "generate", (sec("classic").roles || {}).generate,
+              "古籍问答的推理模型；留空跟随站点默认")}</td>
+            <td>${promptBtn('data-open-prompt="classic"', "板块提示词")}</td>`,
+          secOn("classic") ? "" : "is-off")}
+          ${row(`${entryCell("pv", "预问诊", "")}
+            <td>${sel("pv_role_translate", "translate", pvPair.translate,
+              "预问诊维语翻译模型", "跟随站点默认")}</td>
+            <td>${sel("pv_role_generate", "generate", pvPair.generate,
+              "预问诊推理模型", "跟随站点默认")}</td>
+            <td>${promptBtn('data-open-prompt="previsit"', "预问诊提示词")}</td>`,
+          secOn("pv") ? "" : "is-off")}
         </tbody>
       </table>
     </div>
     <div class="tr-out scfg-tr-out" data-trout hidden></div>`;
+
+  /* ---------- 回答行为：站点主体的问答旋钮 ----------
+   * 拒答 / 生成温度 / 会话历史这七项，是"怎么答"而不是"这个库装了什么"。
+   * 以前它们摆在后台「对话」页——那是检索调试台，不是用户真正提问的地方，
+   * 于是出现主次错位：旋钮在测试台，主体网站却用写死的常量。现在回到站点：
+   * 站点是主体，这七项就该跟站点走，改完 PATCH 到站点主库，前台网站立刻生效。
+   *
+   * 值来自 loadSiteKbConfigs 取回的参数快照（按主库 kb_id）。控件用 data-ab
+   * 标记（不是 data-f）——它们写进 kb.config_json，不是 instances.yaml，
+   * 保存时单独走 /api/kb/{id}/config，不能混进 readSiteBlock 的 payload。 */
+  const abKeys = {
+    temp: "generation.temperature",
+    turns: "chat.history_turns", budget: "chat.history_token_budget",
+    refuseOn: "refusal.enabled", refuseScore: "refusal.min_score",
+    refuseMargin: "refusal.min_margin", refuseSoft: "refusal.soft_margin",
+  };
+  const abVals = (kbCfg && kbCfg.values) || {};
+  const abNum = (key, fallback) => {
+    const v = abVals[key];
+    return v === undefined || v === null || v === "" ? (fallback ?? "") : v;
+  };
+  const abField = (label, key, attrs, note) => `<label class="field">
+      <span class="field-label">${esc(label)}</span>
+      <input data-ab="${esc(key)}" ${attrs} value="${esc(abNum(key))}">
+      ${note ? `<small>${esc(note)}</small>` : ""}
+    </label>`;
+  const abCalib = kbCfg && kbCfg.calibrated_keys
+    ? (kbCfg.calibrated_keys || []).includes(abKeys.refuseScore) : false;
+  const answerPanel = `
+    <div class="scfg-lead"><b>回答行为</b><span>站点上怎么答：拒答、随机性、多轮历史。按本站检索库保存，前台网站与调试对话共用同一份；改完保存即生效。</span></div>
+    <div class="ab-grid">
+      <div class="ab-block">
+        <div class="ab-blk-title">拒答<span>资料不够硬时说实话，而不是编</span></div>
+        <div class="ab-row">
+          <label class="toggle" style="justify-self:start">
+            <input type="checkbox" data-ab="${abKeys.refuseOn}"${abVals[abKeys.refuseOn] !== false ? " checked" : ""}>
+            <span class="sw" aria-hidden="true"></span>
+            <span class="toggle-label">启用拒答</span></label>
+          ${abField("分数阈值", abKeys.refuseScore,
+            'type="number" min="0" max="1" step="0.005"',
+            abCalib ? "已被标定覆盖，手改会覆盖标定值" : "")}
+        </div>
+        <div class="ab-row">
+          ${abField("区分度阈值", abKeys.refuseMargin,
+            'type="number" min="0" max="0.5" step="0.005"')}
+          ${abField("低置信提醒", abKeys.refuseSoft,
+            'type="number" min="0" max="0.5" step="0.005"')}
+        </div>
+      </div>
+      <div class="ab-block">
+        <div class="ab-blk-title">生成与会话<span>控制答案的随机性，和多轮能带多少历史</span></div>
+        <div class="ab-row">
+          ${abField("生成温度", abKeys.temp,
+            'type="number" min="0" max="2" step="0.05"', "越高越发散，引用编号越易漂")}
+          ${abField("历史轮数", abKeys.turns,
+            'type="number" min="0" max="20" step="1"')}
+          ${abField("历史预算", abKeys.budget,
+            'type="number" min="0" max="8000" step="100"', "字符 / token 上限")}
+        </div>
+      </div>
+    </div>`;
 
   /* ---------- 页 3：站点设置 ---------- */
   /* 这一页只留「运行」三件事（端口 / 监听 / 开机）。
@@ -6536,14 +6783,30 @@ function siteInlinePanels(i, meta, plan, defProv, pv) {
     </section>`;
 
   return `
-    ${section("01", "sections", "板块与知识库", "", secPanel)}
-    ${section("02", "models", "模型与提示词", "", modelPanel)}
-    ${section("03", "site", "站点设置", "", sitePanel)}`;
+    ${section("01", "entries", "入口与模型", "每个入口的库、模型、提示词", entryPanel)}
+    ${section("02", "answer", "回答行为", "拒答、生成温度、会话历史", answerPanel)}
+    ${section("03", "site", "运行设置", "端口、监听、开机", sitePanel)}`;
 }
 
-/* 内联保存站点的三段配置。 */
+/* 内联保存站点的三段配置。回答行为七项写进站点主库（kb.config_json），
+ * 其余写 instances.yaml / previsit；两处各走各的接口，互不污染。 */
 async function saveSiteInline(name, block) {
   const payload = readSiteBlock(block);
+  const inline = block.querySelector("[data-sinline]") || block;
+  const kbId = Number(inline.dataset.kbid) || 0;
+
+  // 回答行为：data-ab 的值收集成一份 patch，PATCH 到站点主库。
+  // 数字控件空着 = 没填，不当成 0（0 是合法值，但空是"不动"）。
+  const abValues = {};
+  inline.querySelectorAll("[data-ab]").forEach((el) => {
+    const key = el.dataset.ab;
+    if (el.type === "checkbox") abValues[key] = el.checked;
+    else if (el.value !== "" && el.value !== null) {
+      const n = Number(el.value);
+      abValues[key] = Number.isFinite(n) ? n : el.value;
+    }
+  });
+
   const pvTranslate = payload.pv_role_translate;
   const pvGenerate = payload.pv_role_generate;
   delete payload.pv_role_translate;
@@ -6561,6 +6824,9 @@ async function saveSiteInline(name, block) {
     values.model = model;
   }
   if (Object.keys(values).length) await jsonSend("PUT", "/api/previsit/config", { values });
+  if (kbId && Object.keys(abValues).length) {
+    await jsonSend("PATCH", `/api/kb/${kbId}/config`, { values: abValues });
+  }
   await renderSites();
   toast(r.restarted ? `${name} 已保存并重启` : `${name} 已保存 · 立即生效`);
 }
@@ -6654,12 +6920,13 @@ function bindSiteInlineEvents() {
     // 板块开关不只是改 checkbox：卡片灰化与徽标要跟着变。
     const m = /^sec_(med|classic|pv)_enabled$/.exec(e.target.dataset.f || "");
     if (m) {
-      const card = e.target.closest("[data-sec-card]") ||
+      const cell = e.target.closest("[data-sec-card]") ||
         box.querySelector(`[data-sec-card="${m[1]}"]`);
-      if (card) {
+      if (cell) {
         const on = Boolean(e.target.checked);
+        const card = cell.closest("tr") || cell;
         card.classList.toggle("is-off", !on);
-        const badge = card.querySelector(".scfg-badge");
+        const badge = cell.querySelector(".scfg-badge");
         if (badge) {
           badge.classList.toggle("on", on);
           badge.textContent = on ? "已显示" : "已隐藏";
@@ -6725,13 +6992,27 @@ function readSiteBlock(block) {
   return out;
 }
 
-function paintSites(d, roles, meta, pv) {
+/* 站点页要显示「回答行为」七项，而它们按知识库存、不随实例下发。
+ * 每个站点主库各取一份参数快照，按 kb_id 索引；失败降级成 null，界面显示占位。
+ * 一个站点一份，并发取，取不到不拖垮整页。 */
+async function loadSiteKbConfigs(d) {
+  const ids = [...new Set(((d && d.items) || []).map((i) => i.kb_id).filter(Boolean))];
+  const out = {};
+  await Promise.all(ids.map(async (id) => {
+    try { out[id] = await api(`/api/kb/${id}/config`); }
+    catch { out[id] = null; }
+  }));
+  return out;
+}
+
+function paintSites(d, roles, meta, pv, kc) {
   const data = d || state.sites;
   if (!data) return;
   state.sites = data;
   state.rolePlan = roles;
   state.modelMeta = meta || [];
   state.pvCfg = pv || null;
+  state.siteKbCfgs = kc || {};
   const items = data.items || [];
   const running = items.filter((i) => i.status === "running").length;
   // 外部托管的站点是**能访问**的，只是不归这个后台管。把它算成"没在跑"，
@@ -6749,7 +7030,7 @@ function paintSites(d, roles, meta, pv) {
   $("viewSite").innerHTML = `<div class="page">
     ${items.length
       ? items.map((i) => siteBlock(i, meta, plans.find((p) => p.name === i.name),
-        "", pv)).join("")
+        "", pv, (state.siteKbCfgs || {})[i.kb_id])).join("")
       : `<div class="card"><p class="hint" style="margin:6px 0 12px">还没有前台站点。</p></div>`}
   </div>`;
 
@@ -6769,14 +7050,16 @@ async function renderSites() {
     box.innerHTML = `<div class="page"><div class="card">
       <div class="card-head"><h3>正在加载…</h3></div></div></div>`;
   }
-  let d, r, meta, pv;
+  let d, r, meta, pv, kc;
   try {
-    // 角色配置、后端清单和实例列表并发加载。
-    [d, r, meta, pv] = await Promise.all([
-      api("/api/instances"),
+    // 实例列表先取：回答行为七项按知识库存，要用列表里的 kb_id 才能取到
+    // 每个站点主库的参数快照。其余四份并发，取不到各自降级、不拖垮整页。
+    d = await api("/api/instances");
+    [r, meta, pv, kc] = await Promise.all([
       api("/api/model-roles").catch(() => null),
       api("/api/models").then((x) => (x && x.providers) || []).catch(() => []),
       api("/api/previsit/config").catch(() => null),
+      loadSiteKbConfigs(d),
     ]);
   } catch (err) {
     if (seq !== _siteRenderSeq) return;
@@ -6788,7 +7071,7 @@ async function renderSites() {
     return;
   }
   if (seq !== _siteRenderSeq) return;
-  paintSites(d, r, meta, pv);
+  paintSites(d, r, meta, pv, kc);
   bindSiteActions();
   box.dataset.ready = "1";
 }

@@ -4,12 +4,12 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>KnowTune · 本地知识库</title>
-  <link rel="stylesheet" href="/static/style.css?v=0.9.97">
+  <link rel="stylesheet" href="/static/style.css?v=0.9.108">
   <script>
     /* 同前台那份自检：页面是新的、app.js 被 WebView 留成旧的，就会出现
        "按钮在、点了没反应"（删库那次就这么来的）。编号对不上就强制换一次，
        只换一次，避免死循环。 */
-    window.ADMIN_REQ_BUILD = "0.9.97";
+    window.ADMIN_REQ_BUILD = "0.9.108";
     addEventListener("load", function () {
       if (window.ADMIN_BUILD === window.ADMIN_REQ_BUILD) return;
       if (sessionStorage.getItem("knowtune.admin.reloaded")) return;
@@ -94,6 +94,11 @@
           <div class="doc-list" id="docList"></div>
         </section>
       </div>
+
+      <div class="sidebar-foot" title="当前能不能提问、由谁回答">
+        <div class="foot-line"><i class="dot" id="footEmbedDot"></i><span class="k">索引</span><b id="footEmbed">-</b></div>
+        <div class="foot-line"><i class="dot" id="footGenDot"></i><span class="k">生成</span><b class="ell" id="footGen">-</b></div>
+      </div>
     </aside>
 
     <main class="main">
@@ -104,7 +109,7 @@
         </div>
         <div class="topbar-right">
           <button class="ghost-btn cfg-btn" id="btnChatCfg" aria-expanded="false"
-                  title="对话配置：挂载的知识库、生成后端、召回条数（Alt+,）">
+                  title="对话配置：知识库与生成后端（Alt+,）">
             <i class="dot" id="cfgDot"></i>
             <span class="cfg-sum" id="cfgSummary">对话配置</span>
             <span class="chev" aria-hidden="true">▾</span>
@@ -180,18 +185,8 @@
             <div class="cfg-label">生成</div>
             <div class="cfg-row">
               <label class="field">
-                <span class="field-label">温度</span>
-                <input type="number" id="optTemp" min="0" max="2" step="0.05" placeholder="跟随">
-              </label>
-              <label class="field">
                 <span class="field-label">最大输出</span>
                 <input type="number" id="optMaxTok" min="64" max="8192" step="64" placeholder="跟随">
-              </label>
-            </div>
-            <div class="cfg-row">
-              <label class="field">
-                <span class="field-label">带历史轮数</span>
-                <input type="number" id="optTurns" min="0" max="20" step="1" placeholder="跟随">
               </label>
               <div class="cfg-switches">
                 <label class="toggle" title="关掉则等服务端生成完一次性返回">
@@ -218,7 +213,7 @@
                 <input type="number" id="optWdense" min="0" max="1" step="0.05" placeholder="跟随">
               </label>
             </div>
-            <div class="cfg-row cfg-row-mm">
+            <div class="cfg-row">
               <label class="field">
                 <span class="field-label">候选池</span>
                 <input type="number" id="optPool" min="5" max="100" step="5" placeholder="跟随">
@@ -230,11 +225,6 @@
                   <option value="1">开</option>
                   <option value="0">关</option>
                 </select>
-              </label>
-              <label class="toggle" title="关掉后不再因相关度不足而拒答">
-                <input type="checkbox" id="optNoRefuse">
-                <span class="sw" aria-hidden="true"></span>
-                <span class="toggle-label">不拒答</span>
               </label>
             </div>
           </div>
@@ -355,6 +345,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=0.9.97"></script>
+  <script src="/static/app.js?v=0.9.108"></script>
 </body>
 </html>

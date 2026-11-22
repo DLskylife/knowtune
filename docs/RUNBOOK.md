@@ -116,7 +116,7 @@ du -sh data/models/bge-small-zh-v1.5 data/models/BAAI--bge-reranker-base
 | 名字 | 类型 | 说明 |
 |---|---|---|
 | `siliconflow` | 云端 OpenAI 兼容 | 默认生成后端，`tencent/Hunyuan-MT-7B`，需密钥 |
-| `local` | 本机 llama.cpp | `http://127.0.0.1:8097/v1`，`autostart: true`；`path` 是标准落位 `data/models/Qwen2.5-7B-Instruct-Q4_K_M.gguf`，把 gguf 放进该目录即可。没有这个文件就把 `autostart` 删掉 |
+| `local` | 本机 llama.cpp | `http://127.0.0.1:8097/v1`；`path` 是标准落位 `data/models/Qwen2.5-7B-Instruct-Q4_K_M.gguf`，把 gguf 放进该目录即可。**不自启**：重启后到「模型服务」页点清单里的「启动」才会拉起进程 |
 | `deepseek` | 云端 OpenAI 兼容 | `deepseek-flash`，备用 |
 
 再加本机端点要在「模型」页独立新建。项目没有全局固定后端：每个站点（及板块）在自己的模型角色里选后端，删掉某个端点只会让引用它的角色失效，不会把别的功能带走。步骤见 [`tools/llama/README.md`](../tools/llama/README.md)。

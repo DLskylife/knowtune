@@ -35,7 +35,7 @@ KnowTune 是本地单机知识库问答系统：一个 FastAPI 进程（`api/app
   │     sites = InstanceManager                                     │
   │   lifespan（api/app.py）：attach 密钥 → 预热线程 → start_autostart │
   │   后台接口 /api/*（全部 HTTP）+ /v1/* 转发网关                    │
-  │   后台静态 api/static/*（构建号 0.9.97）                         │
+  │   后台静态 api/static/*（构建号 0.9.108）                         │
   │   /v1/chat/completions = 纯转发，不进 RAG                        │
   └───────────────────┬────────────────────────────────────────────┘
                       │ runner.start()（runner.py:296）
@@ -78,7 +78,7 @@ KnowTune 是本地单机知识库问答系统：一个 FastAPI 进程（`api/app
 | `src/knowtune/cli.py` | 命令入口 `init/status/kb/ingest/ask/debug/serve`；`cmd_serve`（:226）注入 `KNOWTUNE_GATEWAY` 后 `uvicorn.run("knowtune.api.app:app")`。 | 网关地址按实际 `--port` 写（:234），不是写死 8000；`cli.py` 默认端口是 8000，现行启动用 `--port 8013`，默认 host `127.0.0.1`。 |
 | `src/knowtune/config.py` | 加载 YAML、按库标定覆盖、模型指纹校验。 | 相对路径一律相对**项目根**，不随 CWD 变；标定生效需 kb_id 非空 + 文件存在 + JSON 可读 + 指纹等于 `embedding.model@dim`（:495-510）。 |
 | `src/knowtune/kbconfig.py` | 库级参数覆盖 + 出厂基线比对。 | `kb.config_json` 存**全量快照**并标 `__full__`；「用户手动改过」判据是与出厂基线值不同，不是「键存在」（`kbconfig.py`）。 |
-| `src/knowtune/settings.py` | 可调参数的声明式注册表（边界/步长/说明/生效方式），供 `/api/settings` 与 `/api/kb/{id}/config` 共用。 | 三层取值（高→低）：运行时覆盖 > `config/local.yaml` > `config/default.yaml`；界面只在库参数页渲染（全局抽屉已退役），加参数只改此文件。 |
+| `src/knowtune/settings.py` | 可调参数的声明式注册表（边界/步长/说明/生效方式），供 `/api/settings` 与 `/api/kb/{id}/config` 共用。 | 三层取值（高→低）：运行时覆盖 > `config/local.yaml` > `config/default.yaml`；界面分两处渲染：库参数页管分块/召回/融合/精排，站点页的「回答行为」管拒答/生成/会话（全局抽屉与对话页参数入口已退役），加参数只改此文件。 |
 | `src/knowtune/modelcfg.py` | `config/models.yaml` 端点注册表读写。 | 端点只分 `local` / `openai` 两类（历史上八种 kind 已砍）；**密钥不写进 models.yaml**。 |
 | `src/knowtune/promptcfg.py` | 提示词覆盖层（provider / scope），带 history / rollback / preview。 | 解析链以 `effective_fields()` 为准：`by_provider > by_scope > default > 内置`；只有 `generate` / `translate` 两个 role，界面文案不在这里。 |
 | `src/knowtune/roles.py` | 后端 / 角色解析（`translate` / `generate`）。 | 链：板块级 roles → 站点级 roles → 站点 provider，每级用已知后端名校验，不合法继续下退；没有系统级 roles / 默认 provider 这一层。 |
@@ -143,9 +143,9 @@ KnowTune 是本地单机知识库问答系统：一个 FastAPI 进程（`api/app
 | `src/knowtune/api/app.py` | FastAPI 装配入口（约 270 行）：生命周期、静态资源、no-cache 中间件、`include_router` 注册 8 个路由模块、全局异常处理。 | 端点本体不在这里；全局 `state` 由 `api/state.py` 在导入期构造。 |
 | `src/knowtune/api/routes/*.py` | 88 个端点按资源域拆成 8 个模块：meta / models / kb / docs / search / sessions / prompts / sites。 | `/v1/chat/completions` 在 `models.py`，是**纯转发网关**；「手动改过」判据在 `kbconfig.py`。 |
 | `src/knowtune/api/common.py` / `state.py` / `coverage.py` | 公共层：分片上传暂存 / 全局 `AppState` / 引用覆盖率统计。 | 由各路由模块共享，不放端点逻辑。 |
-| `src/knowtune/api/static/index.html` | 后台 UI 骨架，构建号 `0.9.97`（`window.ADMIN_REQ_BUILD`）。 | 与前台静态资源完全不共享；资源 URL 带 `?v=0.9.97` 破缓存。 |
-| `src/knowtune/api/static/app.js` | 后台交互逻辑，构建号 `0.9.97`（`window.ADMIN_BUILD`）。 | 参数控件由 `/api/kb/{id}/config` 吐出的注册表渲染（共用 `settings.py` 的定义），前端不写业务含义；全局参数抽屉已退役，只剩库参数页。 |
-| `src/knowtune/api/static/style.css` | 后台样式。 | 由 `index.html` 以 `style.css?v=0.9.97` 引用。 |
+| `src/knowtune/api/static/index.html` | 后台 UI 骨架，构建号 `0.9.108`（`window.ADMIN_REQ_BUILD`）。 | 与前台静态资源完全不共享；资源 URL 带 `?v=0.9.108` 破缓存。 |
+| `src/knowtune/api/static/app.js` | 后台交互逻辑，构建号 `0.9.108`（`window.ADMIN_BUILD`）。 | 参数控件由 `/api/kb/{id}/config` 吐出的注册表渲染（共用 `settings.py` 的定义），前端不写业务含义；全局参数抽屉与对话页参数入口已退役，按作用域分成库参数页的检索项与站点页的「回答行为」两处；前台网站直接消费后者。 |
+| `src/knowtune/api/static/style.css` | 后台样式。 | 由 `index.html` 以 `style.css?v=0.9.108` 引用。 |
 
 ### 4.7 `src/knowtune/frontsite/` 前台问答站
 
@@ -219,7 +219,7 @@ KnowTune 是本地单机知识库问答系统：一个 FastAPI 进程（`api/app
 
 1. **提示词优先级注释**：`src/knowtune/promptcfg.py` 早期头注释与 `save()` docstring 曾声称 scope（板块）优先于 provider（后端），`config/prompts.yaml` 头注释曾漏写 `by_scope`。以代码为准：`effective_fields():337-344` 是 `by_provider > by_scope > default > 内置`，且仅 `generate` / `translate` 支持前两层。
 2. **`schema.sql` 注释**：`kb` 表 `config_json` 的早期注释曾写「只存与全局不同的项」。以代码为准：`src/knowtune/kbconfig.py` 实现是**全量快照 + `__full__`**，「用户手动改过」的判据是与出厂基线值不同（`kbconfig.py`），不是键存在。
-3. **前台构建号**：前台静态资源版本号（`style.css?v` / `app.js?v` / `SITE_REQ_BUILD` / `SITE_BUILD`）曾在多处不一致。以代码为准：当前前台统一 `1.7.39`、后台统一 `0.9.97`；两套静态资源各自独立，互不影响。
+3. **前台构建号**：前台静态资源版本号（`style.css?v` / `app.js?v` / `SITE_REQ_BUILD` / `SITE_BUILD`）曾在多处不一致。以代码为准：当前前台统一 `1.7.39`、后台统一 `0.9.108`；两套静态资源各自独立，互不影响。
 
 ## 5. 项目是怎么「构建」起来的
 
@@ -250,7 +250,7 @@ KnowTune 是本地单机知识库问答系统：一个 FastAPI 进程（`api/app
 
 1. `src/knowtune/cli.py` 的 `main` → `cmd_serve`（:226）：按实际 `--port` 写 `os.environ["KNOWTUNE_GATEWAY"]`（:234），打印地址，再 `uvicorn.run("knowtune.api.app:app", host, port)`（:244）。
 2. uvicorn 导入 `knowtune.api.app`：**模块导入期**由 `api/state.py` 执行 `state = AppState()`。`AppState.__init__` 依次 `load_config()` → `Database` → `Embedder` → `VectorStore` → `SparseIndex` → `Reranker` → `RetrievalEngine` → `IngestPipeline` → `LLMClient` → `db.ensure_schema()` → `sites = InstanceManager(self)`。随后 `api/app.py` 构造 `app = FastAPI(..., lifespan=lifespan)` 并 `include_router` 注册 8 个路由模块。
-3. `lifespan`（`api/app.py`）：`secrets.attach()` 恢复密钥 → 清理孤儿导入与过期分片 → `services.warm_cache()` 读回探测结论 → 起 `_warmup` daemon 线程（嵌入预热）与 `_autostart_local_models` daemon 线程（本地 GGUF 自启）→ `for name in state.sites.start_autostart()`（同步做，启动失败要有反馈）。
+3. `lifespan`（`api/app.py`）：`secrets.attach()` 恢复密钥 → 清理孤儿导入与过期分片 → `services.warm_cache()` 读回探测结论 → 起 `_warmup` daemon 线程（嵌入预热）→ `for name in state.sites.start_autostart()`（同步做，启动失败要有反馈）。
 4. `InstanceManager.start_autostart()`（`frontsite/runner.py:495`）对 `autostart` 的实例逐个 `start()`（:296），在 daemon 线程里跑 uvicorn（:360）监听 8800；`frontsite/site.py` 建前台 app 并 `app.mount("/previsit", _SectionGate(...))`（:333）。
 5. `yield` 后服务就绪；关停时 `state.sites.stop_all()`（:358）。前台线程随主进程退出，没有独立子进程要回收。
 

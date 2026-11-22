@@ -18,7 +18,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from .. import logbus, modelcfg, secrets as secrets_mod, services as services_mod
+from .. import logbus, secrets as secrets_mod, services as services_mod
 from ..db import utcnow as _utcnow
 from .common import STATIC_DIR, _PARTS_DIR, _PART_TTL_H, _discard_parts
 from .routes import docs, kb, meta, models, prompts, search, sessions, sites
@@ -48,59 +48,6 @@ def _sweep_stale_parts() -> int:
         if _discard_parts(folder):
             removed += 1
     return removed
-
-
-def _autostart_local_models(state: "AppState") -> None:
-    """把标了 autostart 的本地端点拉起来。在后台线程里跑。
-
-    为什么需要这个：预问诊可以钉在某个端点上（`config/previsit.yaml` 的
-    `provider`）。钉在 local 时，如果重启后没人去模型页点「启动」，预问诊
-    不会报错——它会按设计降级成规则模板，问出来的话术变朴素、抽取退化成
-    关键词，而界面上一切正常。配置写着"本地"，实际模型没在跑，是最难察觉的
-    那种失败。
-
-    放线程里而不是像前台站点那样同步起：加载 4.4G 权重实测 20 秒上下，
-    同步做会让 `knowtune serve` 二十秒不监听端口。代价是启动后这二十秒内
-    打进来的问诊仍会降级，所以成功/失败都往日志里写一条，别让它悄悄发生。
-    """
-    from .. import localmodels as local_mod
-
-    for name, p in state.cfg.generation.providers.items():
-        if not getattr(p, "autostart", False) or p.kind != "local":
-            continue
-        entry = p.entry()
-        if entry is None or not entry.path:
-            logbus.note(f"端点「{name}」标了开机自启，但默认模型没有本地路径（path），跳过",
-                        level="WARNING", source="models")
-            continue
-        inst_name = f"{name}/{entry.id}"
-        try:
-            cur = local_mod.status(inst_name)
-            if cur.get("state") in ("running", "starting"):
-                logbus.note(f"本地实例已在运行：{entry.id} @ :{cur.get('port')}", source="models")
-                continue
-            inst = local_mod.start(
-                name=inst_name, path=entry.path,
-                port=entry.port or None,
-                ctx=entry.context or local_mod.DEFAULT_CTX,
-                alias=entry.id,
-            )
-        except Exception as exc:      # 显存不够、端口被占、文件被删……
-            logbus.note(
-                f"本地端点「{name}」自启失败：{type(exc).__name__}: {exc}。"
-                f"钉在它上面的功能（预问诊 / 站点角色）会降级成模板，去模型页手动启动可恢复",
-                level="ERROR", source="models")
-            continue
-        entry.port = inst.port
-        p.base_url = inst.base_url
-        try:
-            modelcfg.persist(state.cfg)
-        except Exception as exc:      # 落盘失败不该让这次启动白费
-            logbus.note(f"自启后回写端点地址失败：{type(exc).__name__}: {exc}",
-                        level="WARNING", source="models")
-        services_mod.invalidate(name)
-        logbus.note(f"本地实例已自启：{entry.id} @ {inst.base_url}（pid {inst.pid}）",
-                    source="models")
 
 
 def _warmup(state: "AppState") -> None:
@@ -212,10 +159,6 @@ async def lifespan(app: FastAPI):
     # 这一步漏了，模型页重启后就是整页"还没探测"，而盘上明明有记录。
     services_mod.warm_cache(state.cfg)
     threading.Thread(target=_warmup, args=(state,), daemon=True, name="warmup").start()
-    # 标了 autostart 的本地端点先起（加载权重二十秒上下，必须异步）。
-    # 放在站点自启之前：站点里的角色可能也指向同一个本地端点。
-    threading.Thread(target=_autostart_local_models, args=(state,),
-                     daemon=True, name="local-autostart").start()
     # 标了 autostart 的前台实例随后台一起起来。放在线程外面同步做：它们只是
     # 端口监听，不阻塞，而放到后台线程里会让"启动失败"变得没有反馈。
     for name in state.sites.start_autostart():

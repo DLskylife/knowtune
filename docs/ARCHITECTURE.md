@@ -169,7 +169,7 @@ src/knowtune/            主项目
   api/app.py             FastAPI 装配入口（生命周期 / 中间件 / 注册路由），约 270 行
   api/routes/           88 个端点按资源域拆成 8 个模块；/v1 网关在 models.py
   api/common.py / state.py / coverage.py  公共层：分片上传 / AppState / 引用覆盖率
-  api/static/            后台前端：index.html / app.js / style.css，构建号 0.9.97
+  api/static/            后台前端：index.html / app.js / style.css，构建号 0.9.108
   frontsite/             instcfg / runner / site
     static/              前台前端：index.html / app.js / style.css
   previsit/app.py        主项目装配层（注入进程内检索器、LLM 适配器、建 FastAPI app）
@@ -249,11 +249,9 @@ scripts/                  fake_llm.py / get_llama.py / shot_models.py
 - 键是**后端名**不是模型名：同一个后端换模型不该让密钥失效。
 - `_inline_key` 是 pydantic `PrivateAttr`，`model_dump()` / YAML 回写都拿不到它，密钥绝不进序列化结果。
 
-### 3.6 本地端点自启与回环不走代理
+### 3.6 回环不走代理
 
-**为什么要自启**：预问诊可以钉在某个后端上。钉在 `local` 时，如果重启后没人去模型页点「启动」，它不会报错——按设计降级成规则模板，问话变朴素、抽取退化成关键词，界面上却一切正常。配置写着「本地」而模型根本没在跑，是最难察觉的那种失败。所以 `config/models.yaml` 的后端支持 `autostart: true`（`config.py:ProviderCfg`，`modelcfg._spec_of` 只在打开时写进文件，避免每个端点都被灌一个 `false` 而让「与默认值有无差异」的判断失效）。
-
-`api/app.py:_autostart_local_models` 在 lifespan 里起一个 daemon 线程，挑出 `kind=local` 且 `autostart` 的端点，用 `localmodels.start()` 拉起默认模型，再把实际端口回写到 `base_url` 并 `modelcfg.persist`。放线程里而不是同步：4.4GB 权重实测加载 20 秒上下，同步做会让 `knowtune serve` 二十秒不监听端口。代价是这二十秒内打进来的问诊仍走模板，所以成功/失败都往 logbus 写一条。现行配置：`local` 端点 `autostart: true`，默认模型 `Qwen2.5-7B-Instruct-Q4_K_M`（:8097）。
+**本地模型不自启。** `lifespan` 只恢复密钥、预热嵌入、读回探测结论、拉起前台站点实例，不碰 llama.cpp 进程。要跑本地模型，去「模型服务」页在清单里点「启动」（`POST /api/models/{name}/start`）——4.4GB 权重加载约 20 秒，起完把实际端口回写 `base_url`。显存和端口都是显式动作的结果，不会有进程在后台悄悄起来。代价：预问诊钉在 `local` 时，重启后必须先手动启动；没起来就直接报「预问诊服务暂时不可用」，不会静默降级。
 
 **为什么回环要走 NO_PROXY**：机器上开着系统代理（Clash 之类）时，httpx 默认读 `HTTP_PROXY`，连 `http://127.0.0.1:8097` 也会被送进代理绕一圈。实测（2026-11-07，本机代理 `:62091`）一次 300 token 的调用 **5.6s → 2.0s**；预问诊一轮两次调用，白等三秒半，而且看起来像「本地模型就是慢」。两处收口：
 
