@@ -1,6 +1,6 @@
 /* 构建号：与 index.html 里那份一致，不一致说明浏览器拿到的是旧 JS，
    页面加载完会强制换一次（见 index.html 的自检脚本）。 */
-window.ADMIN_BUILD = "0.9.114";
+window.ADMIN_BUILD = "0.9.115";
 
 const $ = (id) => document.getElementById(id);
 
@@ -6495,7 +6495,7 @@ const LANG_NAME = { ug: "维吾尔语（RTL）", zh: "中文", en: "English" };
  *
  * 下面的 siteInlinePanels() 复用原弹窗那套 scfg-* 控件：data-f 字段名一个没动，
  * readSiteBlock() 照旧全量读，所以后端接口零改动。 */
-function siteBlock(i, meta, plan, defProv, pv, kbCfg) {
+function siteBlock(i, meta, plan, defProv, pv, kbc) {
   const running = i.status === "running";
   const external = i.status === "external";
   const busy = i.status === "starting" || i.status === "stopping";
@@ -6564,9 +6564,9 @@ function siteBlock(i, meta, plan, defProv, pv, kbCfg) {
 
     ${siteLiveStrip(i, plan, pv)}
     <div class="site-inline" data-sinline data-kbid="${esc(String(i.kb_id || ""))}">
-      ${siteInlinePanels(i, meta, plan, defProv, pv, kbCfg)}
+      ${siteInlinePanels(i, meta, plan, defProv, pv, kbc)}
       <div class="sif-savebar" data-save-state>
-        <span class="sif-save-hint">回答行为存站点主库，其余存 instances.yaml；改完即生效</span>
+        <span class="sif-save-hint">回答行为按模块存（维医库 / 古籍库 / previsit.yaml），其余存 instances.yaml；改完即生效</span>
         <span class="sif-save-msg">就绪</span>
       </div>
     </div>
@@ -6584,7 +6584,7 @@ function siteBlock(i, meta, plan, defProv, pv, kbCfg) {
  * 关键约束：**所有 data-f 字段名一个都不改**。readSiteBlock() 遍历站点卡内的
  * [data-f] 组 payload，三段都在同一个 DOM 里，保存一次全量提交，后端零改动。
  */
-function siteInlinePanels(i, meta, plan, defProv, pv, kbCfg) {
+function siteInlinePanels(i, meta, plan, defProv, pv, kbc) {
   const d = state.sites || {};
   const roles = i.roles || {};
   const classicCur = i.classic_kb_id || 0;
@@ -6599,15 +6599,17 @@ function siteInlinePanels(i, meta, plan, defProv, pv, kbCfg) {
         headLabel || (field.startsWith("sec_") ? "跟随站点" : "跟随上级"))}</select>`;
 
   // 一行字段：标签在左、控件在右，说明放在控件下方，不再往控件行里塞小字。
-  /* ---------- 01 只留模型列（2026-11-22）----------
-   * 入口开关、显示名、检索库、提示词都不在这张表里露面，一行就两件事：
-   * 这个入口用哪个翻译模型、哪个推理模型。
+  /* ---------- 01 入口与模型（2026-11-22 加提示词列）----------
+   * 一行 = 一个入口：翻译模型 / 推理模型 / 提示词。提示词先前缩在表下一排
+   * 小链接里（「角色提示词 · 维医板块 · 古籍板块 · 预问诊」），四件事挤成一条，
+   * 想改古籍的提示词得先记住它对应上面第几行。现在按钮就在自己那一行的行尾，
+   * 点哪行配哪行，不用在两张表之间对号。
    *
-   * 但这些字段不能从 DOM 里凭空消失：readSiteBlock 是全量提交，后端 sections
-   * 又是整份替换（coerce_sections 对缺的 enabled 回落成「全开」、name 回落成
-   * 空串）。少一个 sec_*_enabled，用户改一次模型，被关掉的入口就自己回来了。
-   * 所以把被移除的字段原样塞进 .et-keep 隐藏区——payload 一行不改，后端零改动，
-   * 只是这一页不再提供编辑入口。data-f 字段名一个没动。 */
+   * 入口开关、显示名、检索库仍然不在表里露面，但字段不能从 DOM 里凭空消失：
+   * readSiteBlock 是全量提交，后端 sections 又是整份替换（coerce_sections 对缺的
+   * enabled 回落成「全开」、name 回落成空串）。少一个 sec_*_enabled，用户改一次
+   * 模型，被关掉的入口就自己回来了。所以把被移除的字段原样塞进 .et-keep 隐藏区
+   * ——payload 一行不改，后端零改动。data-f 字段名一个没动。 */
   const pvPair = pvRolePair(pv);
   const row = (cells, cls = "") => `<tr class="${cls}">${cells}</tr>`;
   const keep = (f, v) => `<input type="hidden" data-f="${f}" value="${esc(v)}">`;
@@ -6626,45 +6628,52 @@ function siteInlinePanels(i, meta, plan, defProv, pv, kbCfg) {
       <b>${esc(label)}</b><span>${esc(note)}</span></td>`;
   const defaultCell = entryCell("站点默认", "其它入口留空时继承这里");
 
+  /* 行尾那格：提示词。按钮的锚点各不一样——站点默认行开的是「角色提示词」
+   * （按后端存），三个板块行各开自己 scope 的抽屉，预问诊开它自己那份
+   * previsit.yaml。文字统一写「配置」，列头已经说明了这一列是什么。 */
+  const promptCell = (attr) =>
+    `<td class="et-prompt"><button class="mini" type="button" ${attr}>配置</button></td>`;
+  const cell = (label, note = "留空跟随站点默认") => entryCell(label, note);
+
   const entryPanel = `
     <div class="et-wrap">
       ${keepFields}
       <table class="et-table">
         <thead><tr>
           <th>入口</th><th>翻译模型</th><th>推理模型</th>
+          <th class="et-th-act">提示词</th>
         </tr></thead>
         <tbody>
           ${row(`${defaultCell}
             <td>${sel("role_translate", "translate", roles.translate,
               "先把维吾尔语提问译成中文去检索，再把中文答案译回去")}</td>
-            <td>${sel("role_generate", "generate", roles.generate, "读检索到的资料组织答案")}</td>`,
-          "scfg-mrow-default")}
-          ${row(`${entryCell("维医问答")}
+            <td>${sel("role_generate", "generate", roles.generate, "读检索到的资料组织答案")}</td>
+            ${promptCell("data-open-global-prompt")}`, "scfg-mrow-default")}
+          ${row(`${cell("维医问答")}
             <td>${sel("sec_med_role_translate", "translate", (sec("med").roles || {}).translate,
               "维医问答的翻译模型；留空跟随站点默认")}</td>
             <td>${sel("sec_med_role_generate", "generate", (sec("med").roles || {}).generate,
-              "维医问答的推理模型；留空跟随站点默认")}</td>`)}
-          ${row(`${entryCell("古籍问答")}
+              "维医问答的推理模型；留空跟随站点默认")}</td>
+            ${promptCell('data-open-prompt="med"')}`)}
+          ${row(`${cell("古籍问答")}
             <td>${sel("sec_classic_role_translate", "translate", (sec("classic").roles || {}).translate,
               "古籍问答的翻译模型；留空跟随站点默认")}</td>
             <td>${sel("sec_classic_role_generate", "generate", (sec("classic").roles || {}).generate,
-              "古籍问答的推理模型；留空跟随站点默认")}</td>`)}
-          ${row(`${entryCell("预问诊")}
+              "古籍问答的推理模型；留空跟随站点默认")}</td>
+            ${promptCell('data-open-prompt="classic"')}`)}
+          ${row(`${cell("预问诊")}
             <td>${sel("pv_role_translate", "translate", pvPair.translate,
               "预问诊维语翻译模型", "跟随站点默认")}</td>
             <td>${sel("pv_role_generate", "generate", pvPair.generate,
-              "预问诊推理模型", "跟随站点默认")}</td>`)}
+              "预问诊推理模型", "跟随站点默认")}</td>
+            ${promptCell("data-open-prompt=\"previsit\"")}`)}
         </tbody>
       </table>
     </div>
     <div class="et-links">
-      <span class="et-links-k">模型自检 / 提示词</span>
+      <span class="et-links-k">模型自检</span>
       <button class="mini" type="button" data-trtest
         title="发一句真实翻译，验证翻译模型通不通、译得对不对">测试翻译</button>
-      <button class="mini" type="button" data-open-global-prompt>角色提示词</button>
-      <button class="mini" type="button" data-open-prompt="med">维医板块</button>
-      <button class="mini" type="button" data-open-prompt="classic">古籍板块</button>
-      <button class="mini" type="button" data-open-prompt="previsit">预问诊</button>
     </div>
     <div class="tr-out scfg-tr-out" data-trout hidden></div>`;
 
@@ -6683,10 +6692,9 @@ function siteInlinePanels(i, meta, plan, defProv, pv, kbCfg) {
     refuseOn: "refusal.enabled", refuseScore: "refusal.min_score",
     refuseMargin: "refusal.min_margin", refuseSoft: "refusal.soft_margin",
   };
-  const abVals = (kbCfg && kbCfg.values) || {};
-  const abNum = (key, fallback) => {
-    const v = abVals[key];
-    return v === undefined || v === null || v === "" ? (fallback ?? "") : v;
+  const valOf = (vals, key) => {
+    const v = (vals || {})[key];
+    return v === undefined || v === null ? "" : v;
   };
   /* 一行一个参数：左边名字（下面挂一行说明），右边控件。跟首页「运行状态」
    * 卡里的标签 / 值对齐是同一套，不再「卡里再分块、块里再两列」。 */
@@ -6694,30 +6702,82 @@ function siteInlinePanels(i, meta, plan, defProv, pv, kbCfg) {
       <span class="sif-k"><b>${esc(label)}</b>${note ? `<em>${esc(note)}</em>` : ""}</span>
       <span class="sif-v">${ctl}</span>
     </div>`;
-  const abInput = (key, attrs) =>
-    `<input data-ab="${esc(key)}" ${attrs} value="${esc(abNum(key))}">`;
+  const abInput = (vals, key, attrs) =>
+    `<input data-ab="${esc(key)}" ${attrs} value="${esc(valOf(vals, key))}">`;
   const sw = (attr, on) => `<label class="toggle">
       <input type="checkbox" ${attr}${on ? " checked" : ""}>
       <span class="sw" aria-hidden="true"></span></label>`;
-  const abCalib = kbCfg && kbCfg.calibrated_keys
-    ? (kbCfg.calibrated_keys || []).includes(abKeys.refuseScore) : false;
-  const answerPanel = `
-    <div class="sif-flat">
+
+  /* 三个模块各一套参数。维医写 kb_id、古籍写 classic_kb_id、预问诊写
+   * previsit.yaml；哪个面板改了只 PATCH 自己那份，互不串值。
+   *
+   * 为什么非得分开：拒答阈值是"这一库的相似度分布"量出来的。维医标定的
+   * 0.35 套到古籍上，要么满屏"资料不够硬"，要么一条都不拒——两个库的分数
+   * 分布根本不是一个量级。以前只有一份全局值，等于逼用户二选一。 */
+  const kbcfgs = kbc || {};
+  const medKbId = Number(i.kb_id) || 0;
+  const clsKbId = Number(i.classic_kb_id) || medKbId;
+  const medCfg = kbcfgs[medKbId] || null;
+  const clsCfg = kbcfgs[clsKbId] || null;
+  const medVals = (medCfg && medCfg.values) || {};
+  const clsVals = (clsCfg && clsCfg.values) || {};
+  const pvCfgVals = (pv && pv.values) || {};
+  const calibOf = (cfg) => Boolean(cfg && (cfg.calibrated_keys || []).includes(abKeys.refuseScore));
+
+  const answerRows = (vals, calib) => `
       ${srow("启用拒答", "资料不够硬时说实话，而不是编",
-        sw(`data-ab="${abKeys.refuseOn}"`, abVals[abKeys.refuseOn] !== false))}
-      ${srow("分数阈值", abCalib ? "已被标定覆盖，手改会覆盖标定值" : "",
-        abInput(abKeys.refuseScore, 'type="number" min="0" max="1" step="0.005"'))}
+        sw(`data-ab="${abKeys.refuseOn}"`, vals[abKeys.refuseOn] !== false))}
+      ${srow("分数阈值", calib ? "已被标定覆盖，手改会覆盖标定值" : "",
+        abInput(vals, abKeys.refuseScore, 'type="number" min="0" max="1" step="0.005"'))}
       ${srow("区分度阈值", "低于它就算分不开，宁可不答",
-        abInput(abKeys.refuseMargin, 'type="number" min="0" max="0.5" step="0.005"'))}
+        abInput(vals, abKeys.refuseMargin, 'type="number" min="0" max="0.5" step="0.005"'))}
       ${srow("低置信提醒", "命中这个区间只在答案上挂提示",
-        abInput(abKeys.refuseSoft, 'type="number" min="0" max="0.5" step="0.005"'))}
+        abInput(vals, abKeys.refuseSoft, 'type="number" min="0" max="0.5" step="0.005"'))}
       ${srow("生成温度", "越高越发散，引用编号越易漂",
-        abInput(abKeys.temp, 'type="number" min="0" max="2" step="0.05"'))}
+        abInput(vals, abKeys.temp, 'type="number" min="0" max="2" step="0.05"'))}
       ${srow("历史轮数", "多轮对话带几轮上文",
-        abInput(abKeys.turns, 'type="number" min="0" max="20" step="1"'))}
+        abInput(vals, abKeys.turns, 'type="number" min="0" max="20" step="1"'))}
       ${srow("历史预算", "字符 / token 上限",
-        abInput(abKeys.budget, 'type="number" min="0" max="8000" step="100"'))}
+        abInput(vals, abKeys.budget, 'type="number" min="0" max="8000" step="100"'))}`;
+
+  /* 预问诊不走检索：没有召回分，也就没有拒答阈值；会话状态由问诊流程自己
+   * 管，不是聊天历史。它真正可调的是怎么生成，所以只给两项，别摆一排
+   * 点了不起作用的旋钮。 */
+  const pvRows = `
+      ${srow("生成温度", "脚本化追问，温度高容易跑题",
+        `<input data-ab="temperature" type="number" min="0" max="2" step="0.05"
+          value="${esc(valOf(pvCfgVals, "temperature"))}">`)}
+      ${srow("单次上限", "一次回复的 token 上限，超出会被截断",
+        `<input data-ab="max_tokens" type="number" min="64" max="4096" step="32"
+          value="${esc(valOf(pvCfgVals, "max_tokens"))}">`)}`;
+
+  const abPanel = (panel, src, note, body) => `<div class="sif-flat ab-panel"
+      data-abpanel="${panel}" data-absrc="${esc(src)}"${panel === "med" ? "" : " hidden"}>
+      ${note ? `<div class="sif-note">${esc(note)}</div>` : ""}
+      ${body}
     </div>`;
+
+  /* 面板顶上那句灰字说清"这份参数存在哪、谁在用"——三个面板长得一模一样，
+   * 不说清楚就只能靠猜。古籍没独立库时（classic_kb_id 为空）它跟维医共用
+   * 同一份，这时得直说，否则用户改完维医、回头看古籍"也变了"会当成 bug。 */
+  const classicShare = !Number(i.classic_kb_id) || clsKbId === medKbId;
+  const answerPanel = `
+    <div class="tabs-bar ab-tabs" data-abtabs>
+      <button type="button" data-abtab="med" class="active">维医问答</button>
+      <button type="button" data-abtab="classic">古籍问答</button>
+      <button type="button" data-abtab="pv">预问诊</button>
+    </div>
+    ${abPanel("med", `kb:${medKbId}`,
+      `存维医检索库（#${medKbId}）；前台维医问答与后台调试对话共用这一份。`,
+      answerRows(medVals, calibOf(medCfg)))}
+    ${abPanel("classic", `kb:${clsKbId}`,
+      classicShare
+        ? `古籍没有独立检索库，参数跟维医是同一份（#${medKbId}）。`
+        : `存古籍检索库（#${clsKbId}）；古籍题按这里的阈值判资料够不够硬。`,
+      answerRows(clsVals, calibOf(clsCfg)))}
+    ${abPanel("pv", "pv",
+      "预问诊是脚本化问诊，不走检索，所以只有生成参数；它的提示词在 01 段「预问诊」那行里改。",
+      pvRows)}`;
 
   /* ---------- 页 3：站点设置 ---------- */
   /* 这一页只留「运行」三件事（端口 / 监听 / 开机）。
@@ -6747,32 +6807,44 @@ function siteInlinePanels(i, meta, plan, defProv, pv, kbCfg) {
     </section>`;
 
   return `
-    ${section("entries", "入口与模型", "每个入口的翻译 / 推理模型", entryPanel)}
-    ${section("answer", "回答行为", "拒答、生成温度、会话历史", answerPanel)}
+    ${section("entries", "入口与模型", "每个入口的翻译 / 推理模型与提示词", entryPanel)}
+    ${section("answer", "回答行为", "按模块各自一套：拒答、生成温度、会话历史", answerPanel)}
     ${section("site", "运行设置", "端口、监听、开机；语言与产出方式改 config/instances.yaml", sitePanel)}`;
 }
 
-/* 站点配置即时保存：回答行为七项写进站点主库（kb.config_json），其余写
- * instances.yaml / previsit；两处各走各的接口，互不污染。
+/* 站点配置即时保存：回答行为按模块分别落盘（维医/古籍各 PATCH 自己的库，
+ * 预问诊合并进 previsit.yaml），其余写 instances.yaml / previsit；几处各走
+ * 各的接口，互不污染。
  * 没有保存按钮——控件 change 后由 queueSiteSave 防抖调用。
  * 成功只更新卡内状态条，不整页重绘（重绘会打断连续编辑、丢焦点）。
  * 只有端口改动触发重启时才重绘一次，那时卡片状态本来就变了。 */
-async function saveSiteInline(name, block) {
+async function saveSiteInline(name, block, dirtyPanels) {
   const state = block.querySelector("[data-save-state] .sif-save-msg");
   const payload = readSiteBlock(block);
   const inline = block.querySelector("[data-sinline]") || block;
-  const kbId = Number(inline.dataset.kbid) || 0;
 
-  // 回答行为：data-ab 的值收集成一份 patch，PATCH 到站点主库。
+  // 回答行为：每个模块一个面板（data-absrc = kb:<id> | pv），各扫各的
+  // [data-ab] 组成一份 patch。不能像以前那样整卡扫一遍——同一组键在三个
+  // 面板里各有一份，混成一份就等于把古籍的阈值写到维医库上。
   // 数字控件空着 = 没填，不当成 0（0 是合法值，但空是"不动"）。
-  const abValues = {};
-  inline.querySelectorAll("[data-ab]").forEach((el) => {
-    const key = el.dataset.ab;
-    if (el.type === "checkbox") abValues[key] = el.checked;
-    else if (el.value !== "" && el.value !== null) {
+  const abPatches = [];
+  inline.querySelectorAll("[data-absrc]").forEach((panel) => {
+    const src = String(panel.dataset.absrc || "");
+    if (!src) return;
+    // 只写这次真正改到的那个模块：一次改动顺手把另外两个库也覆盖一遍，
+    // 既多余又会互相踩（预问诊的 config_save 会 reload_engine，无关的写
+    // 会打断正在进行的问诊）。
+    if (dirtyPanels && !dirtyPanels.has(src)) return;
+    const vals = {};
+    panel.querySelectorAll("[data-ab]").forEach((el) => {
+      const key = el.dataset.ab;
+      if (!key) return;
+      if (el.type === "checkbox") { vals[key] = el.checked; return; }
+      if (el.value === "" || el.value === null) return;
       const n = Number(el.value);
-      abValues[key] = Number.isFinite(n) ? n : el.value;
-    }
+      vals[key] = Number.isFinite(n) ? n : el.value;
+    });
+    if (Object.keys(vals).length) abPatches.push({ src, vals });
   });
 
   const pvTranslate = payload.pv_role_translate;
@@ -6791,9 +6863,16 @@ async function saveSiteInline(name, block) {
     values.provider = provider;
     values.model = model;
   }
+  // 预问诊面板的参数也进同一次 PUT，别为了一个温度多发一个请求。
+  for (const p of abPatches) {
+    if (p.src !== "pv") continue;
+    Object.assign(values, p.vals);
+  }
   if (Object.keys(values).length) await jsonSend("PUT", "/api/previsit/config", { values });
-  if (kbId && Object.keys(abValues).length) {
-    await jsonSend("PATCH", `/api/kb/${kbId}/config`, { values: abValues });
+  for (const p of abPatches) {
+    if (!p.src.startsWith("kb:")) continue;
+    const id = Number(p.src.slice(3)) || 0;
+    if (id) await jsonSend("PATCH", `/api/kb/${id}/config`, { values: p.vals });
   }
   if (state) {
     state.textContent = r.restarted ? "已重启" : "已生效";
@@ -6822,6 +6901,19 @@ function bindSiteInlineEvents() {
 
   box.addEventListener("click", async (e) => {
     const card = e.target.closest(".site-block");
+
+    // 回答行为的分模块页签：只切显示，不发请求——三个面板的值都已经在 DOM
+    // 里，切回去还能看到刚才填的（切页签不等于保存，保存是控件 change）。
+    const abtab = e.target.closest("[data-abtab]");
+    if (abtab && card) {
+      const key = abtab.dataset.abtab;
+      card.querySelectorAll("[data-abtab]").forEach((b) =>
+        b.classList.toggle("active", b === abtab));
+      card.querySelectorAll("[data-abpanel]").forEach((p) => {
+        p.hidden = p.dataset.abpanel !== key;
+      });
+      return;
+    }
 
     // 长文本仍走提示词抽屉，但入口直接摆在页面上，且不用先关一层弹窗。
     if (e.target.closest("[data-open-global-prompt]")) {
@@ -6882,7 +6974,14 @@ function bindSiteInlineEvents() {
     // 入口开关等值由 .et-keep 里的隐藏字段原样保活，不参与交互，也不会 change。
     if (el.matches("[data-f], [data-ab]")) {
       const card = el.closest(".site-block");
-      if (card) queueSiteSave(card);
+      if (!card) return;
+      // 标脏：回答行为按模块存，改一个模块不该把另外两个库也写一遍。
+      const panel = el.closest("[data-absrc]");
+      if (panel) {
+        card._abDirty = card._abDirty || new Set();
+        card._abDirty.add(panel.dataset.absrc);
+      }
+      queueSiteSave(card);
     }
   });
 }
@@ -6901,8 +7000,12 @@ function queueSiteSave(card) {
   clearTimeout(_siteSaveTimers.get(name));
   const timer = setTimeout(async () => {
     _siteSaveTimers.delete(name);
+    // 先把脏集合取走再清空：保存期间又改了别的模块，那一份会重新标脏、
+    // 重新排队，不会被这次一起吞掉。
+    const dirty = card._abDirty ? new Set(card._abDirty) : new Set();
+    card._abDirty = null;
     try {
-      await saveSiteInline(name, card);
+      await saveSiteInline(name, card, dirty);
     } catch (err) {
       toast(err.message, "err");
       const s = card.querySelector("[data-save-state] .sif-save-msg");
@@ -6970,13 +7073,20 @@ function readSiteBlock(block) {
   return out;
 }
 
-/* 站点页要显示「回答行为」七项，而它们按知识库存、不随实例下发。
- * 每个站点主库各取一份参数快照，按 kb_id 索引；失败降级成 null，界面显示占位。
- * 一个站点一份，并发取，取不到不拖垮整页。 */
+/* 站点页要显示「回答行为」，而它按知识库存、不随实例下发；2026-11-22 起
+ * 按模块分，所以**两个库都要取**：维医 = kb_id、古籍 = classic_kb_id。
+ * 返回值按 kb_id 索引，一个库一份快照；失败降级成 null，界面显示占位。
+ * 并发取，取不到不拖垮整页。 */
 async function loadSiteKbConfigs(d) {
-  const ids = [...new Set(((d && d.items) || []).map((i) => i.kb_id).filter(Boolean))];
+  const ids = new Set();
+  for (const i of ((d && d.items) || [])) {
+    const med = Number(i.kb_id) || 0;
+    const cls = Number(i.classic_kb_id) || 0;
+    if (med) ids.add(med);
+    if (cls) ids.add(cls);
+  }
   const out = {};
-  await Promise.all(ids.map(async (id) => {
+  await Promise.all([...ids].map(async (id) => {
     try { out[id] = await api(`/api/kb/${id}/config`); }
     catch { out[id] = null; }
   }));
@@ -7008,7 +7118,7 @@ function paintSites(d, roles, meta, pv, kc) {
   $("viewSite").innerHTML = `<div class="page">
     ${items.length
       ? items.map((i) => siteBlock(i, meta, plans.find((p) => p.name === i.name),
-        "", pv, (state.siteKbCfgs || {})[i.kb_id])).join("")
+        "", pv, state.siteKbCfgs || {})).join("")
       : `<div class="card"><p class="hint" style="margin:6px 0 12px">还没有前台站点。</p></div>`}
   </div>`;
 

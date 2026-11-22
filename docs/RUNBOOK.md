@@ -217,16 +217,17 @@ knowtune serve --port 8013
 
 ## 8. 三板块：开关、模型与提示词
 
-三个板块的模型在后台「站点 → 入口与模型」配，不改代码。**0.9.111 起这一页只配模型**：入口开关、显示名、检索库下拉、表内提示词按钮已撤下，站点页只提供 `translate` / `generate` 两个下拉；翻译自检与四个提示词入口收在表格下方的轻链接里。开关 / 显示名 / 检索库仍由 `config/instances.yaml` 的 `sections` / `kb_id` 持有（前端以 `.et-keep` 隐藏字段原样保活，改模型不会重置），要改就改配置文件；**不要以为页面上没摆就是没了**。
+三个板块的模型在后台「站点 → 入口与模型」配，不改代码。**0.9.115 起这一页是「两列模型 + 一格提示词」**：每行行尾的「提示词」按钮开对应那一行的提示词抽屉（站点默认行 = 角色提示词 / 按后端存，维医 = `scope=med`，古籍 = `scope=classic`，预问诊 = `config/previsit.yaml` 那段）；入口开关、显示名、检索库下拉仍不在表里（值由 `.et-keep` 隐藏字段保活，改模型不会把关掉的入口顶开）。翻译自检在表下那一条「模型自检」里。
 
 | `section`（板块） | 引擎 | 站点页这一行能改的 | 其余配置落点 |
 |---|---|---|---|
-| `med` 维医问答 | 主库 RAG | `translate` / `generate` 后端 | 显示名 / 开关 / 主库在 `instances.yaml`；专属提示词（`scope=med`）在表格下方「维医板块」链接 |
+| `med` 维医问答 | 主库 RAG | `translate` / `generate` 后端 + 行尾「提示词」 | 显示名 / 开关 / 主库在 `instances.yaml`；专属提示词（`scope=med`）在行尾那个按钮里 |
 | `classic` 古籍问答 | 独立库 RAG（或按标题分栏） | 同上，与 `med` 完全独立 | 同上，`classic_kb_id` 决定独立库 |
-| `pv` 预问诊 | 纯对话：一段系统提示词 + 模型，不检索知识库、不走主问答的检索 / 精排 | 同上 | 显示名 / 开关在 `instances.yaml`；提示词在「预问诊」链接，`config/previsit.yaml` 管界面文案与模型参数 |
+| `pv` 预问诊 | 纯对话：一段系统提示词 + 模型，不检索知识库、不走主问答的检索 / 精排 | 同上 | 显示名 / 开关在 `instances.yaml`；提示词在行尾按钮，`config/previsit.yaml` 管界面文案与模型参数 |
 
 - **模型按板块配**：`sections.<key>.roles.{translate,generate}`，留空跟随站点级 roles。解析链（`roles.py`）：**板块级 roles → 站点级 roles → 站点 `provider`**，每级用已知后端名校验、不合法继续下退；没有系统级 roles / 默认 provider 这一层。当前 `sections.*.roles` 只覆盖了 `translate`，`generate` 跟随站点。
 - **提示词按板块配**：解析链以 `promptcfg.py` 代码为准：**`by_provider`（后端）> `by_scope`（板块）> `default`（角色默认）> 内置（builtin）**。只有 `generate` / `translate` 两个角色参与；界面文案不在这条链里。三处注释（`promptcfg.py` 头注释、`save()` docstring、`config/prompts.yaml` 头注释）曾与代码口径不一致，**本次重写已统一**；历史记录见 [ARCHITECTURE.md](ARCHITECTURE.md) §12。
+- **回答行为按模块各一份**（0.9.115）：站点页 `02 回答行为` 三个页签分别写 `kb_id`（维医）、`classic_kb_id`（古籍）、`previsit.yaml`（预问诊，只有温度与单次上限——它不走检索，没有拒答阈值，会话状态由问诊流程管、不是聊天历史）。保存只 PATCH 被改到的那个模块；改动落点是 `kb.config_json` / `previsit.overrides.yaml`，前台立刻生效，不用重启。
 - **预问诊参数**：`config/previsit.yaml`（界面文案、模型参数、**一段** `prompts.chat`）+ `previsit.overrides.yaml`（运行时差异项），后台「前台站点 → 预问诊参数」写回。槽位、危险词、分诊规则、追问知识库（`previsit_kb.yaml`）、图谱库（`kg.db`）与病历/摘要生成已于 2026-11-07 全部删除——它现在只是一层壳：提示词 + 模型，每轮一次调用，把完整对话历史交过去。模型一律跟随 `/v1` 固定入口，**不在这些文件里钉后端 / 模型名**，也不写密钥。要缩短等待只能改模型侧（换更小/更快的本地模型）或调 `max_tokens`。
 - **界面文案固定内置**：标题、欢迎语、免责声明、示例问题等由 `instcfg.default_copy(lang)` 按语言给出出厂值，实例字段写过就沿用、空的补齐；提示词配置不再管界面文案。
 

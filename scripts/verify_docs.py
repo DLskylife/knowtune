@@ -308,20 +308,27 @@ for token, why in (
     ("function queueSiteSave", "改动即保存的防抖排队"),
     ('data-save-state', "即时保存状态位"),
     ('class="et-table"', "入口与模型合并表"),
-    ('<th>入口</th><th>翻译模型</th><th>推理模型</th>', "入口表三列纯模型表头"),
+    ('<th>入口</th><th>翻译模型</th><th>推理模型</th>', "入口表模型列表头"),
+    ('<th class="et-th-act">提示词</th>', "入口表提示词列表头"),
+    ('class="et-prompt"', "入口行尾的提示词按钮"),
     ('class="et-keep" hidden', "非模型字段隐藏保活区"),
-    ('class="et-links"', "模型自检与提示词轻链接条"),
-    ('data-open-prompt="previsit"', "预问诊提示词入口"),
+    ('class="et-links"', "表下模型自检轻链接条"),
+    ('data-open-prompt="previsit"', "预问诊行提示词入口"),
+    ('data-open-prompt="med"', "维医行提示词入口"),
+    ('data-open-prompt="classic"', "古籍行提示词入口"),
+    ('data-open-global-prompt', "站点默认行的角色提示词入口"),
     ("pv_role_translate", "预问诊翻译模型位"),
     ('class="sbk-top"', "身份头部"),
     ('class="sbk-strip', "卡内当前生效条"),
     ("i.ug_capable === false && i.ug_note", "正常态自检不渲染"),
     ("function bindSiteInlineEvents", "内联交互事件委托"),
     ("const answerPanel", "站点回答行为配置区"),
-    ('abInput(abKeys.refuseScore', "拒答阈值写回主库"),
+    ('abInput(vals, abKeys.refuseScore', "拒答阈值写回模块库"),
     ('data-ab="${esc(key)}"', "回答参数统一用 data-ab 标记"),
-    ("function loadSiteKbConfigs", "按站点主库加载回答参数"),
-    ('PATCH", `/api/kb/${kbId}/config`', "回答行为写回 kb.config_json"),
+    ("function loadSiteKbConfigs", "按站点各库加载回答参数"),
+    ('data-abpanel="${panel}"', "回答行为按模块分面板"),
+    ('data-absrc=', "面板自带落点（kb:<id> / pv）"),
+    ('PATCH", `/api/kb/${id}/config`', "回答行为写回该模块的 kb.config_json"),
 ):
     if token not in admin_js:
         errors.append(f"[ui] app.js 缺少站点页内联配置台的{why}：{token}")
@@ -329,9 +336,10 @@ for token, why in (
 # 不能再退回调试对话页；前台网站必须真读主库温度，不能写死 0.35。
 # 0.9.109 视觉重做：全局 ≤1500px 那条隐藏 .field-label 的老规则不能吃掉站点
 # 回答参数的字段名；入口表必须是一行一张入口卡，不能退回撑高行的大表格。
-# 0.9.111 起 01 只留模型列：入口开关 / 显示名 / 检索库 / 提示词都不在表里，
-# 但值必须由 .et-keep 隐藏字段保活——后端 sections 是整份替换，少一个
-# sec_*_enabled 就会把关掉的入口回落成全开、把自定义名字清成空串。
+# 0.9.111 起 01 只留模型列（0.9.115 又加回行尾的提示词按钮，用户明确要求）；
+# 入口开关 / 显示名 / 检索库仍不在表里，值由 .et-keep 隐藏字段保活——后端
+# sections 是整份替换，少一个 sec_*_enabled 就会把关掉的入口回落成全开、
+# 把自定义名字清成空串。
 admin_css = (STATIC / "api/static/style.css").read_text(encoding="utf-8")
 for token, why in (
     ('.app[data-view="site"] .sif-k b', "行标签（不走 .field-label，1500px 以下不会被藏）"),
@@ -350,6 +358,10 @@ for token, why in (
     ("--s-row:", "站点控件高度变量"),
     ('.app[data-view="site"] .sif-flat,', "02/03 平铺清单底"),
     ('.app[data-view="site"] .sif-sec > .sec-head', "段头复用全站 .sec-head"),
+    ('.app[data-view="site"] .et-table td.et-prompt', "入口行尾提示词按钮位"),
+    ('.app[data-view="site"] .ab-tabs', "回答行为分模块页签"),
+    ('.app[data-view="site"] .ab-panel[hidden]', "未选中的模块面板要真的不显示"),
+    ('.app[data-view="site"] .sif-note', "模块面板顶上那句落点说明"),
 ):
     if token not in admin_css:
         errors.append(f"[ui] style.css 缺少{why}：{token}")
@@ -405,11 +417,12 @@ for gone, why in (
     ("data-sec-card", "入口开关卡片锚点"),
     ("scfg-badge", "入口显示/隐藏徽标"),
     ('class="et-kb"', "检索库下拉容器"),
-    ("promptBtn(", "表格内提示词按钮"),
 ):
     if gone in admin_js:
         errors.append(f"[ui] app.js 的 01 段又退回非模型控件（{why}）：{gone}")
 for gone, why in (
+    ('data-open-prompt="med">维医板块', "提示词挤在表下链接条里"),
+    ('>古籍板块</button>', "提示词挤在表下链接条里"),
     ("data-save-inline", "站点保存按钮"),
     ("修改后保存即可生效", "站点旧保存提示"),
     ("function renderAnswerBar", "对话页回答参数常驻摘要"),
