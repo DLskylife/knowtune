@@ -305,7 +305,8 @@ for token, why in (
     ("function siteInlinePanels", "内联配置渲染"),
     ('class="sif-sec"', "内联分区容器"),
     ("function saveSiteInline", "页面内就地保存"),
-    ("data-save-inline", "站点保存按钮"),
+    ("function queueSiteSave", "改动即保存的防抖排队"),
+    ('data-save-state', "即时保存状态位"),
     ('class="et-table"', "入口与模型合并表"),
     ('data-open-prompt="previsit"', "预问诊提示词入口"),
     ("pv_role_translate", "预问诊翻译模型位"),
@@ -329,12 +330,15 @@ admin_css = (STATIC / "api/static/style.css").read_text(encoding="utf-8")
 for token, why in (
     ('.app[data-view="site"] .ab-row .field > .field-label', "回答参数标签覆盖"),
     ('.app[data-view="site"] .et-table tbody tr {', "入口卡片行布局"),
+    ('.app[data-view="site"] .sif-save-msg.ok', "即时保存成功态"),
 ):
     if token not in admin_css:
         errors.append(f"[ui] style.css 缺少{why}：{token}")
 if admin_js.count("${section(") != 3:
     errors.append(f"[ui] 内联分区应为 3 段，实为 {admin_js.count('${section(')} 段")
 for gone, why in (
+    ("data-save-inline", "站点保存按钮"),
+    ("修改后保存即可生效", "站点旧保存提示"),
     ("function renderAnswerBar", "对话页回答参数常驻摘要"),
     ("btnAnswerEdit", "对话页回答参数入口"),
     ("cfgAnswerSec", "对话页回答参数浮层"),

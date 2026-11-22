@@ -1,6 +1,6 @@
 /* 构建号：与 index.html 里那份一致，不一致说明浏览器拿到的是旧 JS，
    页面加载完会强制换一次（见 index.html 的自检脚本）。 */
-window.ADMIN_BUILD = "0.9.109";
+window.ADMIN_BUILD = "0.9.110";
 
 const $ = (id) => document.getElementById(id);
 
@@ -6565,9 +6565,9 @@ function siteBlock(i, meta, plan, defProv, pv, kbCfg) {
     ${siteLiveStrip(i, plan, pv)}
     <div class="site-inline" data-sinline data-kbid="${esc(String(i.kb_id || ""))}">
       ${siteInlinePanels(i, meta, plan, defProv, pv, kbCfg)}
-      <div class="sif-savebar">
-        <span class="sif-save-hint">修改后保存即可生效</span>
-        <button class="primary-btn" data-save-inline>保存并生效</button>
+      <div class="sif-savebar" data-save-state>
+        <span class="sif-save-hint">改动即时生效，不用保存</span>
+        <span class="sif-save-msg">就绪</span>
       </div>
     </div>
 
@@ -6788,9 +6788,13 @@ function siteInlinePanels(i, meta, plan, defProv, pv, kbCfg) {
     ${section("03", "site", "运行设置", "端口、监听、开机", sitePanel)}`;
 }
 
-/* 内联保存站点的三段配置。回答行为七项写进站点主库（kb.config_json），
- * 其余写 instances.yaml / previsit；两处各走各的接口，互不污染。 */
+/* 站点配置即时保存：回答行为七项写进站点主库（kb.config_json），其余写
+ * instances.yaml / previsit；两处各走各的接口，互不污染。
+ * 没有保存按钮——控件 change 后由 queueSiteSave 防抖调用。
+ * 成功只更新卡内状态条，不整页重绘（重绘会打断连续编辑、丢焦点）。
+ * 只有端口改动触发重启时才重绘一次，那时卡片状态本来就变了。 */
 async function saveSiteInline(name, block) {
+  const state = block.querySelector("[data-save-state] .sif-save-msg");
   const payload = readSiteBlock(block);
   const inline = block.querySelector("[data-sinline]") || block;
   const kbId = Number(inline.dataset.kbid) || 0;
@@ -6827,8 +6831,15 @@ async function saveSiteInline(name, block) {
   if (kbId && Object.keys(abValues).length) {
     await jsonSend("PATCH", `/api/kb/${kbId}/config`, { values: abValues });
   }
-  await renderSites();
-  toast(r.restarted ? `${name} 已保存并重启` : `${name} 已保存 · 立即生效`);
+  if (state) {
+    state.textContent = r.restarted ? "已重启" : "已生效";
+    state.className = "sif-save-msg ok";
+  }
+  if (r.restarted) {
+    await renderSites();
+    toast(`${name} 已重启并生效`);
+  }
+  return r;
 }
 
 function splitRoleValue(value) {
@@ -6847,21 +6858,6 @@ function bindSiteInlineEvents() {
 
   box.addEventListener("click", async (e) => {
     const card = e.target.closest(".site-block");
-
-    // 保存这个站点的三段配置。重绘会换掉整张卡，catch 里只复位按钮即可。
-    const save = e.target.closest("[data-save-inline]");
-    if (save && card) {
-      save.disabled = true;
-      card.classList.add("saving");
-      try {
-        await saveSiteInline(card.dataset.name, card);
-      } catch (err) {
-        toast(err.message, "err");
-        card.classList.remove("saving");
-        save.disabled = false;
-      }
-      return;
-    }
 
     // 长文本仍走提示词抽屉，但入口直接摆在页面上，且不用先关一层弹窗。
     if (e.target.closest("[data-open-global-prompt]")) {
@@ -6917,13 +6913,14 @@ function bindSiteInlineEvents() {
   });
 
   box.addEventListener("change", (e) => {
+    const el = e.target;
     // 板块开关不只是改 checkbox：卡片灰化与徽标要跟着变。
-    const m = /^sec_(med|classic|pv)_enabled$/.exec(e.target.dataset.f || "");
+    const m = /^sec_(med|classic|pv)_enabled$/.exec(el.dataset.f || "");
     if (m) {
-      const cell = e.target.closest("[data-sec-card]") ||
+      const cell = el.closest("[data-sec-card]") ||
         box.querySelector(`[data-sec-card="${m[1]}"]`);
       if (cell) {
-        const on = Boolean(e.target.checked);
+        const on = Boolean(el.checked);
         const card = cell.closest("tr") || cell;
         card.classList.toggle("is-off", !on);
         const badge = cell.querySelector(".scfg-badge");
@@ -6932,9 +6929,41 @@ function bindSiteInlineEvents() {
           badge.textContent = on ? "已显示" : "已隐藏";
         }
       }
-      return;
+    }
+    // data-f / data-ab 是站点配置控件：改动即写回，连续改动合并成一次请求。
+    if (el.matches("[data-f], [data-ab]")) {
+      const card = el.closest(".site-block");
+      if (card) queueSiteSave(card);
     }
   });
+}
+
+/* 即时保存的防抖队列。change 已经是「这个值定了」的语义，260ms 只用来
+ * 合并连点（比如一口气切三行下拉），不让半填的输入被当成最终值发出去。
+ * 每个站点一条队列：多站点各自保存，互不取消。 */
+const _siteSaveTimers = new Map();
+function queueSiteSave(card) {
+  const name = card.dataset.name;
+  const state = card.querySelector("[data-save-state] .sif-save-msg");
+  if (state) {
+    state.textContent = "保存中…";
+    state.className = "sif-save-msg busy";
+  }
+  clearTimeout(_siteSaveTimers.get(name));
+  const timer = setTimeout(async () => {
+    _siteSaveTimers.delete(name);
+    try {
+      await saveSiteInline(name, card);
+    } catch (err) {
+      toast(err.message, "err");
+      const s = card.querySelector("[data-save-state] .sif-save-msg");
+      if (s) {
+        s.textContent = "保存失败";
+        s.className = "sif-save-msg err";
+      }
+    }
+  }, 260);
+  _siteSaveTimers.set(name, timer);
 }
 
 /* 把一张卡上的控件读成一份完整 payload。
