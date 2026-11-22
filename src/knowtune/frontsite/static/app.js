@@ -22,7 +22,7 @@
 
 /* 构建号：和 index.html 里那份必须一致，不一致说明浏览器拿的是旧 JS，
    页面加载完会强制换一次（见 index.html 里的自检脚本）。 */
-window.SITE_BUILD = "1.7.39";
+window.SITE_BUILD = "1.7.42";
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
@@ -39,7 +39,7 @@ const LANG_LABEL = {
 
 const T = {
   ug: {
-    searching: "ئىزدەۋاتىدۇ…",
+    searching: "ئىزدەش ۋە رەتلەش…",
     thinking: "جاۋاب يېزىلىۋاتىدۇ…",
     translated: "سوئالىڭىز خەنزۇچىغا تەرجىمە قىلىنىپ ئىزدەلدى",
     drafting: "جاۋاب تەييارلىنىۋاتىدۇ…",
@@ -56,6 +56,7 @@ const T = {
     fbMarked: "رەھمەت",
     copied: "كۆچۈرۈلدى",
     took: (s) => `${s} سېكۇنت`,
+    split: (r, g) => `ئىزدەش ${r} · يېزىش ${g}`,
     toBottom: "ئاستىغا",
     welHint: "تۆۋەندىكى سوئاللارنى بېسىڭ ياكى سوئالىڭىزنى يېزىڭ.",
     loopCut: "جاۋاب تەكرارلىنىپ كەتكەنلىكى ئۈچۈن ئۈزۈۋېتىلدى.",
@@ -129,7 +130,7 @@ const T = {
     },
   },
   zh: {
-    searching: "正在检索…",
+    searching: "正在检索与精排…",
     thinking: "正在生成答案…",
     translated: "你的问题已译为中文后检索",
     drafting: "正在组织答案…",
@@ -146,6 +147,7 @@ const T = {
     fbMarked: "已记录",
     copied: "已复制",
     took: (s) => `用时 ${s} 秒`,
+    split: (r, g) => `检索 ${r} · 生成 ${g}`,
     toBottom: "回到底部",
     welHint: "点击下方示例，或直接输入你的问题。",
     loopCut: "答案出现重复，已在此截断。",
@@ -202,14 +204,14 @@ const T = {
     ev: { high: "依据资料", mid: "资料为主", low: "资料不足 · 含通用知识" },
   },
   en: {
-    searching: "Searching…", thinking: "Writing answer…",
+    searching: "Searching & reranking…", thinking: "Writing answer…",
     translated: "Your question was translated before search",
     drafting: "Organizing the answer…", translating: "Translating into Uyghur…",
     notFound: "Not enough evidence in the knowledge base.",
     error: "Error", sources: "Sources", srcCount: (n) => `${n} sources`,
     stop: "Stop", send: "Send", copy: "Copy", copied: "Copied",
     fbUp: "Helpful", fbDown: "Not useful", fbMarked: "Thanks",
-    took: (s) => `${s}s`, toBottom: "Latest",
+    took: (s) => `${s}s`, split: (r, g) => `retrieve ${r} · generate ${g}`, toBottom: "Latest",
     welHint: "Pick a sample below, or type your own question.",
     docs: "docs", chunks: "chunks",
     stat: (d, c) => `${d} docs · ${c} chunks`,
@@ -1282,6 +1284,21 @@ function decorateBot(bot, el, rec) {
   const foot = document.createElement("div");
   foot.className = "foot";
   const secs = (rec.ms || 0) / 1000;
+  // 总分之外再给一次拆分：检索慢和生成慢是两回事，用户看到的"卡"到底卡在哪
+  // 一段，只有这两个数能回答。任一为 0（直答、全程命中缓存）就不显示拆分。
+  const tm = rec.tm || {};
+  const retrMs = tm.retrieve_ms != null
+    ? tm.retrieve_ms
+    : (tm.dense_ms || 0) + (tm.sparse_ms || 0) + (tm.fusion_ms || 0) + (tm.rerank_ms || 0);
+  const genMs = tm.gen_ms || 0;
+  // 阈值只用来排除"没有这一段"的情况（直答模式检索为 0），不能拿来当
+  // "够不够快"的门槛：检索 60ms 也是真实发生的一段，藏掉它反而让人以为
+  // 那部分时间是凭空多出来的。
+  // 毫秒级的段直接报毫秒：写成 "检索 0.0s" 看着像坏的，而它恰恰说明检索没问题。
+  const span = (ms) => (ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms)}ms`);
+  const splitTxt = (secs >= 1 && retrMs > 0 && genMs > 200)
+    ? ` · ${esc(t.split(span(retrMs), span(genMs)))}`
+    : "";
   // 语言标记只在"不是当前界面语言"时出现：同一语言时它是噪音，
   // 不同语言时它是唯一能让用户明白"为什么这段我看不懂"的线索。
   const stamp = (rec.al && rec.al !== uiLang)
@@ -1296,7 +1313,7 @@ function decorateBot(bot, el, rec) {
       + `<button type="button" class="fb" data-fb="down"${fbv ? " disabled" : ""}>`
       + esc(fbv === "down" ? t.fbMarked : t.fbDown) + `</button>`
     : "";
-  foot.innerHTML = `<span class="took">${secs >= 1 ? esc(t.took(secs.toFixed(1))) : ""}</span>`
+  foot.innerHTML = `<span class="took">${secs >= 1 ? esc(t.took(secs.toFixed(1))) : ""}${splitTxt}</span>`
     + stamp
     + `<span class="spacer"></span>`
     + fb
@@ -2170,9 +2187,32 @@ async function send() {
   scrollToBottom();
 
   const started = Date.now();
+  // 阶段文案带秒表。检索（含 CPU 精排）以前是静默的 3 秒，同一个"正在检索…"
+  // 一直挂着，用户分不清"它卡住了"和"它在算"——秒表是这两者唯一的分界线。
+  let statusTick = null;
+  let statusAt = Date.now();
+  let statusLabel = "";
   const showStatus = (s) => {
+    if (s !== statusLabel) {
+      statusLabel = s;
+      statusAt = Date.now();
+    }
+    // 重绘必须读 statusLabel 这个外部变量，不能读参数 s：定时器只创建一次，
+    // 早先写成 `${s}` 时，闭包一直握着一开始那句"正在检索…"，后面无论切到
+    // 哪个阶段都会在 200ms 内被覆写回去——秒表照走，文案永远停在第一步。
+    const paint = () => {
+      const el = (Date.now() - statusAt) / 1000;
+      $("status").textContent = el >= 0.5
+        ? `${statusLabel} ${el.toFixed(1)}s` : statusLabel;
+    };
     $("status").hidden = false;
-    $("status").textContent = s;
+    paint();
+    if (!statusTick) statusTick = setInterval(paint, 200);
+  };
+  const stopStatus = () => {
+    if (statusTick) clearInterval(statusTick);
+    statusTick = null;
+    $("status").hidden = true;
   };
   showStatus(t.searching);
 
@@ -2217,7 +2257,7 @@ async function send() {
   } finally {
     busy = false;
     ctrl = null;
-    $("status").hidden = true;
+    stopStatus();
     syncSend();
     const st = bot.querySelector(".answer.streaming");
     if (st) st.classList.remove("streaming");
@@ -2307,6 +2347,9 @@ async function send() {
         ev: d.evidence || "",
         cit: d.citations || finalCit,
         ms: Date.now() - started,
+        // 检索 / 生成各花多少。以前只有一个总时长，用户看到 8 秒没法判断
+        // 该怪检索还是该怪模型——而这两件事的处置方式完全不同。
+        tm: d.timings_ms || null,
         loop: !!d.loop_truncated,
         // 两种"翻译没成"分开记：问题没译（检索按原文，召回可能不准）和
         // 答案没译（正文是看不懂的中文）严重程度不同，提示语也不同。

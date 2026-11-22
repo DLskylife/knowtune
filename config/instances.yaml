@@ -8,8 +8,8 @@ instances:
   answer_mode: translate
   provider: ''
   roles:
-    translate: siliconflow::tencent/Hunyuan-MT-7B
-    generate: siliconflow::Qwen/Qwen2.5-7B-Instruct
+    translate: aliyun::deepseek-v4.1-flash-1017
+    generate: aliyun::deepseek-v4.1-flash-1017
   title: ''
   subtitle: ''
   welcome: ''
@@ -29,12 +29,12 @@ instances:
       enabled: true
       name: 维医知识问答
       roles:
-        translate: siliconflow::tencent/Hunyuan-MT-7B
+        translate: aliyun::deepseek-v4.1-flash-1017
     classic:
       enabled: true
       name: 古籍知识问答
       roles:
-        translate: siliconflow::tencent/Hunyuan-MT-7B
+        translate: aliyun::deepseek-v4.1-flash-1017
     pv:
       enabled: true
       name: 预问诊

@@ -90,6 +90,10 @@ class RerankCfg(BaseModel):
     top_k: int = 8
     batch_size: int = 8
     max_length: int = 512
+    # 0 = 用满物理核心。精排是"一次查询里几十毫秒到一秒"的突发计算，
+    # 与嵌入那种常驻服务不同，把核心用满让它尽快算完才对：实测 16 核上
+    # 8 线程 871ms/问、16 线程 776ms/问，同样的分数。
+    threads: int = 0
     timeout_s: float = 10.0
     allow_override: bool = True
 

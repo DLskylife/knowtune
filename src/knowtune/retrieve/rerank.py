@@ -92,10 +92,35 @@ class Reranker:
                 )
             from sentence_transformers import CrossEncoder
 
+            # 精排是一次请求里的突发计算，线程数用满比留给别的任务更划算：
+            # 实测 16 核上 8→16 线程省约 11%，分数完全一致。
+            import os
+
+            threads = int(getattr(self.cfg.retrieval.rerank, "threads", 0) or 0)
+            if threads <= 0:
+                threads = max(1, os.cpu_count() or 1)
+            import torch
+
+            torch.set_num_threads(threads)
+
             model = CrossEncoder(ref, max_length=self.cfg.retrieval.rerank.max_length,
                                  device=self.cfg.embedding.device)
             self._models[model_name] = model
             return model
+
+    def reset(self) -> None:
+        """丢掉已加载的模型与逐对分数缓存。
+
+        存在理由：`max_length` 是**构造参数**，改了它不重建 CrossEncoder 就还是
+        按旧截断跑，界面上改完"没反应"。分数缓存也必须一起清——同一对文本在
+        不同截断下的分数不可比，留着就是在拿旧口径的分数排新口径的序。
+        """
+        with self._lock:
+            self._models.clear()
+            self._failed.clear()
+            self._last_error = None
+        with self._cache_lock:
+            self._cache.clear()
 
     def warmup(self) -> str | None:
         """提前把权重读进内存。返回错误信息，None 表示就绪。

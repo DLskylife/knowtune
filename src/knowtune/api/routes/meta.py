@@ -251,6 +251,14 @@ def reload_settings() -> dict:
     result = settings_mod.reload_from_disk(state.cfg)
     state.invalidate_kb_cfg()
     services_mod.invalidate()
+    # 精排的截断长度、模型名都是**构造参数**，只改 cfg 不重建模型等于没改——
+    # 界面上把 384 改成 128、点重载，实际还在按 384 跑几秒。这里顺手丢掉实例，
+    # 下一次提问按新参数重建（重建约 1-2s，比"改了不生效"可接受得多）。
+    if "retrieval.rerank.max_length" in result["reloaded"] or (
+        "retrieval.rerank.model" in result["reloaded"]
+    ):
+        state.reranker.reset()
+        result["reranker_reset"] = True
     result["message"] = (
         f"已从磁盘重读，{len(result['reloaded'])} 项变化"
         if result["reloaded"] else "磁盘配置与内存一致"

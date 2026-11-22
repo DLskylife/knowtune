@@ -16,8 +16,10 @@
 from __future__ import annotations
 
 import os
+import re
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Iterator
@@ -114,6 +116,67 @@ def _split_for_translate(text: str, limit: int = 300) -> list[str]:
         if buf.strip():
             out.append(buf)
     return [p for p in out if p.strip()]
+
+
+def _pack_for_parallel(text: str, limit: int = 240) -> list[str]:
+    """把草稿切成"每段不超过 limit 字"的若干段，尽量少切。
+
+    `_split_for_translate` 是给串行兜底用的，它按换行先切，一段 80 字的
+    小段落也单独成段——并发时这直接把段数抬到 6 个以上，4 路要跑两轮，
+    等于白等一轮。这里改成先按句末标点拆散、再贪心填满：700 字的草稿
+    得到 3 段而不是 6 段，一轮并发就翻完。
+    """
+    parts = [p for p in re.split(r"(?<=[。！？；!?;])|\n+", text or "") if p and p.strip()]
+    segs: list[str] = []
+    buf = ""
+    for p in parts:
+        if buf and len(buf) + len(p) > limit:
+            segs.append(buf)
+            buf = p
+        else:
+            buf += p
+    if buf.strip():
+        segs.append(buf)
+    return segs
+
+
+def _translate_parallel(llm: Any, sys_msg: dict, segs: list[str], provider: str,
+                        workers: int = 6) -> list[str]:
+    """分段并发翻译，按原文顺序返回；某段没译出就退回该段原文。
+
+    为什么不再整段流式：整段发出去时，译文要等模型把整篇都吐完才算完，
+    而"吐完"的耗时随字数线性增长——siliconflow 的 MT 模型翻 400 字实测
+    52 秒。切成 240 字一段、开 4 路并发，同一篇 17 秒就翻完（2026-11-22
+    实测，各段 9.4/15.9/16.7s）。分段之间互不相干，没有跨段指代需要
+    统一，切开的代价只是每段开头少一点上下文，比 52 秒的等待划算得多。
+
+    仍然按顺序取结果（`futs` 按 segs 原序排列），所以拼接顺序永远正确；
+    只是第一段没回来之前不会有字，这一点和串行一样。
+    """
+    if not segs:
+        return []
+    with ThreadPoolExecutor(max_workers=min(workers, len(segs))) as ex:
+        futs = [
+            ex.submit(
+                lambda s=seg: (llm.complete(
+                    [sys_msg, {"role": "user", "content": s}],
+                    provider=provider, temperature=0.2,
+                    max_tokens=min(4096, max(1200, len(s) * 12)),
+                    reasoning="none",
+                ).text or "").strip()
+            )
+            for seg in segs
+        ]
+        out: list[str] = []
+        for seg, fut in zip(segs, futs):
+            try:
+                txt = fut.result()
+            except Exception:
+                txt = ""
+            # 判"译出来了"用语言检测而不是"非空"：模型完全可能把中文原样
+            # 吐回来，那也是非空的。与串行兜底同一口径。
+            out.append(txt if txt and lang_mod.detect(txt) != "zh" else seg)
+        return out
 
 
 def build_site(spec, state: Any) -> FastAPI:
@@ -688,6 +751,24 @@ def build_site(spec, state: Any) -> FastAPI:
                     # 流里一个 content 都不会来——不报错、不抛异常，前端只能
                     # 拿到中文草稿。所以这里是 12 倍 + 兜底 4096，上限 8192。
                     tr_budget = min(8192, max(4096, len(draft) * 12))
+                    # 长草稿走分段并发，短草稿仍走下面的整段流式——两三句的
+                    # 文本开线程池不值，而且整段流式的首字更早。
+                    # 阈值 350 字：低于它的草稿整段翻完通常在 20 秒内，拆开反而
+                    # 让每段都从零开始、失去跨句的语气连贯。
+                    if len(draft) > 350:
+                        segs = _pack_for_parallel(draft, 180)
+                        got_segs = _translate_parallel(
+                            state.llm, tr_msgs[0], segs, tr_provider)
+                        same = sum(1 for g, s in zip(got_segs, segs) if g == s)
+                        joined = "\n\n".join(got_segs)
+                        if joined.strip() and same < len(segs):
+                            # 有一段是原文就说明部分没译出，done 里要如实报，
+                            # 别让界面在"部分中文"的答案上写"已翻译"。
+                            if same:
+                                error = error or "部分段落未译出"
+                            acc = [joined]
+                            yield _sse("delta", {"text": joined})
+                        # 全段都失败时 acc 留空，下面的整段路径会再赌一次。
                     # 翻译整段也可能失败（网络抖动、SSL、限流），而它一旦失败，
                     # 用户拿到的就是一整段中文。一个字都没出时重试一次成本很低；
                     # 已经出了字就不能重来，否则答案会被接成两遍。
