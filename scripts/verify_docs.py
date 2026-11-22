@@ -347,6 +347,29 @@ for token, why in (
 ):
     if token not in admin_css:
         errors.append(f"[ui] style.css 缺少{why}：{token}")
+# 0.9.112 统一风格：三段共用一组 tokens，不再各套一套底色/边框/圆角/控件高度；
+# 表头与表体必须同列宽（之前表头停在 4 列 250px、表体已是 3 列 230px，对不齐）；
+# 三段引导语一律是卡外纯文字，03 段的说明不许再被 card() 塞回内容卡里。
+for token, why in (
+    ("--s-panel:", "站点内容面板统一底色"),
+    ("--s-panel-bd:", "站点内容面板统一边框"),
+    ("--s-ctl-h:", "站点控件统一高度"),
+    ('.app[data-view="site"] .scfg-lead {', "段内引导语样式"),
+):
+    if token not in admin_css:
+        errors.append(f"[ui] style.css 缺少{why}：{token}")
+if admin_css.count("grid-template-columns: 230px repeat(2, minmax(0, 1fr))") != 2:
+    errors.append("[ui] 入口表表头与表体必须共用同一组三列列宽（各 1 处，共 2 处）")
+for gone, why in (
+    ("250px repeat(3", "旧四列表头列宽"),
+    ('.app[data-view="site"] .scfg-card.run-only .scfg-card-head', "03 段卡内说明头"),
+    ('card("运行", "占哪个端口', "03 段说明被塞进内容卡"),
+):
+    if gone in admin_css or gone in admin_js:
+        errors.append(f"[ui] 不该再有{why}：{gone}")
+LEAD_CLS = 'class="scfg-lead'
+if admin_js.count(LEAD_CLS) != 3:
+    errors.append(f"[ui] 三段引导语应各一条，实为 {admin_js.count(LEAD_CLS)} 条")
 # 8 个保活字段一个都不能少：kb / classic_kb + 三个板块的 enabled / name。
 for token, why in (
     ('keep("kb_id", i.kb_id || 0)', "站点主库保活"),

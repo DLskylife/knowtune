@@ -1,6 +1,6 @@
 /* 构建号：与 index.html 里那份一致，不一致说明浏览器拿到的是旧 JS，
    页面加载完会强制换一次（见 index.html 的自检脚本）。 */
-window.ADMIN_BUILD = "0.9.111";
+window.ADMIN_BUILD = "0.9.112";
 
 const $ = (id) => document.getElementById(id);
 
@@ -6606,12 +6606,6 @@ function siteInlinePanels(i, meta, plan, defProv, pv, kbCfg) {
   const field = (label, control, note, cls = "") => `<div class="scfg-field ${cls}">
       <label>${esc(label)}</label>${control}${note ? `<small>${esc(note)}</small>` : ""}
     </div>`;
-  const card = (title, desc, body, extraClass = "") => `<section class="scfg-card ${extraClass}">
-      <div class="scfg-card-head">
-        <div class="scfg-card-title"><b>${esc(title)}</b><span>${esc(desc)}</span></div>
-      </div>
-      <div class="scfg-card-body">${body}</div>
-    </section>`;
 
   /* ---------- 01 只留模型列（2026-11-22）----------
    * 入口开关、显示名、检索库、提示词都不在这张表里露面，一行就两件事：
@@ -6752,15 +6746,20 @@ function siteInlinePanels(i, meta, plan, defProv, pv, kbCfg) {
    * （或反过来），下次重启又翻回旧值，谁也不知道以哪个为准。这类部署时定一次
    * 的东西只留配置文件一个落点（instcfg 每次请求现读，改完不用重启）。
    */
+  /* 三段同构：卡外一行纯文字引导语 + 卡内内容面板。以前这段的说明被
+   * card() 塞在 .scfg-card-head 里，视觉上在内容卡内部，和 01/02 不一致。 */
   const sitePanel = `
+    <div class="scfg-lead"><b>运行设置</b><span>占哪个端口、谁能连、要不要开机拉起；语言与产出方式改 config/instances.yaml</span></div>
     <div class="scfg-cards">
-      ${card("运行", "占哪个端口、谁能连、要不要开机拉起；语言与产出方式改 config/instances.yaml", `
-        ${field("端口", `<input data-f="port" type="number" min="${lo}" max="${hi}" value="${i.port}">`,
-          "改这里会重启站点")}
-        ${field("监听", toggle("public", i.public, "局域网可访问"), "只监听回环时外部访问不到")}
-        ${field("开机", toggle("autostart", i.autostart, "后台启动时自动拉起"),
-          "关掉后每次都要在这一页手动启动")}
-      `, "run-only")}
+      <section class="scfg-card run-only">
+        <div class="scfg-card-body">
+          ${field("端口", `<input data-f="port" type="number" min="${lo}" max="${hi}" value="${i.port}">`,
+            "改这里会重启站点")}
+          ${field("监听", toggle("public", i.public, "局域网可访问"), "只监听回环时外部访问不到")}
+          ${field("开机", toggle("autostart", i.autostart, "后台启动时自动拉起"),
+            "关掉后每次都要在这一页手动启动")}
+        </div>
+      </section>
     </div>`;
 
   /* 三段常驻，没有页签、没有 hidden：滚动就能看全，保存一次全量提交。
