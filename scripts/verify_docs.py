@@ -323,6 +323,15 @@ for token, why in (
         errors.append(f"[ui] app.js 缺少站点页内联配置台的{why}：{token}")
 # 0.9.108 起站点页三段：入口与模型 / 回答行为 / 运行设置。回答行为属于站点主体，
 # 不能再退回调试对话页；前台网站必须真读主库温度，不能写死 0.35。
+# 0.9.109 视觉重做：全局 ≤1500px 那条隐藏 .field-label 的老规则不能吃掉站点
+# 回答参数的字段名；入口表必须是一行一张入口卡，不能退回撑高行的大表格。
+admin_css = (STATIC / "api/static/style.css").read_text(encoding="utf-8")
+for token, why in (
+    ('.app[data-view="site"] .ab-row .field > .field-label', "回答参数标签覆盖"),
+    ('.app[data-view="site"] .et-table tbody tr {', "入口卡片行布局"),
+):
+    if token not in admin_css:
+        errors.append(f"[ui] style.css 缺少{why}：{token}")
 if admin_js.count("${section(") != 3:
     errors.append(f"[ui] 内联分区应为 3 段，实为 {admin_js.count('${section(')} 段")
 for gone, why in (
