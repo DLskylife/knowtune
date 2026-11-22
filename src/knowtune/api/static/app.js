@@ -1,6 +1,6 @@
 /* 构建号：与 index.html 里那份一致，不一致说明浏览器拿到的是旧 JS，
    页面加载完会强制换一次（见 index.html 的自检脚本）。 */
-window.ADMIN_BUILD = "0.9.113";
+window.ADMIN_BUILD = "0.9.114";
 
 const $ = (id) => document.getElementById(id);
 
@@ -6544,7 +6544,7 @@ function siteBlock(i, meta, plan, defProv, pv, kbCfg) {
         <div class="sbk-id">
           <span class="sbk-name">${esc(i.name)}</span>
           ${metaBits.length
-            ? `<span class="sbk-meta">${metaBits.join("")}</span>` : ""}
+            ? `<span class="sbk-meta">${metaBits.join(" · ")}</span>` : ""}
         </div>
         <a class="sbk-url" href="${esc(i.url)}" target="_blank"
           rel="noreferrer">${esc(i.url)}</a>
@@ -6566,7 +6566,7 @@ function siteBlock(i, meta, plan, defProv, pv, kbCfg) {
     <div class="site-inline" data-sinline data-kbid="${esc(String(i.kb_id || ""))}">
       ${siteInlinePanels(i, meta, plan, defProv, pv, kbCfg)}
       <div class="sif-savebar" data-save-state>
-        <span class="sif-save-hint">改动即时生效，不用保存</span>
+        <span class="sif-save-hint">回答行为存站点主库，其余存 instances.yaml；改完即生效</span>
         <span class="sif-save-msg">就绪</span>
       </div>
     </div>
@@ -6591,10 +6591,6 @@ function siteInlinePanels(i, meta, plan, defProv, pv, kbCfg) {
   const lo = d.port_range ? d.port_range[0] : 8800;
   const hi = d.port_range ? d.port_range[1] : 8899;
 
-  const toggle = (field, on, label) => `<label class="toggle">
-      <input type="checkbox" data-f="${field}"${on ? " checked" : ""}>
-      <span class="sw" aria-hidden="true"></span>
-      <span class="toggle-label">${esc(label)}</span></label>`;
   const sec = (key) => (i.sections && i.sections[key]) || {};
   const secOn = (key) => sec(key).enabled !== false;
   const sel = (field, role, cur, title, headLabel) =>
@@ -6624,12 +6620,11 @@ function siteInlinePanels(i, meta, plan, defProv, pv, kbCfg) {
         keepChk(`sec_${k}_enabled`, secOn(k)) + keep(`sec_${k}_name`, sec(k).name || "")
       ).join("")}
     </div>`;
-  /* 行首徽章：一个字就够认出是哪一行。带底色的方块比纯文字行首好扫，
-     四行连在一起时眼睛有落点，不会读串行。 */
-  const entryCell = (label, badge, note = "留空跟随站点默认") => `<td class="et-name">
-      <span class="et-av">${esc(badge)}</span>
-      <span class="et-nm"><b>${esc(label)}</b><span>${esc(note)}</span></span></td>`;
-  const defaultCell = entryCell("站点默认", "站", "其它入口留空时继承这里");
+  /* 行内只放名字 + 一行小字，和模型页的清单行（名字 / 元信息）一模一样：
+     徽章、色块这类"另一套语言"不进这张表。 */
+  const entryCell = (label, note = "留空跟随站点默认") => `<td class="et-name">
+      <b>${esc(label)}</b><span>${esc(note)}</span></td>`;
+  const defaultCell = entryCell("站点默认", "其它入口留空时继承这里");
 
   const entryPanel = `
     <div class="et-wrap">
@@ -6644,17 +6639,17 @@ function siteInlinePanels(i, meta, plan, defProv, pv, kbCfg) {
               "先把维吾尔语提问译成中文去检索，再把中文答案译回去")}</td>
             <td>${sel("role_generate", "generate", roles.generate, "读检索到的资料组织答案")}</td>`,
           "scfg-mrow-default")}
-          ${row(`${entryCell("维医问答", "维")}
+          ${row(`${entryCell("维医问答")}
             <td>${sel("sec_med_role_translate", "translate", (sec("med").roles || {}).translate,
               "维医问答的翻译模型；留空跟随站点默认")}</td>
             <td>${sel("sec_med_role_generate", "generate", (sec("med").roles || {}).generate,
               "维医问答的推理模型；留空跟随站点默认")}</td>`)}
-          ${row(`${entryCell("古籍问答", "古")}
+          ${row(`${entryCell("古籍问答")}
             <td>${sel("sec_classic_role_translate", "translate", (sec("classic").roles || {}).translate,
               "古籍问答的翻译模型；留空跟随站点默认")}</td>
             <td>${sel("sec_classic_role_generate", "generate", (sec("classic").roles || {}).generate,
               "古籍问答的推理模型；留空跟随站点默认")}</td>`)}
-          ${row(`${entryCell("预问诊", "预")}
+          ${row(`${entryCell("预问诊")}
             <td>${sel("pv_role_translate", "translate", pvPair.translate,
               "预问诊维语翻译模型", "跟随站点默认")}</td>
             <td>${sel("pv_role_generate", "generate", pvPair.generate,
@@ -6693,44 +6688,35 @@ function siteInlinePanels(i, meta, plan, defProv, pv, kbCfg) {
     const v = abVals[key];
     return v === undefined || v === null || v === "" ? (fallback ?? "") : v;
   };
-  const abField = (label, key, attrs, note) => `<label class="field">
-      <span class="field-label">${esc(label)}</span>
-      <input data-ab="${esc(key)}" ${attrs} value="${esc(abNum(key))}">
-      ${note ? `<small>${esc(note)}</small>` : ""}
-    </label>`;
+  /* 一行一个参数：左边名字（下面挂一行说明），右边控件。跟首页「运行状态」
+   * 卡里的标签 / 值对齐是同一套，不再「卡里再分块、块里再两列」。 */
+  const srow = (label, note, ctl) => `<div class="sif-row">
+      <span class="sif-k"><b>${esc(label)}</b>${note ? `<em>${esc(note)}</em>` : ""}</span>
+      <span class="sif-v">${ctl}</span>
+    </div>`;
+  const abInput = (key, attrs) =>
+    `<input data-ab="${esc(key)}" ${attrs} value="${esc(abNum(key))}">`;
+  const sw = (attr, on) => `<label class="toggle">
+      <input type="checkbox" ${attr}${on ? " checked" : ""}>
+      <span class="sw" aria-hidden="true"></span></label>`;
   const abCalib = kbCfg && kbCfg.calibrated_keys
     ? (kbCfg.calibrated_keys || []).includes(abKeys.refuseScore) : false;
   const answerPanel = `
-    <div class="ab-grid">
-      <div class="ab-block">
-        <div class="ab-blk-title">拒答<span>资料不够硬时说实话，而不是编</span></div>
-        <div class="ab-row">
-          <label class="toggle" style="justify-self:start">
-            <input type="checkbox" data-ab="${abKeys.refuseOn}"${abVals[abKeys.refuseOn] !== false ? " checked" : ""}>
-            <span class="sw" aria-hidden="true"></span>
-            <span class="toggle-label">启用拒答</span></label>
-          ${abField("分数阈值", abKeys.refuseScore,
-            'type="number" min="0" max="1" step="0.005"',
-            abCalib ? "已被标定覆盖，手改会覆盖标定值" : "")}
-        </div>
-        <div class="ab-row">
-          ${abField("区分度阈值", abKeys.refuseMargin,
-            'type="number" min="0" max="0.5" step="0.005"')}
-          ${abField("低置信提醒", abKeys.refuseSoft,
-            'type="number" min="0" max="0.5" step="0.005"')}
-        </div>
-      </div>
-      <div class="ab-block">
-        <div class="ab-blk-title">生成与会话<span>控制答案的随机性，和多轮能带多少历史</span></div>
-        <div class="ab-row">
-          ${abField("生成温度", abKeys.temp,
-            'type="number" min="0" max="2" step="0.05"', "越高越发散，引用编号越易漂")}
-          ${abField("历史轮数", abKeys.turns,
-            'type="number" min="0" max="20" step="1"')}
-          ${abField("历史预算", abKeys.budget,
-            'type="number" min="0" max="8000" step="100"', "字符 / token 上限")}
-        </div>
-      </div>
+    <div class="sif-flat">
+      ${srow("启用拒答", "资料不够硬时说实话，而不是编",
+        sw(`data-ab="${abKeys.refuseOn}"`, abVals[abKeys.refuseOn] !== false))}
+      ${srow("分数阈值", abCalib ? "已被标定覆盖，手改会覆盖标定值" : "",
+        abInput(abKeys.refuseScore, 'type="number" min="0" max="1" step="0.005"'))}
+      ${srow("区分度阈值", "低于它就算分不开，宁可不答",
+        abInput(abKeys.refuseMargin, 'type="number" min="0" max="0.5" step="0.005"'))}
+      ${srow("低置信提醒", "命中这个区间只在答案上挂提示",
+        abInput(abKeys.refuseSoft, 'type="number" min="0" max="0.5" step="0.005"'))}
+      ${srow("生成温度", "越高越发散，引用编号越易漂",
+        abInput(abKeys.temp, 'type="number" min="0" max="2" step="0.05"'))}
+      ${srow("历史轮数", "多轮对话带几轮上文",
+        abInput(abKeys.turns, 'type="number" min="0" max="20" step="1"'))}
+      ${srow("历史预算", "字符 / token 上限",
+        abInput(abKeys.budget, 'type="number" min="0" max="8000" step="100"'))}
     </div>`;
 
   /* ---------- 页 3：站点设置 ---------- */
@@ -6742,44 +6728,28 @@ function siteInlinePanels(i, meta, plan, defProv, pv, kbCfg) {
    * （或反过来），下次重启又翻回旧值，谁也不知道以哪个为准。这类部署时定一次
    * 的东西只留配置文件一个落点（instcfg 每次请求现读，改完不用重启）。
    */
-  /* 运行三项并排成三张小卡：这三件事互不相干，摊成一张三行表会显得比
-   * 模型表还重；拆开之后一眼三格，谁在哪一格里改一目了然。 */
-  const runCard = (k, ctl, note) => `<div class="run-card">
-      <span class="run-k">${esc(k)}</span>${ctl}<span class="run-note">${esc(note)}</span></div>`;
+  /* 运行三项也走同一套行：左边名字 + 说明，右边控件。之前并排三张小卡，
+     和另外两段的"清单"不是一个东西，摆在一起就显出自造语言。 */
   const sitePanel = `
-    <div class="run-cards">
-      ${runCard("端口", `<input data-f="port" type="number" min="${lo}" max="${hi}" value="${i.port}">`,
-        "改这里会重启站点")}
-      ${runCard("监听", `<div class="run-sw">${toggle("public", i.public, "局域网可访问")}</div>`,
-        "只监听回环时外部访问不到")}
-      ${runCard("开机", `<div class="run-sw">${toggle("autostart", i.autostart, "后台自动拉起")}</div>`,
-        "关掉后每次都要手动启动")}
+    <div class="sif-flat">
+      ${srow("端口", "改这里会重启站点",
+        `<input data-f="port" type="number" min="${lo}" max="${hi}" value="${i.port}">`)}
+      ${srow("监听", "只监听回环时外部访问不到", sw('data-f="public"', i.public))}
+      ${srow("开机", "关掉后每次都要手动启动", sw('data-f="autostart"', i.autostart))}
     </div>`;
 
-  /* 三段常驻，没有页签、没有 hidden：滚动就能看全，保存一次全量提交。
-   * 段头在左、内容在右：编号 → 标题 → 一句定位 → 一段说明，说明不进内容区，
-   * 免得每段内容都被一段灰字顶着。 */
-  const section = (num, key, title, sub, desc, body) =>
+  /* 段头就是全站通用的 .sec-head（h3 + hint），和模型页「本地模型 / 外部模型」
+     一个字不差；不再有 01/02/03 大方块、左说明栏这些只有这一页才有的东西。 */
+  const section = (key, title, sub, body) =>
     `<section class="sif-sec" data-sif="${key}">
-      <div class="sif-head">
-        <span class="sif-n">${num}</span>
-        <b class="sif-title">${esc(title)}</b>
-        <span class="sif-sub">${esc(sub)}</span>
-        <p class="sif-desc">${esc(desc)}</p>
-      </div>
+      <header class="sec-head"><h3>${esc(title)}</h3><span class="hint">${esc(sub)}</span><span class="sp"></span></header>
       <div class="sif-body">${body}</div>
     </section>`;
 
   return `
-    ${section("01", "entries", "入口与模型", "每个入口的翻译 / 推理模型",
-      "下拉只列「模型服务」里已加入的模型；留空继承站点默认。",
-      entryPanel)}
-    ${section("02", "answer", "回答行为", "拒答、生成温度、会话历史",
-      "按本站检索库保存，前台与调试对话共用；改完即时生效。",
-      answerPanel)}
-    ${section("03", "site", "运行设置", "端口、监听、开机",
-      "语言与产出方式不在这页改，直接改 config/instances.yaml。",
-      sitePanel)}`;
+    ${section("entries", "入口与模型", "每个入口的翻译 / 推理模型", entryPanel)}
+    ${section("answer", "回答行为", "拒答、生成温度、会话历史", answerPanel)}
+    ${section("site", "运行设置", "端口、监听、开机；语言与产出方式改 config/instances.yaml", sitePanel)}`;
 }
 
 /* 站点配置即时保存：回答行为七项写进站点主库（kb.config_json），其余写

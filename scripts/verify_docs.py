@@ -318,7 +318,7 @@ for token, why in (
     ("i.ug_capable === false && i.ug_note", "正常态自检不渲染"),
     ("function bindSiteInlineEvents", "内联交互事件委托"),
     ("const answerPanel", "站点回答行为配置区"),
-    ('abField("分数阈值", abKeys.refuseScore', "拒答阈值写回主库"),
+    ('abInput(abKeys.refuseScore', "拒答阈值写回主库"),
     ('data-ab="${esc(key)}"', "回答参数统一用 data-ab 标记"),
     ("function loadSiteKbConfigs", "按站点主库加载回答参数"),
     ('PATCH", `/api/kb/${kbId}/config`', "回答行为写回 kb.config_json"),
@@ -334,8 +334,8 @@ for token, why in (
 # sec_*_enabled 就会把关掉的入口回落成全开、把自定义名字清成空串。
 admin_css = (STATIC / "api/static/style.css").read_text(encoding="utf-8")
 for token, why in (
-    ('.app[data-view="site"] .ab-row .field > .field-label', "回答参数标签覆盖"),
-    ('.app[data-view="site"] td.et-name', "入口名与徽章同一行（td 选择器要压过 display:block）"),
+    ('.app[data-view="site"] .sif-k b', "行标签（不走 .field-label，1500px 以下不会被藏）"),
+    ('.app[data-view="site"] td.et-name', "入口名单元格"),
     ('.app[data-view="site"] .et-table tbody tr {', "入口行网格布局"),
     ('.app[data-view="site"] .sif-save-msg.ok', "即时保存成功态"),
     ('.et-keep[hidden]', "隐藏保活区不可见"),
@@ -343,20 +343,29 @@ for token, why in (
 ):
     if token not in admin_css:
         errors.append(f"[ui] style.css 缺少{why}：{token}")
-# 0.9.113 版式：左说明栏 + 右内容区。表头与表体共用 --s-et-cols 这一组列宽，
-# 不再各写一遍（写两遍就会重演 0.9.111 的对不齐）。
+# 0.9.114 起站点页回到全站那套：段头复用 .sec-head，内容是一块平铺清单。
+# 表头与表体共用 --s-et-cols 这一组列宽（写两遍就会重演 0.9.111 的对不齐）。
 for token, why in (
-    ("--s-panel:", "站点内容面板统一底色"),
-    ("--s-panel-bd:", "站点内容面板统一边框"),
-    ("--s-ctl-h:", "站点控件统一高度"),
     ("--s-et-cols:", "入口表列宽变量"),
-    ('.app[data-view="site"] .sif-desc {', "段说明落位"),
-    ("grid-template-columns: var(--s-rail) minmax(0, 1fr)", "段级左说明栏 + 右内容区"),
+    ("--s-row:", "站点控件高度变量"),
+    ('.app[data-view="site"] .sif-flat,', "02/03 平铺清单底"),
+    ('.app[data-view="site"] .sif-sec > .sec-head', "段头复用全站 .sec-head"),
 ):
     if token not in admin_css:
         errors.append(f"[ui] style.css 缺少{why}：{token}")
 if admin_css.count("grid-template-columns: var(--s-et-cols)") != 2:
     errors.append("[ui] 入口表表头与表体必须共用 --s-et-cols（各 1 处，共 2 处）")
+# 自造的那套（左说明栏 / 大字序号 / 入口徽章 / 三张小卡 / 两块分组）不许回来。
+for gone, why in (
+    ("--s-rail:", "左说明栏宽度"),
+    (".sif-n {", "大字段序号"),
+    ('class="et-av"', "入口徽章"),
+    ('class="run-cards"', "运行三卡容器"),
+    ('class="ab-grid"', "回答行为分组面板"),
+    ('class="sif-desc"', "段说明段落"),
+):
+    if gone in admin_css or gone in admin_js:
+        errors.append(f"[ui] 不该再有{why}（站点页要跟其他页同一套）：{gone}")
 for gone, why in (
     ("250px repeat(3", "旧四列表头列宽"),
     ("230px repeat(2", "旧硬编码三列列宽"),
@@ -368,12 +377,13 @@ for gone, why in (
 # 段说明只在 sif-head 里出现一次：内容区顶上不再压一段引导语。
 if admin_js.count('class="scfg-lead') != 0:
     errors.append(f"[ui] 站点页不应再有内容区引导语 scfg-lead，实为 {admin_js.count('class=\"scfg-lead')} 条")
-if admin_js.count('class="sif-desc"') != 1:
-    errors.append("[ui] 段说明应由 section() 统一渲染（模板 1 处）")
+# 段头必须是全站通用的 .sec-head：h3 + hint，不再有这一页独有的标题结构。
+if '<header class="sec-head"><h3>' not in admin_js:
+    errors.append("[ui] 站点页段头应由 section() 统一渲染成 .sec-head（h3 + hint）")
 for token, why in (
-    ('class="et-av"', "入口行首徽章"),
-    ('class="run-cards"', "运行设置三卡容器"),
-    ('class="ab-grid"', "回答行为分组面板"),
+    ('class="sif-flat"', "平铺清单容器"),
+    ('class="sif-row"', "一行设置"),
+    ('class="et-name"', "入口名单元格"),
 ):
     if token not in admin_js:
         errors.append(f"[ui] app.js 缺少{why}：{token}")
