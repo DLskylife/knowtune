@@ -3515,6 +3515,24 @@ details.sbk-note-line[open] > summary::before { transform: rotate(90deg); }
   outline: none; border-color: rgba(91, 140, 255, .6);
   box-shadow: 0 0 0 2px rgba(91, 140, 255, .12);
 }
+/* 这个模块没单独设过的参数就是空值——空框和"渲染坏了"长得一样，给一句灰字
+   说清它跟随默认。数字框是右对齐的，占位也右对齐才不跳。 */
+.app[data-view="site"] .sif-v input::placeholder {
+  color: #4d5766; font-size: 11px; letter-spacing: 0;
+}
+
+/* 这一页的开关不带文字标签，全局 .toggle 的那圈控件边框在这里就只剩装饰：
+   选中时它还整块染成淡蓝，看着像"开关外面又套了一个框"（截图里最显眼的
+   那处）。只留开关本体，四周透明 padding 保住点击面积，高度对齐右边输入框。 */
+.app[data-view="site"] .sif-v .toggle {
+  height: var(--s-row); padding: 0 6px;
+  border: 0; background: transparent;
+}
+.app[data-view="site"] .sif-v .toggle:hover { border-color: transparent; }
+.app[data-view="site"] .sif-v .toggle:has(input:checked) { border-color: transparent; }
+.app[data-view="site"] .sif-v .sw { width: 34px; height: 19px; border-radius: 10px; }
+.app[data-view="site"] .sif-v .sw::after { width: 15px; height: 15px; }
+.app[data-view="site"] .sif-v .toggle input:checked ~ .sw::after { transform: translateX(15px); }
 
 /* ---------------- 01 入口与模型 ---------------- */
 .app[data-view="site"] .et-wrap { border: 0; background: transparent; overflow: visible; }

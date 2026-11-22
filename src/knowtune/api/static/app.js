@@ -1,6 +1,6 @@
 /* 构建号：与 index.html 里那份一致，不一致说明浏览器拿到的是旧 JS，
    页面加载完会强制换一次（见 index.html 的自检脚本）。 */
-window.ADMIN_BUILD = "0.9.115";
+window.ADMIN_BUILD = "0.9.116";
 
 const $ = (id) => document.getElementById(id);
 
@@ -6703,7 +6703,8 @@ function siteInlinePanels(i, meta, plan, defProv, pv, kbc) {
       <span class="sif-v">${ctl}</span>
     </div>`;
   const abInput = (vals, key, attrs) =>
-    `<input data-ab="${esc(key)}" ${attrs} value="${esc(valOf(vals, key))}">`;
+    `<input data-ab="${esc(key)}" ${attrs} value="${esc(valOf(vals, key))}"
+      placeholder="跟随默认">`;
   const sw = (attr, on) => `<label class="toggle">
       <input type="checkbox" ${attr}${on ? " checked" : ""}>
       <span class="sw" aria-hidden="true"></span></label>`;
@@ -6727,7 +6728,7 @@ function siteInlinePanels(i, meta, plan, defProv, pv, kbc) {
   const answerRows = (vals, calib) => `
       ${srow("启用拒答", "资料不够硬时说实话，而不是编",
         sw(`data-ab="${abKeys.refuseOn}"`, vals[abKeys.refuseOn] !== false))}
-      ${srow("分数阈值", calib ? "已被标定覆盖，手改会覆盖标定值" : "",
+      ${srow("分数阈值", calib ? "已被标定覆盖，手改会覆盖标定值" : "低于它判为资料不够硬",
         abInput(vals, abKeys.refuseScore, 'type="number" min="0" max="1" step="0.005"'))}
       ${srow("区分度阈值", "低于它就算分不开，宁可不答",
         abInput(vals, abKeys.refuseMargin, 'type="number" min="0" max="0.5" step="0.005"'))}
@@ -6746,10 +6747,10 @@ function siteInlinePanels(i, meta, plan, defProv, pv, kbc) {
   const pvRows = `
       ${srow("生成温度", "脚本化追问，温度高容易跑题",
         `<input data-ab="temperature" type="number" min="0" max="2" step="0.05"
-          value="${esc(valOf(pvCfgVals, "temperature"))}">`)}
+          value="${esc(valOf(pvCfgVals, "temperature"))}" placeholder="跟随默认">`)}
       ${srow("单次上限", "一次回复的 token 上限，超出会被截断",
         `<input data-ab="max_tokens" type="number" min="64" max="4096" step="32"
-          value="${esc(valOf(pvCfgVals, "max_tokens"))}">`)}`;
+          value="${esc(valOf(pvCfgVals, "max_tokens"))}" placeholder="跟随默认">`)}`;
 
   const abPanel = (panel, src, note, body) => `<div class="sif-flat ab-panel"
       data-abpanel="${panel}" data-absrc="${esc(src)}"${panel === "med" ? "" : " hidden"}>

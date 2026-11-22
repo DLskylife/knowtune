@@ -362,11 +362,21 @@ for token, why in (
     ('.app[data-view="site"] .ab-tabs', "回答行为分模块页签"),
     ('.app[data-view="site"] .ab-panel[hidden]', "未选中的模块面板要真的不显示"),
     ('.app[data-view="site"] .sif-note', "模块面板顶上那句落点说明"),
+    ('.app[data-view="site"] .sif-v .toggle {', "开关在本页只留开关本体（去掉全局那圈控件框）"),
+    ('.app[data-view="site"] .sif-v input::placeholder', "空值占位样式"),
 ):
     if token not in admin_css:
         errors.append(f"[ui] style.css 缺少{why}：{token}")
 if admin_css.count("grid-template-columns: var(--s-et-cols)") != 2:
     errors.append("[ui] 入口表表头与表体必须共用 --s-et-cols（各 1 处，共 2 处）")
+# 每行参数都必须带一句说明（0.9.116）：分数阈值在未标定时曾经是空串，
+# 那一行比邻行矮 8px，看着像这块没渲染完。
+for token, why in (
+    ("低于它判为资料不够硬", "分数阈值未标定时的说明"),
+    ('placeholder="跟随默认"', "空值输入框的占位（空框和坏了长得一样）"),
+):
+    if token not in admin_js:
+        errors.append(f"[ui] app.js 缺少{why}：{token}")
 # 自造的那套（左说明栏 / 大字序号 / 入口徽章 / 三张小卡 / 两块分组）不许回来。
 for gone, why in (
     ("--s-rail:", "左说明栏宽度"),
