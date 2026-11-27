@@ -28,6 +28,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
+from .. import answer_localize as answer_localize_mod
 from .. import chatctx
 from .. import lang as lang_mod
 from .. import logbus
@@ -977,6 +978,18 @@ def build_site(spec, state: Any) -> FastAPI:
             headers={"Cache-Control": "no-cache", "X-Trace-Id": trace_id,
                      "X-Accel-Buffering": "no"},
         )
+
+    @app.post("/api/answer/localize")
+    async def answer_localize(req: Request) -> JSONResponse:
+        """切语言时给问答答案补译维语版本。同一句话换文本，不重问模型。"""
+        try:
+            body = await req.json()
+        except Exception:
+            raise HTTPException(400, "请求体不是合法 JSON")
+        texts = body.get("texts") if isinstance(body, dict) else None
+        if not isinstance(texts, list):
+            raise HTTPException(400, "texts 必须是数组")
+        return JSONResponse(answer_localize_mod.localize_texts(texts))
 
     @app.post("/api/feedback")
     def feedback(req: SiteFeedback) -> dict:

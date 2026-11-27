@@ -22,7 +22,7 @@
 
 /* 构建号：和 index.html 里那份必须一致，不一致说明浏览器拿的是旧 JS，
    页面加载完会强制换一次（见 index.html 里的自检脚本）。 */
-window.SITE_BUILD = "1.7.44";
+window.SITE_BUILD = "1.7.45";
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
@@ -573,6 +573,8 @@ function renderChat() {
   follow = true;
   syncToBottom();
   if (empty) $("chat").scrollTop = 0;
+  // 维语界面下打开一份中文生成的会话，补译随即补上（已有维语版本时是空转）。
+  askLocalize();
 }
 
 /* ------------------------------------------------------------ 启动 */
@@ -1235,7 +1237,11 @@ function paintAnswer(bot, el) {
   const draft = bot.dataset.draft || "";
   const useAlt = altMode && draft;
   el.classList.toggle("alt", !!useAlt);
-  el.innerHTML = renderRich(useAlt ? draft : (bot.dataset.main || ""));
+  // 维语界面优先显示补译版本（dataset.ug）：中文界面问出来的那条原本只有
+  // 中文原稿，补译后同一句话在这里换文本，不是让模型重答一遍。
+  // 没有补译时照旧走原文——维语原稿、或还没译到的中文（下面挂语种戳）。
+  const main = bot.dataset.ug || bot.dataset.main || "";
+  el.innerHTML = renderRich(useAlt ? draft : main);
   bindCites(el);
   // 证据徽标也是文案，跟着一起换
   const badge = bot.querySelector(".ev-badge");
@@ -1259,6 +1265,8 @@ function decorateBot(bot, el, rec) {
   // 不再直接挂在 bot 上——否则它们会被 flex 排到头像旁边。
   const host = el.parentElement || bot;
   if (rec.d) bot.dataset.draft = rec.d;
+  // 同一句话的维语版本（切到维语时补译，存回本地会话）
+  if (rec.ug) bot.dataset.ug = rec.ug;
   if (rec.ev) bot.dataset.ev = rec.ev;
 
   if (!rec.a) {
@@ -1440,12 +1448,16 @@ function relabelBot(bot) {
     took.textContent = secs >= 1 ? t.took(secs.toFixed(1)) : "";
   }
 
-  // 语言标记：切换界面语言后，旧答案不会跟着变（那是历史内容，不该被改写），
-  // 所以要在底下重新标明"它是什么语言"，并且随当前界面语言换措辞。
+  // 语言标记：只在**这条确实没有当前语言版本**时才挂。
+  // 有补译（rec.ug）或中文原稿（rec.d）就说明同一句话已经能双边显示，
+  // 挂着"中文作答"反而是在说谎——和预问诊那边的标记规则逐字对齐。
   const foot = bot.querySelector(".foot");
   if (foot && rec) {
     let tag = foot.querySelector(".alang");
-    const need = rec.al && rec.al !== uiLang;
+    const have = uiLang === "zh"
+      ? (rec.al === "zh" || !!rec.d)
+      : (rec.al === "ug" || !!rec.ug);
+    const need = rec.al && rec.al !== uiLang && !have;
     if (need) {
       if (!tag) {
         tag = document.createElement("span");
@@ -2026,6 +2038,61 @@ function renderLangSwitch() {
     + `${esc(LANG_NAME[code] || code)}</button>`).join("");
 }
 
+/* 切到维语时，把当前会话里"中文生成、没有维语版本"的答案补译一遍。
+   和预问诊 pvLocalize() 是同一件事：同一句话换文本，不重问模型。
+   译文写回本地会话（rec.ug），同一条只翻一次；失败的那条留原文 + 语种戳。 */
+let localizeSeq = 0;
+async function askLocalize() {
+  if (uiLang !== "ug") return;
+  const chat = currentChat();
+  if (!chat) return;
+  // 问答记录一轮一条 {q, a, al, ...}，没有 role 字段——别按 bot 过滤，
+  // 那会把所有记录滤掉，补译看着"成功"其实一次都没发。
+  const todo = chat.msgs.filter((m) =>
+    m.a && m.al === "zh" && !m.ug && !m.ugFail);
+  if (!todo.length) return;
+  const seq = ++localizeSeq;
+  const tip = $("toolChip");
+  const oldTip = tip ? tip.textContent : "";
+  if (tip) tip.textContent = t.translating;
+  try {
+    const res = await fetch("/api/answer/localize", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ texts: todo.map((m) => m.a) }),
+    });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const d = await res.json();
+    if (seq !== localizeSeq || uiLang !== "ug") return;   // 又切走了：丢弃这次结果
+    todo.forEach((m, i) => {
+      const text = d.translations && d.translations[i];
+      if (text) m.ug = text;
+      else m.ugFail = true;
+    });
+    saveChats();
+    repaintBots();
+  } catch (err) {
+    console.warn("[answer] localize", err);
+    todo.forEach((m) => { m.ugFail = true; });
+  } finally {
+    if (tip && seq === localizeSeq) tip.textContent = oldTip;
+  }
+}
+
+/* 按当前语言重画所有已完成的答案（切语言、补译回来都走这一条） */
+function repaintBots() {
+  document.querySelectorAll("#msgs .msg.bot").forEach((bot) => {
+    // bot._rec 就是会话记录里的那个对象：补译写回 m.ug 后这里必须同步到
+    // dataset，否则 paintAnswer 还是拿旧 main 画，用户看到"译好了却没换"。
+    if (bot._rec && bot._rec.ug) bot.dataset.ug = bot._rec.ug;
+    const el = bot.querySelector(".answer");
+    if (el && !el.classList.contains("err")) {
+      paintAnswer(bot, el);
+      relabelBot(bot);
+    }
+  });
+}
+
 function setLangMode(on) {
   if (on === altMode) return;
   altMode = on;
@@ -2036,12 +2103,10 @@ function setLangMode(on) {
   applyChrome();          // 内含 renderLangSwitch：高亮跟着走
   // 按 DOM 重画所有回答（含侧栏里点开的历史）。渲染只看 altMode，
   // 所以流式没结束时后续 delta 也不会把已切过来的原稿冲掉。
-  document.querySelectorAll("#msgs .msg.bot").forEach((bot) => {
-    const el = bot.querySelector(".answer");
-    if (el && !el.classList.contains("err")) paintAnswer(bot, el);
-    relabelBot(bot);
-  });
+  repaintBots();
   renderSessions();
+  // 切到维语：缺维语版本的中文答案原地补译（同一句话，不重问模型）。
+  askLocalize();
   // 预问诊气泡也按新语言重挑一份文本重画。**不重开会话、不清空、不重发请求**
   // ——和上面那个答案区的循环是同一件事。以前这里是"换语言就 pv.gen++ 重开
   // 一场"，那等于给预问诊单开一套语言系统：界面切个语言，患者的病史全没了。

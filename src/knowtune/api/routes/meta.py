@@ -275,6 +275,17 @@ def system_resources() -> dict:
     return data
 
 
+class AnswerLocalizeIn(BaseModel):
+    texts: list[str] = Field(default_factory=list)
+
+
+@router.post("/api/answer/localize")
+def answer_localize(req: AnswerLocalizeIn) -> dict:
+    """问答板块的中文答案补译成维语。实现与前台站点共用 `answer_localize`。"""
+    from ...answer_localize import localize_texts
+    return localize_texts(req.texts)
+
+
 @router.get("/api/settings")
 def get_settings() -> dict:
     return settings_mod.snapshot(state.cfg)
