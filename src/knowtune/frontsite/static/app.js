@@ -22,7 +22,7 @@
 
 /* 构建号：和 index.html 里那份必须一致，不一致说明浏览器拿的是旧 JS，
    页面加载完会强制换一次（见 index.html 里的自检脚本）。 */
-window.SITE_BUILD = "1.7.50";
+window.SITE_BUILD = "1.7.52";
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
@@ -340,6 +340,9 @@ function saveChats() {
       // c: 这条对话属于哪一栏（med / classic）。老存档没有这个字段，
       // 读的时候按 med 处理——它们确实都是维医问答时代留下的。
       id: c.id, title: c.title, at: c.at, c: c.c || "med",
+      // 会话级译文必须一起存：消息用 {...m} 全保留，曾经漏掉这两格，
+      // 结果标题当场翻成维语、一刷新就退回中文。
+      tu: c.tu || "", tzh: c.tzh || "",
       msgs: c.msgs.map((m) => ({ ...m, a: String(m.a || "").slice(0, MAX_ANSWER) })),
     }));
     localStorage.setItem(CHAT_KEY, JSON.stringify(slim));
@@ -471,7 +474,7 @@ let delTimer = null;
 
 function sessRow(c) {
   const on = c.id === sessionId ? " on" : "";
-  const label = esc(c.title || t.newChat);
+  const label = esc(titleText(c) || t.newChat);
   return `<div class="sess-row${on}" data-id="${esc(c.id)}">`
     + `<button type="button" class="sess" data-id="${esc(c.id)}" dir="auto">${label}</button>`
     + `<button type="button" class="sess-del" data-del="${esc(c.id)}" tabindex="-1"`
@@ -563,9 +566,11 @@ function renderChat() {
     const u = document.createElement("div");
     u.className = "msg user";
     u.dir = "auto";
-    u.textContent = m.q;
+    u.textContent = questionText(m);
+    u._rec = m;                       // 补译回来靠它重画这一条
     box.appendChild(u);
     box.appendChild(botCard(m));
+    // 发给模型的历史永远用提问原文：切语言只换屏幕上的字，不改检索语义。
     history.push({ role: "user", content: m.q },
                  { role: "assistant", content: m.a || "" });
   });
@@ -578,6 +583,15 @@ function renderChat() {
   if (empty) $("chat").scrollTop = 0;
   // 维语界面下打开一份中文生成的会话，补译随即补上（已有维语版本时是空转）。
   askLocalize();
+}
+
+/* 切语言 / 补译回来时重画用户气泡。正文由 repaintBots 管，气泡走这里：
+   两条都是"同一句话换文本"，但 DOM 结构不同，硬塞一个循环里只会漏一处。 */
+function repaintUsers() {
+  document.querySelectorAll("#msgs .msg.user").forEach((u) => {
+    const rec = u._rec;
+    if (rec) u.textContent = questionText(rec);
+  });
 }
 
 /* ------------------------------------------------------------ 启动 */
@@ -2061,6 +2075,24 @@ function saysChinese(text) {
   const uy = (s.match(/[\u0600-\u06ff]/g) || []).length;
   return han > 20 && han > uy * 2;
 }
+/* 短文本（"肚子疼"才三个字）不能用 saysChinese 的 20 字门槛：
+   问题气泡和历史标题都是短句，只要有维语字母、且比汉字多，就算已是维语。 */
+function saysUyghur(text) {
+  const s = String(text || "");
+  const han = (s.match(/[\u3400-\u9fff]/g) || []).length;
+  const uy = (s.match(/[\u0600-\u06ff]/g) || []).length;
+  return uy > 0 && uy > han;
+}
+/* 用户问题与会话标题也要按界面语言挑文本，和答案走同一条约定：
+   同一句话换文本，不重问模型。中文提问补译出 qu / tu；维语提问时后端
+   会把检索用的中文词回传（qd.used），存成 qzh / tzh 给中文界面用。 */
+function questionText(m) {
+  return uiLang === "ug" ? (m.qu || m.q) : (m.qzh || m.q);
+}
+function titleText(c) {
+  const raw = c.title || "";
+  return uiLang === "ug" ? (c.tu || raw) : (c.tzh || raw);
+}
 
 /* 切到维语时，把当前会话里"中文生成、没有维语版本"的答案补译一遍。
    和预问诊 pvLocalize() 是同一件事：同一句话换文本，不重问模型。
@@ -2077,10 +2109,15 @@ function scheduleLocalizeRetry() {
     if (uiLang === "ug") askLocalize();
   }, 10000);
 }
+/* 切到维语时把「答案 + 用户问题 + 会话标题」一次打包补译。
+   以前答案和问题各发一个请求，实测两路并发撞上云端限流，答案等了 173 秒
+   还没出；合并后并发度回到翻译器自己的 4 路，稳定得多。 */
 async function askLocalize() {
   if (uiLang !== "ug" || localizeBusy) return;
   const chat = currentChat();
   if (!chat) return;
+  const retryable = (x, fail, at, tries) =>
+    !x[fail] || ((x[tries] || 0) < 3 && Date.now() - (x[at] || 0) >= 9000);
   // 问答记录一轮一条 {q, a, al, ...}，没有 role 字段——别按 bot 过滤，
   // 那会把所有记录滤掉，补译看着"成功"其实一次都没发。
   const todo = chat.msgs.filter((m) => {
@@ -2089,48 +2126,59 @@ async function askLocalize() {
     // 永远轮不到它——这正是「老会话里切维语还是一屏中文」的根因。
     if (m.al !== "zh" && saysChinese(m.a)) m.al = "zh";
     if (m.al !== "zh") return false;
-    // 失败过的给十秒冷却、最多三轮：既不让每次渲染都发一轮请求，
-    // 也不让一次云端抖动把这条答案永久钉在中文上。
-    if (m.ugFail) {
-      if ((m.ugTry || 0) >= 3) return false;
-      if (Date.now() - (m.ugFailAt || 0) < 10000) return false;
-    }
-    return true;
+    return retryable(m, "ugFail", "ugFailAt", "ugTry");
   });
-  if (!todo.length) return;
+  // 问题气泡和侧栏标题是短句，不能用答案那套 20 字门槛。
+  const qt = chat.msgs.filter((m) => m.q && !m.qu && !saysUyghur(m.q)
+    && retryable(m, "quFail", "quFailAt", "quTry"));
+  const ct = chats.filter((c) => (c.c || "med") === view && c.title && !c.tu
+    && !saysUyghur(c.title) && retryable(c, "tuFail", "tuFailAt", "tuTry"));
+  if (!todo.length && !qt.length && !ct.length) return;
   localizeBusy = true;
   todo.forEach((m) => { m.ugTry = (m.ugTry || 0) + 1; });
+  qt.forEach((m) => { m.quTry = (m.quTry || 0) + 1; });
+  ct.forEach((c) => { c.tuTry = (c.tuTry || 0) + 1; });
   const seq = ++localizeSeq;
+  const texts = [...todo.map((m) => m.a), ...qt.map((m) => m.q), ...ct.map((c) => c.title)];
   const tip = $("toolChip");
   const oldTip = tip ? tip.textContent : "";
   if (tip) tip.textContent = t.translating;
   try {
     const res = await fetch("/api/answer/localize", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ texts: todo.map((m) => m.a) }),
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ texts }),
     });
     if (!res.ok) throw new Error("HTTP " + res.status);
     const d = await res.json();
     if (seq !== localizeSeq || uiLang !== "ug") return;   // 又切走了：丢弃这次结果
+    const at = (i) => d.translations && d.translations[i];
     todo.forEach((m, i) => {
-      const text = d.translations && d.translations[i];
-      if (text) {
-        m.ug = text;
-        m.ugFail = false;
-        m.ugFailAt = 0;
-        m.ugTry = 0;
-      } else {
-        m.ugFail = true;
-        m.ugFailAt = Date.now();
-      }
+      const text = at(i);
+      if (text) { m.ug = text; m.ugFail = false; m.ugFailAt = 0; m.ugTry = 0; }
+      else { m.ugFail = true; m.ugFailAt = Date.now(); }
+    });
+    qt.forEach((m, i) => {
+      const text = at(todo.length + i);
+      if (text) { m.qu = text; m.quFail = false; m.quFailAt = 0; m.quTry = 0; }
+      else { m.quFail = true; m.quFailAt = Date.now(); }
+    });
+    ct.forEach((c, i) => {
+      const text = at(todo.length + qt.length + i);
+      if (text) { c.tu = text; c.tuFail = false; c.tuFailAt = 0; c.tuTry = 0; }
+      else { c.tuFail = true; c.tuFailAt = Date.now(); }
     });
     saveChats();
     repaintBots();
-    if (todo.some((m) => m.ugFail)) scheduleLocalizeRetry();
+    repaintUsers();
+    renderSessions();
+    const failed = todo.some((m) => m.ugFail) || qt.some((m) => m.quFail)
+      || ct.some((c) => c.tuFail);
+    if (failed) scheduleLocalizeRetry();
   } catch (err) {
     console.warn("[answer] localize", err);
     todo.forEach((m) => { m.ugFail = true; m.ugFailAt = Date.now(); });
+    qt.forEach((m) => { m.quFail = true; m.quFailAt = Date.now(); });
+    ct.forEach((c) => { c.tuFail = true; c.tuFailAt = Date.now(); });
     scheduleLocalizeRetry();
   } finally {
     localizeBusy = false;
@@ -2163,8 +2211,9 @@ function setLangMode(on) {
   // 按 DOM 重画所有回答（含侧栏里点开的历史）。渲染只看 altMode，
   // 所以流式没结束时后续 delta 也不会把已切过来的原稿冲掉。
   repaintBots();
+  repaintUsers();
   renderSessions();
-  // 切到维语：缺维语版本的中文答案原地补译（同一句话，不重问模型）。
+  // 切到维语：缺维语版本的中文答案 / 问题 / 标题原地补译（同一句话换文本）。
   askLocalize();
   // 预问诊气泡也按新语言重挑一份文本重画。**不重开会话、不清空、不重发请求**
   // ——和上面那个答案区的循环是同一件事。以前这里是"换语言就 pv.gen++ 重开
@@ -2430,6 +2479,9 @@ async function send() {
           + ` <bdi dir="ltr" class="q-zh">${esc(qd.used || "")}</bdi>`;
         showStatus(t.translated);
         bot.dataset.q = qd.used;
+        // 维语提问的中文检索词也留一份：切到中文界面时用它显示问题，
+        // 同一句话换文本，检索仍按原文走。
+        bot.dataset.qzh = qd.used || "";
       } else if (qd.src && qd.dst && qd.src !== qd.dst) {
         // 该翻却没翻：模型报错、译文被判废、或两次都被判废。以前这里什么
         // 都不写，用户只看到"答案答非所问"，完全不知道检索用的是维语原文。
@@ -2505,6 +2557,8 @@ async function send() {
       metaEl.remove();
       const rec = {
         q,
+        // 维语提问时后端回传的中文检索词；中文界面用它显示同一个问题。
+        qzh: bot.dataset.qzh || "",
         a: acc,
         d: d.draft || bot.dataset.draft || "",
         ev: d.evidence || "",
@@ -2528,10 +2582,12 @@ async function send() {
       decorateBot(bot, answerEl, rec);
       if (acc.trim()) {
         chat.msgs.push(rec);
+        user._rec = rec;              // 补译 / 切语言后重画这一条问题气泡
+        if (rec.qzh && chat.title && !chat.tzh) chat.tzh = rec.qzh;
         saveChats();
         renderSessions();
-        // 正文确实是中文的这条，维语界面下当场交给补译链，不必等切语言。
-        if (trBad) askLocalize();
+        // 维语界面下当场补译（答案 + 问题 + 标题一并走），不必等切语言。
+        askLocalize();
         history.push({ role: "user", content: q },
                      { role: "assistant", content: acc });
       }
