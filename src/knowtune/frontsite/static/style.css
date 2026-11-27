@@ -13,18 +13,18 @@
    ── 字号基线 ──
    11.5px 是全局下限，只留给引用编号；说明文字 12–13px；正文与输入框 16px。
    输入框那 16px 不是审美：小于 16 时 iOS Safari 聚焦会自动放大整页。
-   维吾尔语整体 +1.5～2px（阿拉伯字母字面小、有附加符），规则集中在文件末尾。
+   维吾尔语整体 +2～3px（阿拉伯字母字面小、有附加符），规则集中在文件末尾。
 */
 
 :root {
   /* 中性色：白底 + 浅灰侧栏。参考界面的"干净"来自低对比，不是来自留白本身 */
   --bg: #ffffff;
-  --side: #f9f9f9;
+  --side: #f7faf8;
   --surface: #ffffff;
-  --surface-2: #f5f6f7;
-  --surface-3: #eef0f2;
-  --line: #e8eaec;
-  --line-soft: #f0f1f3;
+  --surface-2: #f3f7f4;
+  --surface-3: #ebf1ed;
+  --line: #e3ebe5;
+  --line-soft: #edf2ee;
   --ink: #1b1c1f;
   --ink-2: #565c66;
   --ink-3: #9aa0aa;
@@ -32,10 +32,10 @@
 
   /* 强调色只用在"可以点"和"有依据"两件事上：发送键、选中态、引用牌。
      大面积色块会让答案看起来像广告，说教感也会跟着上来。 */
-  --acc: #4d6bfe;
-  --acc-2: #3a56e0;
-  --acc-soft: #eef2ff;
-  --acc-line: rgba(77, 107, 254, .22);
+  --acc: #16855b;
+  --acc-2: #0f6c49;
+  --acc-soft: #eaf6f0;
+  --acc-line: rgba(22, 133, 91, .22);
 
   --warn: #d34a3f;
   --warn-soft: rgba(211, 74, 63, .08);
@@ -68,22 +68,22 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #212327;
-    --side: #191a1c;
-    --surface: #2a2c31;
-    --surface-2: #303237;
-    --surface-3: #383b41;
-    --line: #35373c;
-    --line-soft: #2d2f34;
+    --bg: #1f2421;
+    --side: #171c19;
+    --surface: #272e29;
+    --surface-2: #2c3530;
+    --surface-3: #333d37;
+    --line: #313a34;
+    --line-soft: #29322c;
     --ink: #e9ebef;
     --ink-2: #b3b8c1;
     --ink-3: #80858f;
     --ink-4: #6a6f78;
 
-    --acc: #8ba0ff;
-    --acc-2: #a4b4ff;
-    --acc-soft: rgba(120, 145, 255, .16);
-    --acc-line: rgba(139, 160, 255, .28);
+    --acc: #5fd0a0;
+    --acc-2: #82dfb6;
+    --acc-soft: rgba(95, 208, 160, .16);
+    --acc-line: rgba(95, 208, 160, .28);
 
     --warn: #f08a7e;
     --warn-soft: rgba(240, 138, 126, .12);
@@ -160,7 +160,7 @@ body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
   position: relative; width: 28px; height: 28px; flex: none;
   border-radius: 8px;
   background: var(--acc);
-  box-shadow: 0 1px 2px rgba(43, 63, 160, .25);
+  box-shadow: 0 1px 2px rgba(22, 133, 91, .25);
 }
 .brand-mark svg {
   position: absolute; inset: 6px; width: 16px; height: 16px;
@@ -851,38 +851,40 @@ body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
   font-family: var(--zh); font-size: 14px; letter-spacing: .02em;
 }
 
-/* ── 维吾尔语字号补偿（1.7.38）──
+/* ── 维吾尔语字号补偿（1.7.38，1.7.50 再放一档）──
    同样的 px，维吾尔文看着比汉字小一号：阿拉伯字母没有大写、上下伸展短，
-   字面在墨迹里占的比例也小。所以维语界面整体 +1.5～2px，行高放到 1.85——
+   字面在墨迹里占的比例也小。维语界面整体比中文大 2～3px，行高放到 1.85——
    维语有 ئ 这类带 hamza 的字头、还有 ۇ ۆ ۈ 这类带附加符的字母，行距紧了会顶行。
+   1.7.50 按用户反馈把**答案正文**从 17.5 提到 19px、小标题 18→20px，
+   输入框 17.5→18.5px：这是阅读量最大的三处，别的辅助文字只微提。
    只动字号与行高，不动任何布局尺寸：按钮高度、圆角、列宽、侧栏宽度全不变。 */
 html[lang="ug"] body { line-height: 1.85; }
-html[lang="ug"] .wel-text { font-size: 28px; line-height: 1.55; }
-html[lang="ug"] .wel-hint { font-size: 14px; }
-html[lang="ug"] .chip { font-size: 13.5px; }
-html[lang="ug"] #q { font-size: 17.5px; line-height: 1.85; }
-html[lang="ug"] .tool, html[lang="ug"] .kb-btn { font-size: 13px; }
-html[lang="ug"] .disclaimer { font-size: 12.5px; }
-html[lang="ug"] .nav-item { font-size: 15px; }
-html[lang="ug"] .nav-item .ni-meta { font-size: 12px; }
-html[lang="ug"] .side-name { font-size: 15.5px; }
-html[lang="ug"] .side-meta { font-size: 12.5px; }
-html[lang="ug"] .new-chat { font-size: 14.5px; }
-html[lang="ug"] .top h1 { font-size: 14px; }
-html[lang="ug"] .answer { font-size: 17.5px; line-height: 1.95; }
+html[lang="ug"] .wel-text { font-size: 30px; line-height: 1.55; }
+html[lang="ug"] .wel-hint { font-size: 14.5px; }
+html[lang="ug"] .chip { font-size: 14px; }
+html[lang="ug"] #q { font-size: 18.5px; line-height: 1.9; }
+html[lang="ug"] .tool, html[lang="ug"] .kb-btn { font-size: 13.5px; }
+html[lang="ug"] .disclaimer { font-size: 13px; }
+html[lang="ug"] .nav-item { font-size: 15.5px; }
+html[lang="ug"] .nav-item .ni-meta { font-size: 12.5px; }
+html[lang="ug"] .side-name { font-size: 16px; }
+html[lang="ug"] .side-meta { font-size: 13px; }
+html[lang="ug"] .new-chat { font-size: 15px; }
+html[lang="ug"] .top h1 { font-size: 14.5px; }
+html[lang="ug"] .answer { font-size: 19px; line-height: 1.95; }
 html[lang="ug"] .md { line-height: 1.95; }
-html[lang="ug"] .md h3, html[lang="ug"] .md h4 { font-size: 18px; }
-html[lang="ug"] #pvMsgs .msg.bot .answer { font-size: 16.5px; }
-html[lang="ug"] .status { font-size: 13.5px; }
-html[lang="ug"] .src-head { font-size: 13.5px; }
-html[lang="ug"] .src-prev { font-size: 13.5px; }
-html[lang="ug"] .foot { font-size: 12.5px; }
-html[lang="ug"] .lang-switch button { font-size: 13px; }
-/* 窄屏再让一档：28px 的标题在 360px 宽的手机上会折成三行 */
+html[lang="ug"] .md h3, html[lang="ug"] .md h4 { font-size: 20px; }
+html[lang="ug"] #pvMsgs .msg.bot .answer { font-size: 18px; }
+html[lang="ug"] .status { font-size: 14px; }
+html[lang="ug"] .src-head { font-size: 14px; }
+html[lang="ug"] .src-prev { font-size: 14px; }
+html[lang="ug"] .foot { font-size: 13px; }
+html[lang="ug"] .lang-switch button { font-size: 13.5px; }
+/* 窄屏再让一档：30px 的标题在 360px 宽的手机上会折成三行 */
 @media (max-width: 860px) {
-  html[lang="ug"] .wel-text { font-size: 22px; line-height: 1.6; }
-  html[lang="ug"] #q { font-size: 17px; }
-  html[lang="ug"] .answer { font-size: 16.5px; }
+  html[lang="ug"] .wel-text { font-size: 23px; line-height: 1.6; }
+  html[lang="ug"] #q { font-size: 18px; }
+  html[lang="ug"] .answer { font-size: 18px; }
 }
 
 /* ── 维语输入面板（1.7.38）──

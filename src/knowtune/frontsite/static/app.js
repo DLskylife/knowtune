@@ -22,7 +22,7 @@
 
 /* 构建号：和 index.html 里那份必须一致，不一致说明浏览器拿的是旧 JS，
    页面加载完会强制换一次（见 index.html 里的自检脚本）。 */
-window.SITE_BUILD = "1.7.49";
+window.SITE_BUILD = "1.7.50";
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
@@ -1238,13 +1238,17 @@ function sourcesBar(citations) {
    后续 delta 就会把原稿冲掉——用户点了按钮却看到内容还在滚维语，等于没切。 */
 function paintAnswer(bot, el) {
   const draft = bot.dataset.draft || "";
-  const useAlt = altMode && draft;
-  el.classList.toggle("alt", !!useAlt);
-  // 维语界面优先显示补译版本（dataset.ug）：中文界面问出来的那条原本只有
-  // 中文原稿，补译后同一句话在这里换文本，不是让模型重答一遍。
-  // 没有补译时照旧走原文——维语原稿、或还没译到的中文（下面挂语种戳）。
-  const main = bot.dataset.ug || bot.dataset.main || "";
-  el.innerHTML = renderRich(useAlt ? draft : main);
+  const main = bot.dataset.main || "";
+  const ug = bot.dataset.ug || "";
+  // 中文界面拿中文原稿，维语界面优先拿维语译文——同一句话换文本，不重问模型。
+  // 以前无条件 ug 优先，且 useAlt 只看 draft：中文直答没有 draft，于是
+  // 「中文提问 → 切维语补译 → 切回中文」正文被维语顶掉，连 .alt 中文字体
+  // 都不给，中文侧整个坏掉。这里按界面语言挑，而不是按有没有 draft 挑。
+  const zhUI = uiLang !== "ug";
+  const zhText = draft || main;
+  const text = zhUI ? (zhText || ug) : (ug || main || draft);
+  el.classList.toggle("alt", zhUI && !!zhText);
+  el.innerHTML = renderRich(text);
   bindCites(el);
   // 证据徽标也是文案，跟着一起换
   const badge = bot.querySelector(".ev-badge");
@@ -1457,7 +1461,7 @@ function relabelBot(bot) {
   const foot = bot.querySelector(".foot");
   if (foot && rec) {
     let tag = foot.querySelector(".alang");
-    const have = uiLang === "zh"
+    const have = uiLang !== "ug"
       ? (rec.al === "zh" || !!rec.d)
       : (rec.al === "ug" || !!rec.ug);
     const need = rec.al && rec.al !== uiLang && !have;
