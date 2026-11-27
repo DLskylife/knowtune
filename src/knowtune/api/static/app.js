@@ -1,6 +1,6 @@
 /* 构建号：与 index.html 里那份一致，不一致说明浏览器拿到的是旧 JS，
    页面加载完会强制换一次（见 index.html 的自检脚本）。 */
-window.ADMIN_BUILD = "0.9.118";
+window.ADMIN_BUILD = "0.9.119";
 
 const $ = (id) => document.getElementById(id);
 
@@ -813,6 +813,64 @@ function renderFootGen() {
   // 配置齐全就够了，不必等探测：本地模型没启动时 status=unknown，但后端本身
   // 是能用的。灰点在这个位置太淡，看着像少了一个。
   if (gd) gd.className = p.ready ? "dot ok" : dotOf(p.status);
+  renderFootOverall();
+}
+
+/* 侧栏「整体」那行：一个"现在能不能用"的汇总。不新增请求——/api/status
+   给索引与计数，/api/dashboard 给库/文档/失败数和精排，/api/models 给生成
+   后端，三份数据各自拉过一次就缓存在 state 里，这里只读。
+   行内只放最短结论，全量数字与逐后端明细放悬停。状态口径和「索引」「生成」
+   两行一致：索引没准备好就不要报"就绪"，缺生成后端也不要报"就绪"。 */
+function renderFootOverall() {
+  const el = $("footOverall");
+  if (!el) return;
+  const row = $("footOverallLine") || el;
+  const dot = $("footOverallDot");
+  const s = state.status || {};
+  const a = state.dash?.assets || {};
+  const rr = state.dash?.rerank || s.rerank || {};
+  const embed = s.embedder || {};
+  const warm = embed.warmup || {};
+  const p = providerNow();
+  const kbs = a.kbs ?? s.kbs ?? 0;
+  const docs = a.docs ?? s.docs ?? 0;
+  const ready = a.docs_ready ?? s.ready_docs ?? 0;
+  const failed = a.docs_failed ?? 0;
+  const chunks = a.chunks ?? s.chunks ?? 0;
+  const warming = warm.state === "pending" || warm.state === "loading";
+
+  let text, cls;
+  if (!embed.available && warming) {
+    text = `启动中 ${Math.round((warm.elapsed_ms || 0) / 1000)}s`;
+    cls = "warn";
+  } else if (!embed.available) {
+    text = "不可用";
+    cls = "err";
+  } else if (!p) {
+    text = "缺生成后端";
+    cls = "err";
+  } else if (failed) {
+    text = `部分可用 · ${failed} 篇失败`;
+    cls = "warn";
+  } else {
+    text = `就绪 · ${fmtInt(kbs)} 库 ${fmtInt(ready)} 篇`;
+    cls = "ok";
+  }
+  el.textContent = text;
+  if (dot) dot.className = `dot ${cls}`;
+
+  const svcs = state.dash?.services || state.models?.providers || [];
+  const svcText = svcs.length
+    ? svcs.map((v) => `${v.name} ${statusText(v.status)}`).join(" · ")
+    : "无";
+  const idx = [embed.model, embed.fingerprint].filter(Boolean).join(" · ");
+  row.title = [
+    `知识库 ${fmtInt(kbs)} 个 · 文档 ${fmtInt(docs)} 篇（就绪 ${fmtInt(ready)} / 失败 ${fmtInt(failed)}）· ${fmtInt(chunks)} 块`,
+    `索引：${embed.available ? "就绪" : warming ? "启动中" : "不可用"}${idx ? ` · ${idx}` : ""}`,
+    `生成：${p ? `${p.name}（${p.model || "未指定模型"}）· ${p.message || "还没探测"}` : "未选择"}`,
+    rr.enabled ? `精排：${rr.model || rr.default_model || "已开启"}` : "精排：已关闭",
+    `后端：${svcText}`,
+  ].join("\n");
 }
 
 /* 后端下拉的唯一数据源：/api/models。
@@ -822,6 +880,7 @@ async function loadProviders() {
     const d = await api("/api/models");
     state.models = d;
     syncProviderOptions(d);
+    renderFootOverall();
     return d;
   } catch (_) {
     // 拉不到就保留上一次的选项，不要把下拉清成空的——那等于把当前后端也弄丢了
@@ -3231,6 +3290,7 @@ async function renderHome() {
     box.innerHTML = `<div class="page"><p class="empty-tip">后端未就绪：${esc(err.message)}</p></div>`;
     return;
   }
+  renderFootOverall();
 
   const a = d.assets;
   const h = d.health;

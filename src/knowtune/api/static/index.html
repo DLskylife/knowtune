@@ -4,12 +4,12 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>KnowTune · 本地知识库</title>
-  <link rel="stylesheet" href="/static/style.css?v=0.9.118">
+  <link rel="stylesheet" href="/static/style.css?v=0.9.119">
   <script>
     /* 同前台那份自检：页面是新的、app.js 被 WebView 留成旧的，就会出现
        "按钮在、点了没反应"（删库那次就这么来的）。编号对不上就强制换一次，
        只换一次，避免死循环。 */
-    window.ADMIN_REQ_BUILD = "0.9.118";
+    window.ADMIN_REQ_BUILD = "0.9.119";
     addEventListener("load", function () {
       if (window.ADMIN_BUILD === window.ADMIN_REQ_BUILD) return;
       if (sessionStorage.getItem("knowtune.admin.reloaded")) return;
@@ -95,7 +95,12 @@
         </section>
       </div>
 
-      <div class="sidebar-foot" title="当前能不能提问、由谁回答">
+      <!-- 侧栏底部三行：第一行是"整体能不能用"的汇总，下面两行拆开说
+           "索引"和"生成"各自怎么了。汇总行悬停看全量数字与后端明细。 -->
+      <div class="sidebar-foot">
+        <div class="foot-line overall" id="footOverallLine" title="整体就绪">
+          <i class="dot" id="footOverallDot"></i><span class="k">整体</span><b class="ell" id="footOverall">-</b>
+        </div>
         <div class="foot-line"><i class="dot" id="footEmbedDot"></i><span class="k">索引</span><b id="footEmbed">-</b></div>
         <div class="foot-line"><i class="dot" id="footGenDot"></i><span class="k">生成</span><b class="ell" id="footGen">-</b></div>
       </div>
@@ -345,6 +350,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=0.9.118"></script>
+  <script src="/static/app.js?v=0.9.119"></script>
 </body>
 </html>

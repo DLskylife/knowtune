@@ -300,9 +300,9 @@ kbd {
 .dot.ok { background: var(--ok); box-shadow: 0 0 0 2px rgba(62, 207, 142, .13); }
 .dot.err { background: var(--err); box-shadow: 0 0 0 2px rgba(242, 85, 90, .13); }
 
-/* 侧栏底部两条状态：回答"现在能不能提问、由谁回答"。
+/* 侧栏底部三条状态：第一行"整体能不能用"，下面两行拆开说索引和生成。
  * 放在滚动区之外、flex 末尾，列表再长也不会把它顶出屏。原来这里是一排四行
- * 统计 + 一个全局参数入口，信息重复、还占掉一截列表；只收窄成这两条。
+ * 统计 + 一个全局参数入口，信息重复、还占掉一截列表。
  * 状态用圆点表达，文字保持中性——一整行绿字会跟"成功提示"混淆。 */
 .sidebar-foot {
   flex: none;
@@ -323,6 +323,10 @@ kbd {
 .foot-line .k { color: var(--text-3); flex: none; }
 .foot-line b { font-weight: 500; color: var(--text-2); min-width: 0; }
 .foot-line b.ell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 汇总行比下面两条稍重一点：一眼先看到"能不能用"，再看是哪一环坏了。
+   只加字重和一条细分隔，不换色——圆点已经承担了状态语义。 */
+.foot-line.overall { padding-bottom: 6px; margin-bottom: 2px; border-bottom: 1px solid var(--line-soft); }
+.foot-line.overall b { font-weight: 600; color: var(--text-1); }
 
 
 /* ================================================================= 主区 */
