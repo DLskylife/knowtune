@@ -22,7 +22,7 @@
 
 /* 构建号：和 index.html 里那份必须一致，不一致说明浏览器拿的是旧 JS，
    页面加载完会强制换一次（见 index.html 里的自检脚本）。 */
-window.SITE_BUILD = "1.7.48";
+window.SITE_BUILD = "1.7.49";
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
@@ -2060,11 +2060,21 @@ function saysChinese(text) {
 
 /* 切到维语时，把当前会话里"中文生成、没有维语版本"的答案补译一遍。
    和预问诊 pvLocalize() 是同一件事：同一句话换文本，不重问模型。
-   译文写回本地会话（rec.ug），同一条只翻一次；失败留原文 + 戳，
-   冷却一分钟后可再试——旧代码把失败永久钉死，一次网络抖动就再也不翻了。 */
+   云端翻译偶发失败（实测同一段长答案两次成功、一次 fetch 抛错），失败后
+   不能钉死等用户手动切语言——安排自动重试，最多三次，十秒一轮。
+   busy 标记挡住重入：切语言、收尾、定时重试可能同时打进来。 */
 let localizeSeq = 0;
+let localizeBusy = false;
+let localizeRetry = null;
+function scheduleLocalizeRetry() {
+  if (localizeRetry) clearTimeout(localizeRetry);
+  localizeRetry = setTimeout(() => {
+    localizeRetry = null;
+    if (uiLang === "ug") askLocalize();
+  }, 10000);
+}
 async function askLocalize() {
-  if (uiLang !== "ug") return;
+  if (uiLang !== "ug" || localizeBusy) return;
   const chat = currentChat();
   if (!chat) return;
   // 问答记录一轮一条 {q, a, al, ...}，没有 role 字段——别按 bot 过滤，
@@ -2075,10 +2085,17 @@ async function askLocalize() {
     // 永远轮不到它——这正是「老会话里切维语还是一屏中文」的根因。
     if (m.al !== "zh" && saysChinese(m.a)) m.al = "zh";
     if (m.al !== "zh") return false;
-    // 失败过的给一分钟冷却：既不让每次渲染都发一轮请求，也不永久钉死。
-    return !m.ugFail || Date.now() - (m.ugFailAt || 0) >= 60000;
+    // 失败过的给十秒冷却、最多三轮：既不让每次渲染都发一轮请求，
+    // 也不让一次云端抖动把这条答案永久钉在中文上。
+    if (m.ugFail) {
+      if ((m.ugTry || 0) >= 3) return false;
+      if (Date.now() - (m.ugFailAt || 0) < 10000) return false;
+    }
+    return true;
   });
   if (!todo.length) return;
+  localizeBusy = true;
+  todo.forEach((m) => { m.ugTry = (m.ugTry || 0) + 1; });
   const seq = ++localizeSeq;
   const tip = $("toolChip");
   const oldTip = tip ? tip.textContent : "";
@@ -2098,6 +2115,7 @@ async function askLocalize() {
         m.ug = text;
         m.ugFail = false;
         m.ugFailAt = 0;
+        m.ugTry = 0;
       } else {
         m.ugFail = true;
         m.ugFailAt = Date.now();
@@ -2105,10 +2123,13 @@ async function askLocalize() {
     });
     saveChats();
     repaintBots();
+    if (todo.some((m) => m.ugFail)) scheduleLocalizeRetry();
   } catch (err) {
     console.warn("[answer] localize", err);
     todo.forEach((m) => { m.ugFail = true; m.ugFailAt = Date.now(); });
+    scheduleLocalizeRetry();
   } finally {
+    localizeBusy = false;
     if (tip && seq === localizeSeq) tip.textContent = oldTip;
   }
 }
