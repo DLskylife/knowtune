@@ -22,7 +22,7 @@
 
 /* 构建号：和 index.html 里那份必须一致，不一致说明浏览器拿的是旧 JS，
    页面加载完会强制换一次（见 index.html 里的自检脚本）。 */
-window.SITE_BUILD = "1.7.45";
+window.SITE_BUILD = "1.7.46";
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
@@ -95,6 +95,7 @@ const T = {
     histTitle: "سۆھبەتلەر",
     navEmpty: "يوق",
     classicSub: "پەقەت قەدىمكى كىتابلاردىن ئىزدەيدۇ، ھازىرقى داۋالاش ئۆلچىمىنى ئارىلاشتۇرمايدۇ",
+    classicWelcome: "ياخشىمۇسىز! قەدىمكى كىتابلار ھەققىدە سوئالىڭىزنى يېزىڭ.",
     // 古籍栏的示例问题单独一套：直接把维医那三句搬过来，在古籍库里是必空的。
     classicSamples: [
       "قەدىمكى كىتابلاردا باش ئاغرىقىنى قانداق داۋالايدۇ؟",
@@ -183,6 +184,7 @@ const T = {
     histTitle: "对话",
     navEmpty: "未导入",
     classicSub: "只检索古籍，不混入现代诊疗规范",
+    classicWelcome: "你好！请输入关于古籍的问题。",
     classicSamples: [
       "古籍里头疼怎么治？",
       "古籍里发热怎么处理？",
@@ -242,6 +244,7 @@ const T = {
     classicTitle: "Classics Q&A", pvTitle: "Pre-visit",
     histTitle: "Chats", navEmpty: "none",
     classicSub: "Classical texts only — no modern guidelines",
+    classicWelcome: "Hi! Ask about the classics.",
     classicSamples: [
       "How do the classics treat headache?",
       "How do the classics handle fever?",
@@ -317,7 +320,7 @@ const MAX_CHATS = 30;
 const MAX_ANSWER = 12000;
 
 let chats = loadChats();
-// 由 bindSession(view) 在启动和切板块时赋值：没有"全站当前会话"这回事了。
+// 启动时由 bindSession(view) 赋值，切板块时重置为空会话：没有"全站当前会话"这回事了。
 let sessionId = null;
 
 function loadChats() {
@@ -1666,6 +1669,10 @@ function applyViewCopy() {
   const c = copy();
   const pvOn = view === "pv";
   renderSideHead();
+  // 欢迎语也按板块换：它是主页最显眼的一行，古籍栏挂着「请输入关于维医的问题」
+  // 等于切了没换。维医栏仍用站点自己配的那句，古籍栏用界面语言的固定文案。
+  $("welText").textContent = view === "classic"
+    ? (t.classicWelcome || c.welcome || "") : (c.welcome || "");
   // 顶栏大标题也按板块换：副标题换了、标题还挂「维医知识问答」，等于在古籍
   // 问答页上写着这是维医——用户扫一眼标题就以为没切过去。维医栏仍用站点
   // 自己在提示词配置里写的那句。
@@ -1706,9 +1713,12 @@ function switchView(key) {
   view = key;
   document.body.dataset.view = key;
   localStorage.setItem(VIEW_KEY, key);
-  // 换栏就换会话：每个板块记住自己上次那段对话，切过来接上，而不是继续
-  // 显示另一栏的正文（这是"切了但内容没变"的真正原因）。
-  bindSession(key);
+  // 切板块回主页：每次点进来看到的是这一栏自己的欢迎语 + 空输入框，
+  // 不再直接接上上次那段对话。只换内存里的 sessionId，不写 SESSION_BY_VIEW：
+  // 旧会话仍在存档里，侧栏点一下就能续，刷新页面也还是 bindSession 接回
+  // 上次那段，不会把用户丢在一个没有来由的空白页上。
+  sessionId = freshId();
+  history = [];
   renderNav();
   applyViewCopy();
   renderSamples();
