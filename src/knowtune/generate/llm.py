@@ -129,7 +129,8 @@ class LLMClient:
         exc = state.outcome.exception() if state.outcome else None
         print(f"[llm] retry attempt={state.attempt_number} reason={exc!r}")
 
-    def resolve(self, provider: str | None) -> tuple[str, ProviderCfg]:
+    def resolve(self, provider: str | None,
+                model: str | None = None) -> tuple[str, ProviderCfg]:
         # 角色值可能是「后端::模型」，后端名只是前半截。在这里拆掉，而不是要求
         # 每个调用方自己拆——漏一处就是"未知 provider"，而且报错信息里带着
         # `::`，看起来像后端名字打错了，排查会跑偏。
@@ -151,7 +152,8 @@ class LLMClient:
                 f"模型服务「{name}」不存在（已配置：{known}）。"
                 "到「模型服务」页添加端点，或在参数面板把本库的生成后端改成已配置的那个。"
             )
-        return name, self.cfg.generation.providers[name]
+        return name, self._bind_local(name, self.cfg.generation.providers[name],
+                                      model or _model or None)
 
     def _target(self, provider: str | None, model: str | None) -> tuple[str, ProviderCfg, str | None]:
         """把「角色值 + 显式 model 参数」收敛成一个实际要发的 (后端, 配置, 模型)。
@@ -159,8 +161,51 @@ class LLMClient:
         显式参数优先于角色值里带的模型：调用点自己指定的更具体。
         """
         ref, ref_model = roles_mod.split(provider)
-        name, prov = self.resolve(ref or None)
+        name, prov = self.resolve(ref or None, model or ref_model)
         return name, prov, (model or ref_model or None)
+
+    def _bind_local(self, name: str, prov: ProviderCfg,
+                    model: str | None) -> ProviderCfg:
+        """把本地端点收窄到「这一份模型真正监听的那个地址」。
+
+        本地端点是**一个 gguf 一个进程一个端口**，而 ProviderCfg.base_url 只有
+        一个值，且会被 models.py 的启动接口改成"最后启动的那个模型"的地址。
+        于是选 `local::Qwen2.5-7B-Doctor`（配的 8101）时，请求仍打到 base_url
+        上的 8097——那里跑的是 Qwen2.5-7B-Instruct。llama.cpp 不校验 model
+        字段，谁在听就用谁答，所以三个不同的本地模型问同一句话会得到措辞
+        几乎一样的回答，而响应里的 model 回显只是把请求里的名字抄回来。
+        用户看到"选的是 Doctor"，实际拿到的是另一份权重，且没有任何报错。
+
+        这里的规则：
+          1. 该模型正在跑（localmodels 有 running 实例）→ 用它的真实地址，
+             这能覆盖"没配 port、启动时自动挑端口"的情况；
+          2. 没在跑但配了 port，端口通 → 用该端口（手工起的 llama-server 也算）；
+          3. 没在跑、端口不通 → 报错。**不回落**到 base_url：那正是静默用错
+             模型的路径，宁可让用户看到"没启动"，也不要给他一份别的权重写的答案。
+        """
+        if (prov.kind or "").strip().lower() != "local":
+            return prov
+        entry = prov.entry(model or "")
+        if entry is None:
+            return prov
+        from .. import localmodels as local_mod
+
+        spot = local_mod.locate(name, entry.id, entry.port)
+        if spot["state"] == "down":
+            raise LLMError(
+                f"本地模型「{entry.id}」没有在运行（端口 {int(entry.port)} 连不上）。"
+                "到「模型服务」页给它点「启动」；本机显存一次只够跑一个，"
+                "要换模型就先停掉正在跑的那个。"
+            )
+        target = spot["url"]
+        if not target:
+            # 没在跑、也没配端口：没有任何依据说它在哪，交给端点地址。
+            return prov
+        if target.rstrip("/") == (prov.base_url or "").rstrip("/"):
+            return prov
+        # 副本：改的是这一次调用打到哪，不动注册表里的 base_url（那是"当前
+        # 在跑哪个"的展示值，被请求改来改去会让界面跟着乱跳）。
+        return prov.model_copy(update={"base_url": target})
 
     def _clamp_tokens(self, prov: ProviderCfg, model: str, max_tokens: int | None) -> int | None:
         """按模型清单里的 max_output 收一下输出预算。

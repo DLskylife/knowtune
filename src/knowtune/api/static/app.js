@@ -1,6 +1,6 @@
 /* 构建号：与 index.html 里那份一致，不一致说明浏览器拿到的是旧 JS，
    页面加载完会强制换一次（见 index.html 的自检脚本）。 */
-window.ADMIN_BUILD = "0.9.117";
+window.ADMIN_BUILD = "0.9.118";
 
 const $ = (id) => document.getElementById(id);
 
@@ -6423,13 +6423,27 @@ function provSelect(role, cur, providers, meta, defProvider, headLabel) {
       ? s.slice(0, -common.length) : s));
     const counts = new Map();
     labels.forEach((s) => counts.set(s, (counts.get(s) || 0) + 1));
+    // 本地模型一个模型一个进程：没启动的那个选了也调不通。以前这里不标状态，
+    // 理由是"探测快照会过期"——但过期的代价是"选了才知道"，而现在后端已经
+    // 会在请求时硬校验，UI 再瞒着就成了明知故问。只标未启动，不标其它状态：
+    // 就绪是常态，一排「就绪」纯属噪音。
+    const liveState = new Map(
+      (m.models || []).map((x) => [String(x.id || ""), String(x.state || "")]));
+    const isLocal = Boolean(m.local);
     const rest = models.map((id, i) => {
       const val = `${name}::${id}`;
       const sel = (curBase === name && curModel === id)
         || (legacyDefault && id === m.model) ? " selected" : "";
       const dup = counts.get(labels[i]) > 1;
       const text = dup ? id : labels[i];
-      return `<option value="${esc(val)}"${sel} title="${esc(id)}">${esc(text)}</option>`;
+      const st = isLocal ? liveState.get(id) || "" : "";
+      const tag = !st || st === "running" ? ""
+        : st === "starting" ? " · 启动中" : " · 未启动";
+      const tip = st && st !== "running"
+        ? (st === "starting" ? "正在加载权重" : "本地模型没在跑，选它会调不通，到「模型服务」页点启动")
+        : id;
+      return `<option value="${esc(val)}"${sel} title="${esc(tip)}">${
+        esc(text + tag)}</option>`;
     }).join("");
     return `<optgroup label="${esc(label)}">${legacyNoModel}${missing}${rest}</optgroup>`;
   }).join("");

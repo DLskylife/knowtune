@@ -7,6 +7,6 @@
 # 不写密钥：密钥走环境变量 PREVISIT_LLM_API_KEY（独立部署）或后台的
 # 模型服务页（主项目），不落在这个文件里。
 provider: local
-model: Qwen2.5-7B-Instruct-Q4_K_M
+model: Qwen2.5-7B-Doctor-Q4_K_M
 translator_provider: siliconflow
 translator_model: tencent/Hunyuan-MT-7B

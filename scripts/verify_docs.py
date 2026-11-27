@@ -512,6 +512,31 @@ for token, why in (
 if 'direct = [v["api"] for v in live.values()' in models_py:
     errors.append("[ui] routes/models.py 的直连列表退回了「只列运行中实例」")
 
+# 本地端点按模型绑端口：选了 A 就必须打到 A 的地址，没启动必须报错。
+# 退回「只读 provider.base_url」= 静默用错模型（llama-server 不校验 model
+# 字段，谁在听就用谁答，响应里的 model 只是把请求里的名字抄回来），
+# 这是 2026-11-27 那个「换了模型没差别」的全部原因。
+locals_py = (STATIC / "localmodels.py").read_text(encoding="utf-8")
+for token, why in (
+    ("def locate(", "按模型定位本地端口的入口"),
+    ('"state": "down"', "未启动的判定"),
+    ("running().get(f\"{provider_name}/{model_id}\")", "按「端点/模型」取运行实例"),
+):
+    if token not in locals_py:
+        errors.append(f"[local] localmodels.py 缺少{why}：{token}")
+llm_py = (STATIC / "generate" / "llm.py").read_text(encoding="utf-8")
+for token, why in (
+    ("def _bind_local(", "按模型校正本地地址"),
+    ("local_mod.locate(", "复用同一份定位判定"),
+    ("没有在运行（端口", "未启动时的明确报错"),
+):
+    if token not in llm_py:
+        errors.append(f"[local] generate/llm.py 缺少{why}：{token}")
+if "local_mod.locate(" not in models_py:
+    errors.append("[local] /v1 网关没按模型校正本地地址，会转发给正在跑的那个")
+if "· 未启动" not in admin_js:
+    errors.append("[local] 站点页本地模型下拉没标「未启动」")
+
 # 切页性能护栏：README 写了「即点即到」，代码不能退回串行重拉 + 撕卡片。
 # 这条不是性能基准测试，只守结构性前提——真要测耗时用浏览器脚本量。
 for token, why in (

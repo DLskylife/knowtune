@@ -546,6 +546,36 @@ def running(force: bool = False) -> dict[str, dict[str, Any]]:
         return snap
 
 
+def locate(provider_name: str, model_id: str, port: int | None) -> dict[str, Any]:
+    """这个本地模型现在**该打到哪个地址**。回 {"url", "state"}。
+
+    为什么需要这个：本地端点是「一个 gguf 一个进程一个端口」，而端点配置里
+    只有一个 base_url，且它会被启动接口改成"最后启动的那个"的地址。调用方
+    只看 base_url 的话，选 `local::A`（配的 8101）时会打到 8097——那里跑的是
+    B。llama-server 不校验 model 字段，谁在听就用谁答，于是答案来自另一份
+    权重，界面上却显示 A，全程没有报错。
+
+    state 的四个值：
+      running   实例在跑（地址优先取它自报的，能覆盖自动挑端口的情况）
+      port_open 实例没登记，但配的端口有人在听（手工起的 llama-server）
+      down      没在跑，端口也不通
+      unknown   既没在跑，也没配端口——没有任何依据说它在哪
+    """
+    inst = running().get(f"{provider_name}/{model_id}") or {}
+    if inst.get("state") == "running":
+        api = inst.get("api") or {}
+        url = str(api.get("base_url") or inst.get("base_url") or "")
+        if url:
+            return {"url": url.rstrip("/"), "state": "running"}
+    if port:
+        with socket.socket() as s:
+            s.settimeout(0.4)
+            if s.connect_ex(("127.0.0.1", int(port))) == 0:
+                return {"url": f"http://127.0.0.1:{int(port)}/v1", "state": "port_open"}
+        return {"url": "", "state": "down"}
+    return {"url": "", "state": "unknown"}
+
+
 def _pick_port(preferred: int | None = None, *, strict: bool = False) -> int:
     """挑一个没被占的端口。preferred 可用就用它，否则在区间里扫。
 

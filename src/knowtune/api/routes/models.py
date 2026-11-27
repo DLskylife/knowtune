@@ -443,6 +443,21 @@ def _gateway_target(request: Request, payload: dict, allow_empty: bool = False) 
 
     p = providers[want]
     base = (p.base_url or "").rstrip("/")
+    if (p.kind or "").strip().lower() == "local" and model:
+        # 本地端点下不同模型各占一个端口，base_url 只是"最后一次启动的那个"。
+        # 不改这一下，网关就会把 local::A 的请求转给正在跑的 B——对方不校验
+        # model 字段，答得又流畅又理直气壮，只是模型不是用户选的那个。
+        from ... import localmodels as local_mod
+
+        entry = p.entry(model)
+        if entry is not None:
+            spot = local_mod.locate(want, entry.id, entry.port)
+            if spot["state"] == "down":
+                raise HTTPException(503, f"本地模型「{entry.id}」没有在运行"
+                                         f"（端口 {int(entry.port)} 连不上）。"
+                                         "到「模型服务」页点「启动」。")
+            if spot["url"]:
+                base = spot["url"]
     if not base:
         # 端点还没填地址，但它的本地模型已经跑起来了：用实例的真实地址。
         from ... import localmodels as local_mod

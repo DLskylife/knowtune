@@ -169,7 +169,7 @@ src/knowtune/            主项目
   api/app.py             FastAPI 装配入口（生命周期 / 中间件 / 注册路由），约 270 行
   api/routes/           88 个端点按资源域拆成 8 个模块；/v1 网关在 models.py
   api/common.py / state.py / coverage.py  公共层：分片上传 / AppState / 引用覆盖率
-  api/static/            后台前端：index.html / app.js / style.css，构建号 0.9.117
+  api/static/            后台前端：index.html / app.js / style.css，构建号 0.9.118
   frontsite/             instcfg / runner / site
     static/              前台前端：index.html / app.js / style.css
   previsit/app.py        主项目装配层（注入进程内检索器、LLM 适配器、建 FastAPI app）
@@ -612,6 +612,25 @@ effective_fields(): 逐字段
 ### 9.5 预问诊挂载与 `_SectionGate`
 
 预问诊不是独立站点，挂在前台 `/previsit`（`frontsite/site.py:331-336`），对外全路径 `/previsit/api/previsit/*`。`_SectionGate`（`site.py:308`）按 `pv` 板块开关决定这个挂载「存不存在」：关掉时 `/previsit/*` 一律 404。前端把它画成第三个板块，`/api/info` 里 `previsit.available` 就是 `pv.enabled`。运行时用 `src/previsit/` 的代码（§2.4），主项目 `previsit/app.py` 只做进程内装配。
+
+### 9.6 本地端点：一个模型一个端口，所以按模型校正地址
+
+本地端点（`kind: local`）的模型是「一份 gguf 一个进程一个端口」，但 `ProviderCfg.base_url` 只有一个值，而且 `POST /api/models/{name}/start` 会把它改写成**最后启动的那个模型**的地址（同时把 `p.model` 也改成它）。这意味着只读 `base_url` 的调用方，在端点下有多个本地模型时必然错位。
+
+**2026-11-27 之前的实际故障**：站点把预问诊钉到 `local::Qwen2.5-7B-Doctor-Q4_K_M`（配的 8101），而当时在跑的是 8097 上的 `Qwen2.5-7B-Instruct-Q4_K_M`。请求照样打到 8097，llama-server **不校验 `model` 字段**，谁在听就用谁答；响应里的 `model` 只是把请求里的名字抄回来。于是三个不同的本地模型（其中两个端口根本没开）问同一句话，得到的是措辞几乎一样的回答，界面上显示的却一直是用户选的那个——没有报错，没有降级标记，没有任何一处能看出模型用错了。
+
+**现行契约**（`localmodels.locate()`，`generate/llm.py:_bind_local` 与 `api/routes/models.py:_gateway_target` 两处共用）：
+
+| 情形 | 结果 |
+|---|---|
+| 该模型的实例在跑 | 用实例自报的 `base_url`（能覆盖「没配 port、启动时自动挑」的情况） |
+| 没登记实例，但配的 `port` 有进程在听 | 用 `http://127.0.0.1:{port}/v1`（手工起的 llama-server 也算） |
+| 没在跑，端口不通 | **报错**，不回落端点地址 |
+| 既没在跑也没配 port | 只剩端点地址一个依据，用它 |
+
+第三条是这条契约的全部意义：回落到 `base_url` 正是「静默用错模型」的路径。宁可让用户看到「本地模型 X 没有在运行（端口 8101 连不上）」，也不要给他一份别的权重写的答案。改动只在本次调用上（`model_copy` 副本），不动注册表里的 `base_url`——那是「当前在跑哪个」的展示值，被请求改来改去会让界面跟着乱跳。
+
+站点页的本地模型下拉同步标「· 未启动」：状态本来会过期，所以它只是提示（判据仍在请求时），但「选了才知道调不通」比「过期 5 秒」更贵。
 
 ---
 
