@@ -27,6 +27,7 @@ from typing import Any, Iterator
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
 from .. import answer_localize as answer_localize_mod
 from .. import chatctx
@@ -919,22 +920,36 @@ def build_site(spec, state: Any) -> FastAPI:
                 yield _sse("error", {"message": error, "trace_id": trace_id})
                 return
 
+            report = cite_mod.verify(answer, len(bundle.citations))
+            citations = [asdict(c) for c in bundle.citations]
+
             # 提问收尾即后台预译：把这一轮的中文文本翻好落进服务端缓存，
             # 用户随后切维语时命中即返（毫秒级），不再对着一屏中文等 12～20 秒。
-            # 只挑中文——维语原文不需要翻。文本必须与前端稍后查询的逐字一致：
-            # 问题用 trim 后的原文，标题用前端同样的 \s+→空格 + 截 40 字规则。
+            # "所有文字整体牵动"——清单必须覆盖切语言后屏幕上会出现的每一处中文：
+            # 正文、草稿、问题、标题，以及来源面板的文档标题 / 小节路径 / 预览原文。
+            # 来源三字段以前从没进过翻译链，切到维语后那一大段中文就是这么来的。
+            # 文本必须与前端稍后查询的逐字一致，否则缓存形同虚设：
+            # 问题用 trim 后的原文；标题用前端同样的 \s+→空格 + 截 40 字规则；
+            # 来源字段用 asdict 出来的原样值（前端拿同一份 citations 发查询）。
             # 异步提交，不占流式时间；失败静默，前端补译链仍会兜底。
             try:
                 _title = re.sub(r"\s+", " ", req.question).strip()[:40]
                 _warm_zh = [x for x in (answer, draft, req.question, _title)
                             if x and x.strip() and lang_mod.detect(x) == "zh"]
+                # 来源只预热标题 / 小节路径（短，各一块），**不预热 preview 原文**：
+                # 预览是折叠面板里的证据摘录，动辄几百字，按行切成十几块 × 多条
+                # 引用，会把翻译器请求量放大一个数量级、撞云端限流，连正文都跟着
+                # 翻不出来（实测正文主 client 失败、退回空端点报 400）。
+                # 正文 / 问题 / 标题在列表前面，先切块先翻，绝不被来源挤掉。
+                for _c in citations:
+                    for _f in ("doc_title", "heading_path"):
+                        _v = _c.get(_f)
+                        if _v and str(_v).strip() and lang_mod.detect(str(_v)) == "zh":
+                            _warm_zh.append(str(_v))
                 if _warm_zh:
                     answer_localize_mod.warm(list(dict.fromkeys(_warm_zh)))
             except Exception:
                 pass
-
-            report = cite_mod.verify(answer, len(bundle.citations))
-            citations = [asdict(c) for c in bundle.citations]
             msg_id = None
             if session_id:
                 msg_id = _save(conn, session_id, req.question, answer, trace_id, citations)
@@ -1000,7 +1015,13 @@ def build_site(spec, state: Any) -> FastAPI:
 
     @app.post("/api/answer/localize")
     async def answer_localize(req: Request) -> JSONResponse:
-        """切语言时给问答答案补译维语版本。同一句话换文本，不重问模型。"""
+        """切语言时给问答答案补译维语版本。同一句话换文本，不重问模型。
+
+        `localize_texts` 是同步阻塞的（线程池 map 后等云端返回），绝不能在
+        事件循环里直接调：一调就把整个站点卡住，连首页都打不开。之前的
+        "服务假死、117 线程、HTTP 连不上"全是因为这里。丢进线程池，事件
+        循环继续服务其他请求。
+        """
         try:
             body = await req.json()
         except Exception:
@@ -1008,7 +1029,8 @@ def build_site(spec, state: Any) -> FastAPI:
         texts = body.get("texts") if isinstance(body, dict) else None
         if not isinstance(texts, list):
             raise HTTPException(400, "texts 必须是数组")
-        return JSONResponse(answer_localize_mod.localize_texts(texts))
+        result = await run_in_threadpool(answer_localize_mod.localize_texts, texts)
+        return JSONResponse(result)
 
     @app.post("/api/feedback")
     def feedback(req: SiteFeedback) -> dict:

@@ -122,8 +122,15 @@ def build_translator(pv: dict[str, Any], main_llm: Any) -> Any:
     try:
         clients = [GatewayLLM(base, provider=provider, model=model,
                               timeout_s=20.0, retry_after=0.0)]
-        if model:                          # 兜底：让网关挑它当前的默认模型
-            clients.append(GatewayLLM(base, provider=provider, model="",
+        # 兜底必须给一个**真实存在的模型名**。以前这里传 model=""，让网关自己挑
+        # 默认模型——实测网关在没带 provider 头时模型列表是空的，于是拼成
+        # 「端点（空）」，每次都 400。这条兜底从来没成功过一次，只会白等 20 秒
+        # 再把「端点（空）不存在」这个假错误报给前端，掩盖掉主模型真正的失败。
+        fallback_model = (os.environ.get("PREVISIT_TRANSLATOR_FALLBACK_MODEL")
+                          or "deepseek-ai/DeepSeek-V4.1-Flash").strip()
+        if provider and fallback_model and fallback_model != model:
+            clients.append(GatewayLLM(base, provider=provider,
+                                      model=fallback_model,
                                       timeout_s=20.0, retry_after=0.0))
         return TranslatorChain(clients)
     except Exception:                          # 网关不在就别让站点起不来

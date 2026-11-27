@@ -22,7 +22,7 @@
 
 /* 构建号：和 index.html 里那份必须一致，不一致说明浏览器拿的是旧 JS，
    页面加载完会强制换一次（见 index.html 里的自检脚本）。 */
-window.SITE_BUILD = "1.7.53";
+window.SITE_BUILD = "1.7.56";
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
@@ -44,6 +44,8 @@ const T = {
     translated: "سوئالىڭىز خەنزۇچىغا تەرجىمە قىلىنىپ ئىزدەلدى",
     drafting: "جاۋاب تەييارلىنىۋاتىدۇ…",
     translating: "ئۇيغۇرچىغا تەرجىمە قىلىنىۋاتىدۇ…",
+    // 整页语言一起换：译文没备齐时挂这条，绝不让用户看到"翻了一半"的撕裂画面。
+    switching: "پۈتۈن بەت تىلى ئالماشتۇرۇلۇۋاتىدۇ…",
     notFound: "بىلىم ئامبىرىدا مۇناسىۋەتلىك ئاساس تېپىلمىدى.",
     error: "خاتالىق يۈز بەردى",
     sources: "مەنبە",
@@ -139,6 +141,7 @@ const T = {
     translated: "你的问题已译为中文后检索",
     drafting: "正在组织答案…",
     translating: "正在译为维吾尔语…",
+    switching: "正在整体切换语言…",
     notFound: "知识库中没有找到足够的依据。",
     error: "出错了",
     sources: "来源",
@@ -215,6 +218,7 @@ const T = {
     searching: "Searching & reranking…", thinking: "Writing answer…",
     translated: "Your question was translated before search",
     drafting: "Organizing the answer…", translating: "Translating into Uyghur…",
+    switching: "Switching the whole page language…",
     notFound: "Not enough evidence in the knowledge base.",
     error: "Error", sources: "Sources", srcCount: (n) => `${n} sources`,
     stop: "Stop", send: "Send", copy: "Copy", copied: "Copied",
@@ -1220,6 +1224,25 @@ function trimHeading(docTitle, path) {
   return path;
 }
 
+/* 来源面板三处文字（文档标题 / 小节路径 / 预览原文）也是界面文字的一部分：
+   切到维语就要换维语，不能让一整段中文原文赖在"来源"里——这正是
+   "所有文字不能整体牵动吗"里最扎眼的一块。译文存在每条 citation 的
+   _u_* 字段上，和正文 / 问题 / 标题进同一个语言包一次翻译、一次落地。
+   分组仍按**原文** doc_title（译文可能把同名文档译出细微差别，按译文分组
+   会把一篇拆成两行），只是显示取译文。 */
+function citText(c, field) {
+  // 预览统一截到 600 字：和译文 / 预热缓存同一截断口径，译文刚好盖住显示的
+  // 全部内容，不会出现"前半维语、后半中文"。原文模式下也截同一长度，
+  // 保证两种语言看到的是同一段内容的两种文本。
+  const raw = c[field] || "";
+  const v = field === "preview" ? String(raw).slice(0, 600) : raw;
+  if (uiLang === "ug") {
+    const u = c["_u_" + field];
+    if (u) return u;
+  }
+  return v;
+}
+
 function sourcesBar(citations) {
   if (!citations || !citations.length) return null;
   const det = document.createElement("details");
@@ -1227,16 +1250,16 @@ function sourcesBar(citations) {
   const groups = groupCitations(citations);
   const items = groups.map((g) => {
     const first = g.items[0];
-    const title = displayTitle(g.doc_title);
+    const title = displayTitle(citText(first, "doc_title"));
     const head = [title, first.page_no ? `${first.page_no}` : "",
-      trimHeading(title, first.heading_path || "")]
+      trimHeading(title, citText(first, "heading_path"))]
       .filter(Boolean).join(" · ");
     const ns = g.ns.map((n) => `<span class="n">${esc(n)}</span>`).join("");
     return `<li class="src-item" data-n="${esc(g.ns[0])}" data-ns="${esc(g.ns.join(","))}">
         <div class="src-ns">${ns}</div>
         <div class="src-body">
           <div class="src-head" dir="auto">${esc(head)}</div>
-          <div class="src-prev" dir="auto">${esc(first.preview || "")}</div>
+          <div class="src-prev" dir="auto">${esc(citText(first, "preview"))}</div>
         </div>
       </li>`;
   }).join("");
@@ -1451,9 +1474,16 @@ function relabelBot(bot) {
     if (f.detail) err.title = f.detail;
   }
 
-  const sum = bot.querySelector(".srcs summary");
-  if (sum && rec && rec.cit && rec.cit.length) {
-    sum.firstChild.textContent = t.srcCount(groupCitations(rec.cit).length);
+  // 来源面板整体重绘：文档标题 / 小节路径 / 预览原文都要跟着语言换。
+  // 只改 summary 的数字不够——那三处才是用户真正读到的中文。
+  const oldSrcs = bot.querySelector(".srcs");
+  if (oldSrcs && rec && rec.cit && rec.cit.length) {
+    const wasOpen = oldSrcs.open;
+    const fresh = sourcesBar(rec.cit);
+    if (fresh) {
+      fresh.open = wasOpen;
+      oldSrcs.replaceWith(fresh);
+    }
   }
 
   const lw = bot.querySelector(".loop-warn:not(.tr-warn)");
@@ -2094,13 +2124,26 @@ function titleText(c) {
   return uiLang === "ug" ? (c.tu || raw) : (c.tzh || raw);
 }
 
-/* 切到维语时，把当前会话里"中文生成、没有维语版本"的答案补译一遍。
-   和预问诊 pvLocalize() 是同一件事：同一句话换文本，不重问模型。
-   云端翻译偶发失败（实测同一段长答案两次成功、一次 fetch 抛错），失败后
-   不能钉死等用户手动切语言——安排自动重试，最多三次，十秒一轮。
-   busy 标记挡住重入：切语言、收尾、定时重试可能同时打进来。 */
+/* ------------------------------------------------------------ 整体语言包
+
+   切语言的定义始终只有一条：**同一句话换文本，不重问模型。**
+
+   以前这里把「答案 / 问题 / 标题」拆成三份，各翻各的、各回填各的，来源面板
+   干脆没进链——于是用户永远看到"翻了一半"的撕裂画面：正文维语了、气泡还
+   中文、来源一大段中文。这不是翻译器坏了，是清单不完整 + 分批到达。
+
+   现在把屏幕上会出现中文的**每一处**收进同一个语言包，一次打包、一次请求、
+   一次回填、一次重画。清单：
+     ① 正文 a → ug        ② 用户问题 q → qu        ③ 会话标题 title → tu
+     ④ 来源 doc_title / heading_path / preview → _u_*（每条引用各三处）
+   slots 与 texts 一一对应，回填按位置写回各自对象。译文落本地存档，
+   切回来是原文逐字还原；服务端缓存命中时整包毫秒级返回。
+
+   云端翻译偶发失败 → 整体安排重试（最多三次，十秒一轮），期间保持原文不闪。
+   busy 挡住重入：切语言、收尾、定时重试可能同时打进来。 */
 let localizeSeq = 0;
 let localizeBusy = false;
+let localizeBusyAt = 0;
 let localizeRetry = null;
 function scheduleLocalizeRetry() {
   if (localizeRetry) clearTimeout(localizeRetry);
@@ -2109,40 +2152,149 @@ function scheduleLocalizeRetry() {
     if (uiLang === "ug") askLocalize();
   }, 10000);
 }
-/* 切到维语时把「答案 + 用户问题 + 会话标题」一次打包补译。
-   以前答案和问题各发一个请求，实测两路并发撞上云端限流，答案等了 173 秒
-   还没出；合并后并发度回到翻译器自己的 4 路，稳定得多。 */
-async function askLocalize() {
-  if (uiLang !== "ug" || localizeBusy) return;
+
+/* 该文件所有待译文本 → { texts, slots }。
+   每个 slot 是 { set(text), owner, fail, at, try }：set 把译文写回对应字段，
+   owner 是持有失败计数的对象。只收"中文且还没有译文"的条目。 */
+function collectLocalizePack() {
   const chat = currentChat();
-  if (!chat) return;
+  const texts = [];
+  const slots = [];
+  if (!chat) return { texts, slots };
   const retryable = (x, fail, at, tries) =>
     !x[fail] || ((x[tries] || 0) < 3 && Date.now() - (x[at] || 0) >= 9000);
-  // 问答记录一轮一条 {q, a, al, ...}，没有 role 字段——别按 bot 过滤，
-  // 那会把所有记录滤掉，补译看着"成功"其实一次都没发。
-  const todo = chat.msgs.filter((m) => {
-    if (!m.a || m.ug) return false;
-    // 存量错标：正文明明是中文，标记却写着 ug。就地改回 zh，否则补译
-    // 永远轮不到它——这正是「老会话里切维语还是一屏中文」的根因。
+  const add = (text, owner, set, fail, at, tries) => {
+    texts.push(text);
+    slots.push({ owner, set, fail, at, tries });
+  };
+
+  // ① 正文。问答记录一轮一条 {q, a, al, ...}，没有 role 字段——别按 bot 过滤。
+  chat.msgs.forEach((m) => {
+    if (!m.a || m.ug) return;
+    // 存量错标：正文明明是中文，标记却写着 ug。就地改回 zh，否则永远轮不到它。
     if (m.al !== "zh" && saysChinese(m.a)) m.al = "zh";
-    if (m.al !== "zh") return false;
-    return retryable(m, "ugFail", "ugFailAt", "ugTry");
+    if (m.al !== "zh" || !retryable(m, "ugFail", "ugFailAt", "ugTry")) return;
+    add(m.a, m, (v) => { m.ug = v; }, "ugFail", "ugFailAt", "ugTry");
   });
-  // 问题气泡和侧栏标题是短句，不能用答案那套 20 字门槛。
-  const qt = chat.msgs.filter((m) => m.q && !m.qu && !saysUyghur(m.q)
-    && retryable(m, "quFail", "quFailAt", "quTry"));
-  const ct = chats.filter((c) => (c.c || "med") === view && c.title && !c.tu
-    && !saysUyghur(c.title) && retryable(c, "tuFail", "tuFailAt", "tuTry"));
-  if (!todo.length && !qt.length && !ct.length) return;
+  // ② 用户问题：短句，不能用正文那套 20 字门槛。
+  chat.msgs.forEach((m) => {
+    if (!m.q || m.qu || saysUyghur(m.q)
+        || !retryable(m, "quFail", "quFailAt", "quTry")) return;
+    add(m.q, m, (v) => { m.qu = v; }, "quFail", "quFailAt", "quTry");
+  });
+  // ③ 会话标题：侧栏只列当前板块，补译也只补这一栏的。
+  chats.forEach((c) => {
+    if ((c.c || "med") !== view || !c.title || c.tu || saysUyghur(c.title)
+        || !retryable(c, "tuFail", "tuFailAt", "tuTry")) return;
+    add(c.title, c, (v) => { c.tu = v; }, "tuFail", "tuFailAt", "tuTry");
+  });
+  // ④ 来源标题 / 小节路径：短文本，和用户第一眼读到的正文同批翻。
+  //    这两处以前从没进翻译链，切到维语后出处行挂着中文文件名很扎眼。
+  //    preview 原文是折叠面板里的证据摘录，另走低优先级补译链——它动辄几百字，
+  //    按行切成十几块 × 多条引用，混进主包会撞云端限流、连正文都翻不出来。
+  //    条数不设 6 条那种硬顶：一轮答案常带 8 条引用，卡在 6 条就会剩下最后
+  //    两条永远中文——用户看到的正是"每次都有不翻译的"。
+  chat.msgs.forEach((m) => {
+    (m.cit || []).forEach((c) => {
+      ["doc_title", "heading_path"].forEach((f) => {
+        const v = c[f];
+        const key = "_u_" + f;
+        if (!v || c[key] || saysUyghur(v)) return;
+        add(String(v), c, (out) => { c[key] = out; },
+          "_uFail_", "_uAt_", "_uTry_");
+      });
+    });
+  });
+  return { texts, slots };
+}
+
+/* 来源预览原文是证据摘录，几百字、按行能切成十几块——塞进主包会撞云端限流、
+   连正文都翻不出来（实测一次提问堆积到 117 线程假死）。所以单独走一条
+   低优先级链：一条一条翻，翻好就重绘来源面板。它在折叠面板里，晚几秒补齐
+   用户根本察觉不到，但正文/问题/标题的整体切换不被它拖住。 */
+let previewBusy = false;
+async function askPreviewLocalize() {
+  if (uiLang !== "ug" || previewBusy) return;
+  const chat = currentChat();
+  if (!chat) return;
+  const todo = [];
+  chat.msgs.forEach((m) => (m.cit || []).forEach((c) => {
+    const v = c.preview;
+    if (!v || c._u_preview || saysUyghur(v)) return;
+    if ((c._uPreviewTry || 0) >= 3) return;      // 翻三次都不成，留原文止损
+    todo.push({ c, text: String(v).slice(0, 600) });
+  }));
+  if (!todo.length) return;
+  previewBusy = true;
+  let failed = false;
+  try {
+    // 三条一批并发翻：一条一条串行时，8 条来源能拖到两分半，用户展开面板
+    // 看到的还是半屏中文。批量+并发把它压到十几秒。
+    for (let i = 0; i < todo.length; i += 3) {
+      if (uiLang !== "ug") break;
+      const batch = todo.slice(i, i + 3);
+      batch.forEach((it) => { it.c._uPreviewTry = (it.c._uPreviewTry || 0) + 1; });
+      try {
+        const res = await fetch("/api/answer/localize", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ texts: batch.map((it) => it.text) }),
+        });
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const d = await res.json();
+        const outs = d.translations || [];
+        batch.forEach((it, k) => {
+          const out = outs[k];
+          if (out) { it.c._u_preview = out; it.c._uPreviewTry = 0; }
+          else failed = true;
+        });
+        if (uiLang === "ug") { saveChats(); repaintSources(); }
+      } catch (err) {
+        console.warn("[answer] preview localize batch", err);
+        failed = true;                     // 单批失败不影响后面几批
+      }
+    }
+  } finally {
+    previewBusy = false;
+  }
+  // 有失败就过一会儿再来一轮：失败一次就永远留中文，正是"总有不翻译的"。
+  if (failed && uiLang === "ug" && !previewRetry) {
+    previewRetry = setTimeout(() => {
+      previewRetry = null;
+      if (uiLang === "ug") askPreviewLocalize();
+    }, 12000);
+  }
+}
+let previewRetry = null;
+
+/* 只重绘来源面板：补译好的预览原文落位，其余区域保持不动。 */
+function repaintSources() {
+  document.querySelectorAll("#msgs .msg.bot").forEach((bot) => {
+    const rec = bot._rec;
+    const old = bot.querySelector(".srcs");
+    if (!rec || !old || !(rec.cit || []).length) return;
+    const wasOpen = old.open;
+    const fresh = sourcesBar(rec.cit);
+    if (fresh) { fresh.open = wasOpen; old.replaceWith(fresh); }
+  });
+}
+
+async function askLocalize() {
+  // 看门狗：一次请求卡死（网络断、服务重启）会把 busy 永远钉在 true，
+  // 之后每次切语言都"什么都不发生"——界面永远停在原文。超过 3 分钟强制放行。
+  if (localizeBusy && Date.now() - localizeBusyAt > 180000) localizeBusy = false;
+  if (uiLang !== "ug" || localizeBusy) return;
+  const { texts, slots } = collectLocalizePack();
+  // 主内容已经全齐时也要启动来源预览补译——它在折叠面板里，用户展开时
+  // 该看到维语，不能因为主包为空就永远不补。
+  if (!texts.length) { askPreviewLocalize(); return; }
   localizeBusy = true;
-  todo.forEach((m) => { m.ugTry = (m.ugTry || 0) + 1; });
-  qt.forEach((m) => { m.quTry = (m.quTry || 0) + 1; });
-  ct.forEach((c) => { c.tuTry = (c.tuTry || 0) + 1; });
+  localizeBusyAt = Date.now();
+  slots.forEach((s) => { s.owner[s.tries] = (s.owner[s.tries] || 0) + 1; });
   const seq = ++localizeSeq;
-  const texts = [...todo.map((m) => m.a), ...qt.map((m) => m.q), ...ct.map((c) => c.title)];
   const tip = $("toolChip");
   const oldTip = tip ? tip.textContent : "";
-  if (tip) tip.textContent = t.translating;
+  // 整包没回来之前挂"整体切换中"：用户看到的是明确状态，而不是翻一半的页面。
+  if (tip) tip.textContent = t.switching;
   try {
     const res = await fetch("/api/answer/localize", {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -2151,39 +2303,43 @@ async function askLocalize() {
     if (!res.ok) throw new Error("HTTP " + res.status);
     const d = await res.json();
     if (seq !== localizeSeq || uiLang !== "ug") return;   // 又切走了：丢弃这次结果
-    const at = (i) => d.translations && d.translations[i];
-    todo.forEach((m, i) => {
-      const text = at(i);
-      if (text) { m.ug = text; m.ugFail = false; m.ugFailAt = 0; m.ugTry = 0; }
-      else { m.ugFail = true; m.ugFailAt = Date.now(); }
+    const outs = d.translations || [];
+    let failed = false;
+    slots.forEach((s, i) => {
+      const out = outs[i];
+      if (out) {
+        s.set(out);
+        s.owner[s.fail] = false;
+        s.owner[s.at] = 0;
+        s.owner[s.tries] = 0;
+      } else {
+        s.owner[s.fail] = true;
+        s.owner[s.at] = Date.now();
+        failed = true;
+      }
     });
-    qt.forEach((m, i) => {
-      const text = at(todo.length + i);
-      if (text) { m.qu = text; m.quFail = false; m.quFailAt = 0; m.quTry = 0; }
-      else { m.quFail = true; m.quFailAt = Date.now(); }
-    });
-    ct.forEach((c, i) => {
-      const text = at(todo.length + qt.length + i);
-      if (text) { c.tu = text; c.tuFail = false; c.tuFailAt = 0; c.tuTry = 0; }
-      else { c.tuFail = true; c.tuFailAt = Date.now(); }
-    });
+    // 一处翻译全部落地后，整页一次重画——答案、来源、气泡、标题同时换。
     saveChats();
-    repaintBots();
-    repaintUsers();
-    renderSessions();
-    const failed = todo.some((m) => m.ugFail) || qt.some((m) => m.quFail)
-      || ct.some((c) => c.tuFail);
+    repaintAll();
+    // 主内容切换完成后，来源预览原文走低优先级链后台补齐（不挡整体切换）。
+    askPreviewLocalize();
     if (failed) scheduleLocalizeRetry();
   } catch (err) {
     console.warn("[answer] localize", err);
-    todo.forEach((m) => { m.ugFail = true; m.ugFailAt = Date.now(); });
-    qt.forEach((m) => { m.quFail = true; m.quFailAt = Date.now(); });
-    ct.forEach((c) => { c.tuFail = true; c.tuFailAt = Date.now(); });
+    slots.forEach((s) => { s.owner[s.fail] = true; s.owner[s.at] = Date.now(); });
     scheduleLocalizeRetry();
   } finally {
     localizeBusy = false;
     if (tip && seq === localizeSeq) tip.textContent = oldTip;
   }
+}
+
+/* 整页一次重画：正文 + 来源 + 用户气泡 + 侧栏标题，缺一不可。
+   切语言、补译落地都走这一条，绝不逐条刷。 */
+function repaintAll() {
+  repaintBots();
+  repaintUsers();
+  renderSessions();
 }
 
 /* 按当前语言重画所有已完成的答案（切语言、补译回来都走这一条） */
@@ -2208,13 +2364,18 @@ function setLangMode(on) {
   try { localStorage.setItem(LANG_KEY, uiLang); } catch (e) { /* 隐私模式忽略 */ }
   t = T[uiLang] || T[info.lang];
   applyChrome();          // 内含 renderLangSwitch：高亮跟着走
-  // 按 DOM 重画所有回答（含侧栏里点开的历史）。渲染只看 altMode，
-  // 所以流式没结束时后续 delta 也不会把已切过来的原稿冲掉。
-  repaintBots();
-  repaintUsers();
-  renderSessions();
-  // 切到维语：缺维语版本的中文答案 / 问题 / 标题原地补译（同一句话换文本）。
+  // 整体牵动的关键：内容语言包**齐备**才整页一次重画；切到维语但还没备齐时
+  // 保持内容现状不动，askLocalize 立即挂"整体切换中"，等整包一次翻译回来
+  // 再 repaintAll——用户看到的不是"答案维语了、气泡和来源还中文"的撕裂画面。
+  // 切回中文永远是齐备的（原文都在），所以总能瞬间整体还原。
+  const pending = (uiLang === "ug") ? collectLocalizePack().texts.length : 0;
+  if (!pending) repaintAll();
+  // 切到维语：把缺的所有内容一次打包补译（齐备时空转）。
   askLocalize();
+  // 补译没接上（上一次请求还挂着、或刚被看门狗放行）就排一次重试：
+  // 绝不允许"切了语言，界面一动不动"这种死状态留着。
+  if (uiLang === "ug" && !localizeBusy
+      && collectLocalizePack().texts.length) scheduleLocalizeRetry();
   // 预问诊气泡也按新语言重挑一份文本重画。**不重开会话、不清空、不重发请求**
   // ——和上面那个答案区的循环是同一件事。以前这里是"换语言就 pv.gen++ 重开
   // 一场"，那等于给预问诊单开一套语言系统：界面切个语言，患者的病史全没了。

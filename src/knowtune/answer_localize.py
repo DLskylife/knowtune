@@ -15,6 +15,8 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+import threading
+import time
 from typing import Any
 
 from . import translation_cache
@@ -22,6 +24,12 @@ from . import translation_cache
 # 翻译模型在 250 字以上就开始漏译/回原文（实测 150/250 字过，294 字整条被
 # 质量闸门判废）。按行切成小段分别翻，既保住换行结构，也让多条能并发。
 _CHUNK = 180
+
+# 单次翻译的块数上限：挡的是"一次请求无上限地打云端"这种失控，不是正常用量。
+# 一轮答案的主包 = 正文几块 + 每条引用的标题/小节各一块，8 条引用也就 25 块上下，
+# 48 留足余量；以前设 24 时，引用一多就会把最后几条标题挤到上限外，那几条就
+# 永远停在中文——用户说的"每次都有不翻译的"有一部分正是这么来的。
+_MAX_JOBS = 48
 
 # 排版符号属于提示词契约：答案靠 ### / - / [n] 在前端排出层次，
 # 译文把这些吃掉就变成一大片等重的字，等于白改。
@@ -31,8 +39,56 @@ _SYS = (
     "一行对一行；只输出译文，不要解释、不要引号、不要改写结构。\n\n"
 )
 
+# 同一句话同时只翻一次：后台预译和切语言补译经常撞在同一批文本上。
+_INFLIGHT: dict[str, threading.Event] = {}
+_INFLIGHT_LOCK = threading.Lock()
 
-def localize_texts(texts: list[str], *, limit: int = 8) -> dict[str, Any]:
+
+def _claim(texts: list[str]) -> tuple[dict[str, threading.Event],
+                                     list[tuple[str, threading.Event]]]:
+    """登记在飞翻译。返回（本路负责翻的，别的请求正在翻的）。"""
+    mine: dict[str, threading.Event] = {}
+    others: list[tuple[str, threading.Event]] = []
+    with _INFLIGHT_LOCK:
+        for t in texts:
+            ev = _INFLIGHT.get(t)
+            if ev is None:
+                ev = threading.Event()
+                _INFLIGHT[t] = ev
+                mine[t] = ev
+            else:
+                others.append((t, ev))
+    return mine, others
+
+
+def _release(mine: dict[str, threading.Event]) -> None:
+    """放开登记并叫醒等在后面的请求。先摘牌再叫醒，别让新请求抢到已完成的牌。"""
+    with _INFLIGHT_LOCK:
+        for t, ev in mine.items():
+            if _INFLIGHT.get(t) is ev:
+                _INFLIGHT.pop(t, None)
+    for ev in mine.values():
+        ev.set()
+
+
+def _steal(texts: list[str]) -> dict[str, threading.Event]:
+    """把还挂在别人名下、但已经等超时的牌夺过来自己翻。
+
+    上游请求异常退出时可能漏放牌；不夺回来的话，后面每一次切语言都会白等
+    45 秒再空手而归——表现就是"整屏中文，怎么切都不翻"。
+    """
+    mine: dict[str, threading.Event] = {}
+    with _INFLIGHT_LOCK:
+        for t in texts:
+            ev = _INFLIGHT.get(t)
+            if ev is not None and not ev.is_set():
+                new = threading.Event()
+                _INFLIGHT[t] = new
+                mine[t] = new
+    return mine
+
+
+def localize_texts(texts: list[str], *, limit: int = 64) -> dict[str, Any]:
     """把中文答案补译成维语。返回 `{"translations": [...], "error": ""}`。
 
     每条与输入按位置一一对应；翻不出来的回空串，界面保留原文 + 语种戳，
@@ -48,7 +104,37 @@ def localize_texts(texts: list[str], *, limit: int = 8) -> dict[str, Any]:
     if not todo:
         return {"translations": [cached.get(t, "") for t in clean], "error": ""}
 
-    # ② 未命中的才叫模型。翻译器取不到就如实报，别假装成功。
+    # ①' 同一句话只翻一次：提问收尾的后台预译和用户切语言的补译经常同时
+    #     打到同一批文本上，两边都翻等于把云端请求量翻倍，冷启动从 25 秒拖到
+    #     50 秒，还更容易撞限流。这里按文本登记在飞任务，后到的一路等前一路
+    #     落缓存，再从缓存取。
+    mine, others = _claim(todo)
+    try:
+        if others:
+            # 等前一路落缓存。上限 45 秒：两路文本集合交错时理论上会互相等，
+            # 超时后各自把剩下的翻掉，不会真的卡死。
+            deadline = time.time() + 45.0
+            for _t, ev in others:
+                ev.wait(max(0.0, deadline - time.time()))
+            got = translation_cache.get([t for t, _ in others])
+            cached.update(got)
+            # 前一路没翻出来的自己补上；牌还挂在别人名下的（上游异常没释放）
+            # 直接夺回来，否则这一路会空手而归、整屏中文。
+            still = [t for t, _ in others if t not in got]
+            if still:
+                mine.update(_steal(still))
+            todo = [t for t in todo if t not in cached and t in mine]
+        if not todo:
+            return {"translations": [cached.get(t, "") for t in clean],
+                    "error": ""}
+        return _translate(clean, cached, todo)
+    finally:
+        _release(mine)          # 任何路径都要放行等在同一批文本上的另一路
+
+
+def _translate(clean: list[str], cached: dict[str, str],
+               todo: list[str]) -> dict[str, Any]:
+    """真正调模型的部分。`cached` 已有译文，`todo` 是本路负责翻的文本。"""
     from .previsit.app import ensure_engine
     from previsit.chat import looks_uyghur
 
@@ -66,7 +152,9 @@ def localize_texts(texts: list[str], *, limit: int = 8) -> dict[str, Any]:
     def one(text: str) -> tuple[str, str]:
         last = "没有可用翻译客户端"
         for client in clients:
-            for _ in range(2):
+            for attempt in range(2):
+                if attempt:
+                    time.sleep(0.6)     # 云端限流是瞬时的，立刻重试大概率还撞
                 try:
                     out = client.complete(
                         [{"role": "system", "content": _SYS},
@@ -83,27 +171,71 @@ def localize_texts(texts: list[str], *, limit: int = 8) -> dict[str, Any]:
         return "", last
 
     # 按行成块：### 小标题和 - 要点各自带着换行进译文，回来照样是一行对一行。
+    # 块数封顶：正文优先（前面的 text 先切），来源预览这种长文本排在后面，
+    # 超出的块直接丢弃——那条整条判废留原文，不会半中半维。
     jobs: list[tuple[int, str]] = []
+    truncated: set[int] = set()          # 切到一半被块数上限掐断的，整条判废
     for i, text in enumerate(todo):
+        if len(jobs) >= _MAX_JOBS:
+            truncated.add(i)
+            continue
         cur: list[str] = []
         size = 0
-        for line in text.split("\n"):
+        lines = text.split("\n")
+        for li, line in enumerate(lines):
+            if len(jobs) >= _MAX_JOBS:
+                truncated.add(i)
+                break
             if cur and size + len(line) > _CHUNK:
                 jobs.append((i, "\n".join(cur)))
                 cur, size = [], 0
             cur.append(line)
             size += len(line) + 1
-        if cur:
+        if i in truncated:
+            continue
+        if cur and len(jobs) < _MAX_JOBS:
             jobs.append((i, "\n".join(cur)))
+        elif cur:
+            truncated.add(i)
 
-    with ThreadPoolExecutor(max_workers=min(4, len(jobs))) as pool:
+    # 并发度：正文一条长答案要切 3～6 块，串行翻要等 30 秒以上。6 路是实测
+    # 云端还能稳住的档位（再高就开始成片 429，重试反而更慢）。
+    with ThreadPoolExecutor(max_workers=min(6, len(jobs))) as pool:
         pieces = list(pool.map(lambda job: one(job[1]), jobs))
 
     done: list[str] = []
     for i in range(len(todo)):
         seg = [(p, err) for (idx, _), (p, err) in zip(jobs, pieces) if idx == i]
-        # 一段没译出来就整条留原文 + 戳：半中半维比全中文更难读。
-        done.append("\n".join(p for p, _ in seg) if seg and all(p for p, _ in seg) else "")
+        # 一段没译出来、或切块被上限掐断，就整条留原文 + 戳：
+        # 半中半维比全中文更难读。
+        ok = seg and i not in truncated and all(p for p, _ in seg)
+        done.append("\n".join(p for p, _ in seg) if ok else "")
+
+    # 补漏：并发翻的时候偶尔有一块撞 429，整条就被判废——用户看到的正是
+    # "正文还是中文"。这里把失败的条**串行**再翻一遍（一次一块、留间隔），
+    # 并发压力归零，成功率接近 100%。只补失败的，正常路径不多花一毫秒。
+    for i in range(len(todo)):
+        if done[i] or i in truncated:
+            continue
+        chunks = [text for idx, text in jobs if idx == i]
+        if not chunks:
+            continue
+        outs: list[str] = []
+        for chunk in chunks:
+            got = ""
+            for attempt in range(2):
+                if attempt:
+                    time.sleep(1.2)
+                out, _err = one(chunk)
+                if out:
+                    got = out
+                    break
+            if not got:
+                outs = []
+                break
+            outs.append(got)
+        if outs:
+            done[i] = "\n".join(outs)
 
     # ③ 翻成的写缓存：下次（含刷新、换设备、别的会话）直接命中。
     fresh = {text: out for text, out in zip(todo, done) if out}
@@ -134,7 +266,10 @@ def warm(texts: list[str]) -> None:
     _WARM_POOL.submit(_warm_job, todo)
 
 
-_WARM_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="localize-warm")
+# 预热是"加速"，不是"抢占"：单 worker 排队翻，绝不和前台切语言时的补译
+# 抢翻译器 / 撞云端限流。来源文本长，排队慢一点无所谓——它本来就显示在
+# 折叠的来源面板里，不是用户第一眼要读的正文。
+_WARM_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="localize-warm")
 
 
 def _warm_job(todo: list[str]) -> None:
