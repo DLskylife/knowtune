@@ -5,21 +5,23 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
 <title>ئۇيغۇر تېبابىتى بىلىم سوئال-جاۋاب سىستېمىسى</title>
-<link rel="stylesheet" href="/style.css?v=1.7.47">
+<link rel="stylesheet" href="/style.css?v=1.7.48">
 <link rel="icon" href="data:,">
 <script>
   /*
    * 构建号自检。HTML 是 no-store 的，但 WebView 仍可能把旧的 app.js 留在缓存里，
    * 于是出现"HTML 新、JS 旧"：按钮按新版渲染出来了，事件却是旧 JS 绑的（或根本
    * 没绑）——表现就是"按钮在，点了没反应"。这里用页面里这份**一定是新的**编号去
-   * 核对 app.js 报上来的编号，对不上就强制换一次。只换一次（sessionStorage 记
-   * 一笔），免得极端情况下刷成死循环。
+   * 核对 app.js 报上来的编号，对不上就强制换一次。记的是「这次要升到的
+   * 版本」，不是「刷过一次」——早先写死 "1"，第一次升级刷过之后，后面
+   * 每次升级都被这枚标记挡住，浏览器一直跑旧 JS，界面修了也看不见。
    */
-  window.SITE_REQ_BUILD = "1.7.47";
+  window.SITE_REQ_BUILD = "1.7.48";
   addEventListener("load", function () {
     if (window.SITE_BUILD === window.SITE_REQ_BUILD) return;
-    if (sessionStorage.getItem("knowtune.site.reloaded")) return;
-    sessionStorage.setItem("knowtune.site.reloaded", "1");
+    const key = "knowtune.site.reloaded";
+    if (sessionStorage.getItem(key) === window.SITE_REQ_BUILD) return;
+    sessionStorage.setItem(key, window.SITE_REQ_BUILD);
     location.replace(location.pathname + "?cb=" + Date.now());
   });
 </script>
@@ -172,6 +174,6 @@
     </footer>
   </div>
 </div>
-<script src="/app.js?v=1.7.47"></script>
+<script src="/app.js?v=1.7.48"></script>
 </body>
 </html>

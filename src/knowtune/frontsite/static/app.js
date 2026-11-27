@@ -22,7 +22,7 @@
 
 /* 构建号：和 index.html 里那份必须一致，不一致说明浏览器拿的是旧 JS，
    页面加载完会强制换一次（见 index.html 里的自检脚本）。 */
-window.SITE_BUILD = "1.7.47";
+window.SITE_BUILD = "1.7.48";
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
@@ -2048,9 +2048,20 @@ function renderLangSwitch() {
     + `${esc(LANG_NAME[code] || code)}</button>`).join("");
 }
 
+/* 正文主体是不是中文。按字符数判，不按 al 标记判：历史记录里躺着一批
+   al=ug 但正文中文的存量数据（翻译失败时旧代码照抄了 meta 里的目标语言），
+   只认标记就会整条漏掉——用户在老会话里看到的中文就是这么来的。 */
+function saysChinese(text) {
+  const s = String(text || "");
+  const han = (s.match(/[\u3400-\u9fff]/g) || []).length;
+  const uy = (s.match(/[\u0600-\u06ff]/g) || []).length;
+  return han > 20 && han > uy * 2;
+}
+
 /* 切到维语时，把当前会话里"中文生成、没有维语版本"的答案补译一遍。
    和预问诊 pvLocalize() 是同一件事：同一句话换文本，不重问模型。
-   译文写回本地会话（rec.ug），同一条只翻一次；失败的那条留原文 + 语种戳。 */
+   译文写回本地会话（rec.ug），同一条只翻一次；失败留原文 + 戳，
+   冷却一分钟后可再试——旧代码把失败永久钉死，一次网络抖动就再也不翻了。 */
 let localizeSeq = 0;
 async function askLocalize() {
   if (uiLang !== "ug") return;
@@ -2058,8 +2069,15 @@ async function askLocalize() {
   if (!chat) return;
   // 问答记录一轮一条 {q, a, al, ...}，没有 role 字段——别按 bot 过滤，
   // 那会把所有记录滤掉，补译看着"成功"其实一次都没发。
-  const todo = chat.msgs.filter((m) =>
-    m.a && m.al === "zh" && !m.ug && !m.ugFail);
+  const todo = chat.msgs.filter((m) => {
+    if (!m.a || m.ug) return false;
+    // 存量错标：正文明明是中文，标记却写着 ug。就地改回 zh，否则补译
+    // 永远轮不到它——这正是「老会话里切维语还是一屏中文」的根因。
+    if (m.al !== "zh" && saysChinese(m.a)) m.al = "zh";
+    if (m.al !== "zh") return false;
+    // 失败过的给一分钟冷却：既不让每次渲染都发一轮请求，也不永久钉死。
+    return !m.ugFail || Date.now() - (m.ugFailAt || 0) >= 60000;
+  });
   if (!todo.length) return;
   const seq = ++localizeSeq;
   const tip = $("toolChip");
@@ -2076,14 +2094,20 @@ async function askLocalize() {
     if (seq !== localizeSeq || uiLang !== "ug") return;   // 又切走了：丢弃这次结果
     todo.forEach((m, i) => {
       const text = d.translations && d.translations[i];
-      if (text) m.ug = text;
-      else m.ugFail = true;
+      if (text) {
+        m.ug = text;
+        m.ugFail = false;
+        m.ugFailAt = 0;
+      } else {
+        m.ugFail = true;
+        m.ugFailAt = Date.now();
+      }
     });
     saveChats();
     repaintBots();
   } catch (err) {
     console.warn("[answer] localize", err);
-    todo.forEach((m) => { m.ugFail = true; });
+    todo.forEach((m) => { m.ugFail = true; m.ugFailAt = Date.now(); });
   } finally {
     if (tip && seq === localizeSeq) tip.textContent = oldTip;
   }
