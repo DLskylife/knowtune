@@ -1,6 +1,6 @@
 /* 构建号：与 index.html 里那份一致，不一致说明浏览器拿到的是旧 JS，
    页面加载完会强制换一次（见 index.html 的自检脚本）。 */
-window.ADMIN_BUILD = "0.9.119";
+window.ADMIN_BUILD = "0.9.120";
 
 const $ = (id) => document.getElementById(id);
 
@@ -3108,6 +3108,8 @@ const VIEW_BOX = { home: "viewHome", chat: "viewChat", kb: "viewKb",
 
 function setView(name, opts = {}) {
   if (!VIEW_BOX[name]) name = "chat";
+  // 系统资源的 5 秒轮询只在模型页有意义，切走即停。
+  if (name !== "models") stopSysRes();
   state.view = name;
   $("app").dataset.view = name;
   Object.entries(VIEW_BOX).forEach(([key, id]) => { $(id).hidden = key !== name; });
@@ -4978,6 +4980,110 @@ function keyNoteHtml(d) {
   </div>`;
 }
 
+/* ------------------------------------------------------- 模型页 · 系统资源 */
+
+/* 模型页顶上那四格读数。数据来自 /api/system/resources（只读、不发网络请求），
+   5 秒一次——显存和内存是"现在还剩多少"，十秒前的数就是另一个决策了。
+   轮询只在模型视图里活着：切到对话/知识库立刻停，不让一个看不见的面板
+   每 5 秒打一次接口。 */
+let resTimer = null;
+let resBusy = false;
+
+function sysResHtml() {
+  const cell = (k, label) => `<div class="res-cell">
+    <span class="res-k">${label}</span>
+    <b class="res-v" id="res${k}">—</b>
+    <span class="res-bar"><i id="res${k}Bar"></i></span>
+    <span class="res-sub" id="res${k}Sub">—</span>
+  </div>`;
+  return `<section class="card sys-res" id="sysRes">
+    <header class="card-head">
+      <h3>系统资源</h3>
+      <span class="aside" id="sysResHint">读取中…</span>
+      <span class="sp"></span>
+      <button class="mini" id="sysResRefresh" title="立即采样一次">⟳ 刷新</button>
+    </header>
+    <div class="res-grid">
+      ${cell("Cpu", "CPU")}
+      ${cell("Mem", "内存")}
+      ${cell("Gpu", "显存")}
+      ${cell("Disk", "磁盘")}
+    </div>
+  </section>`;
+}
+
+function resGb(mb) { return mb == null ? "—" : `${(mb / 1024).toFixed(1)} GB`; }
+
+function paintRes(k, value, sub, pct, title) {
+  const v = $(`res${k}`);
+  if (!v) return;
+  v.textContent = value;
+  $(`res${k}Sub`).textContent = sub;
+  const bar = $(`res${k}Bar`);
+  if (bar) {
+    const n = pct == null ? 0 : Math.max(0, Math.min(100, pct));
+    bar.style.width = `${n}%`;
+    bar.classList.toggle("hi", n >= 85);
+  }
+  if (title) $(`res${k}`).title = title;
+}
+
+function paintSysRes(d) {
+  const c = d.cpu || {}, m = d.memory || {}, g = d.gpu || {}, k = d.disk || {}, p = d.process || {};
+  const hint = $("sysResHint");
+  if (hint) {
+    hint.textContent = d.error
+      ? d.error
+      : `采样于 ${new Date(d.at * 1000).toLocaleTimeString("zh-CN", { hour12: false })} · 每 5 秒刷新`;
+    hint.title = hint.textContent;
+  }
+  paintRes("Cpu", c.percent == null ? "—" : `${c.percent}%`,
+    c.logical ? `${c.physical || c.logical} 核 · ${c.logical} 线程` : "—",
+    c.percent, "");
+
+  paintRes("Mem", m.total_mb == null ? "—" : `${resGb(m.used_mb)} / ${resGb(m.total_mb)}`,
+    `可用 ${resGb(m.available_mb)}${p.rss_mb != null ? ` · 本进程 ${Math.round(p.rss_mb)} MB` : ""}`,
+    m.percent, "");
+
+  const devs = g.devices || [];
+  const totalMb = devs.reduce((s, x) => s + (x.total_mb || 0), 0);
+  const freeMb = devs.reduce((s, x) => s + (x.free_mb || 0), 0);
+  const usedMb = Math.max(0, totalMb - freeMb);
+  paintRes("Gpu", totalMb ? `${resGb(usedMb)} / ${resGb(totalMb)}` : "—",
+    devs.length
+      ? `${devs.map((x) => x.name.replace(/^NVIDIA\s+/i, "").replace(/^GeForce\s+/i, "").replace(/\s+GPU$/i, "")).join(" · ")} · 空闲 ${resGb(freeMb)}`
+      : (g.error ? `显存读取失败：${g.error}` : "没有可用 GPU"),
+    totalMb ? usedMb / totalMb * 100 : null,
+    devs.map((x) => `${x.id} ${x.name}：${resGb(x.used_mb)} / ${resGb(x.total_mb)}`).join("\n"));
+
+  paintRes("Disk", k.total_gb == null ? "—" : `${k.used_gb.toFixed(1)} / ${k.total_gb.toFixed(1)} GB`,
+    k.path ? `${k.path} · 剩余 ${k.free_gb == null ? "—" : k.free_gb.toFixed(1)} GB` : "—",
+    k.percent, k.path ? `数据盘 ${k.path}` : "");
+}
+
+async function loadSysRes() {
+  if (resBusy) return;
+  resBusy = true;
+  try {
+    paintSysRes(await api("/api/system/resources"));
+  } catch (err) {
+    const hint = $("sysResHint");
+    if (hint) { hint.textContent = `读取失败：${err.message}`; hint.title = hint.textContent; }
+  } finally {
+    resBusy = false;
+  }
+}
+
+function startSysRes() {
+  loadSysRes();
+  if (!resTimer) resTimer = setInterval(loadSysRes, 5000);
+}
+
+function stopSysRes() {
+  if (resTimer) { clearInterval(resTimer); resTimer = null; }
+}
+
+
 async function renderModels() {
   $("pageTitle").textContent = "模型服务";
   // 操作按钮不放顶栏：顶栏固定 54px 且不换行，两颗按钮加长文件名挤一行会被裁掉
@@ -5019,6 +5125,7 @@ async function renderModels() {
   syncProviderOptions(d);
 
   box.innerHTML = `<div class="page">
+    ${sysResHtml()}
     ${keyNoteHtml(d)}
     <section class="svc-sec">
       <header class="sec-head">
@@ -5089,6 +5196,9 @@ async function renderModels() {
   bindGatewayChips(state.gateway);
   bindScanPanel();
   bindModelCardActions();
+  const resBtn = $("sysResRefresh");
+  if (resBtn) resBtn.onclick = loadSysRes;
+  startSysRes();
 
   box.querySelectorAll("[data-copy]").forEach((btn) => {
     btn.onclick = async () => {

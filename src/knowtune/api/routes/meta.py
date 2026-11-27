@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import os
 import time
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
-from ... import services as services_mod
+from ... import localmodels, services as services_mod
 from ... import settings as settings_mod
 from ...config import Config, calibration_of, calibration_path, refusal_mode
 from ...dashboard import build as build_dashboard
@@ -191,6 +193,86 @@ def dashboard(request: Request) -> dict:
     return build_dashboard(
         state.cfg, state.conn, started_at=state.started_at, port=request.url.port
     )
+
+
+@router.get("/api/system/resources")
+def system_resources() -> dict:
+    """模型页顶上那块「系统资源」：CPU / 内存 / 磁盘 / 显存。
+
+    只读，不发网络请求。psutil 不是硬依赖（localmodels 里也是可选路径），
+    拿不到就逐项返回 null + 一句 error，前端画成破折号，不能让整页 500。
+     GPU 直接复用 localmodels.devices()——它已经缓存了 60 秒，一次
+     `--list-devices` 子进程不该在 5 秒轮询里反复起。
+    """
+    data: dict[str, Any] = {
+        "at": time.time(),
+        "platform": os.name,
+        "cpu": {"percent": None, "logical": None, "physical": None},
+        "memory": {"total_mb": None, "used_mb": None, "available_mb": None, "percent": None},
+        "disk": {"path": "", "total_gb": None, "used_gb": None, "free_gb": None, "percent": None},
+        "gpu": {"devices": [], "error": None},
+        "process": {"rss_mb": None},
+        "error": None,
+    }
+    try:
+        import psutil
+    except ImportError:
+        data["error"] = "psutil 未安装，资源读数不可用"
+        data["gpu"]["error"] = "未取到"
+        return data
+
+    try:
+        # interval=0.1 是主动采样窗口：interval=None 的第一次调用恒返回 0.0，
+        # 面板会显示一个假的"CPU 没在干活"。100ms 跑在线程池里，不堵首屏。
+        data["cpu"] = {
+            "percent": round(psutil.cpu_percent(interval=0.1), 1),
+            "logical": psutil.cpu_count(logical=True),
+            "physical": psutil.cpu_count(logical=False),
+        }
+        vm = psutil.virtual_memory()
+        data["memory"] = {
+            "total_mb": round(vm.total / 1048576, 1),
+            "used_mb": round(vm.used / 1048576, 1),
+            "available_mb": round(vm.available / 1048576, 1),
+            "percent": vm.percent,
+        }
+        root = Path(__file__).resolve().parents[4]
+        try:
+            du = psutil.disk_usage(str(root))
+            data["disk"] = {
+                "path": str(root),
+                "total_gb": round(du.total / 1073741824, 1),
+                "used_gb": round(du.used / 1073741824, 1),
+                "free_gb": round(du.free / 1073741824, 1),
+                "percent": round(du.percent, 1),
+            }
+        except OSError as exc:
+            data["disk"]["path"] = str(root)
+            data["disk"]["error"] = str(exc)
+        data["process"] = {
+            "rss_mb": round(psutil.Process(os.getpid()).memory_info().rss / 1048576, 1),
+        }
+    except Exception as exc:  # 单个平台取不到某项，不该把整块面板打死
+        data["error"] = f"部分资源读取失败：{exc}"
+
+    try:
+        gpus = []
+        for dev in localmodels.devices():
+            total = dev.get("total_mb") or 0
+            free = dev.get("free_mb") or 0
+            used = max(0, total - free)
+            gpus.append({
+                "id": dev.get("id", ""),
+                "name": dev.get("name", "GPU"),
+                "total_mb": total,
+                "free_mb": free,
+                "used_mb": used,
+                "percent": round(used / total * 100, 1) if total else None,
+            })
+        data["gpu"]["devices"] = gpus
+    except Exception as exc:
+        data["gpu"]["error"] = str(exc)
+    return data
 
 
 @router.get("/api/settings")

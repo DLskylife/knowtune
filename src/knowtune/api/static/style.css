@@ -326,7 +326,7 @@ kbd {
 /* 汇总行比下面两条稍重一点：一眼先看到"能不能用"，再看是哪一环坏了。
    只加字重和一条细分隔，不换色——圆点已经承担了状态语义。 */
 .foot-line.overall { padding-bottom: 6px; margin-bottom: 2px; border-bottom: 1px solid var(--line-soft); }
-.foot-line.overall b { font-weight: 600; color: var(--text-1); }
+.foot-line.overall b { font-weight: 600; color: var(--text); }
 
 
 /* ================================================================= 主区 */
@@ -1323,6 +1323,48 @@ input[type=number].num::-webkit-outer-spin-button { -webkit-appearance: none; ma
   border-color: rgba(232, 163, 61, .38);
   background: rgba(232, 163, 61, .07);
   color: var(--warn);
+}
+
+/* 模型页顶上的系统资源：四格读数，回答"这台机器现在还剩多少"。
+ * 用 card 基线，自己只管栅格和读数——不要另做一套深色块，放到本地/外部
+ * 两节旁边会像另一个产品的组件。 */
+.sys-res { margin-bottom: 18px; }
+.sys-res .card-head .aside { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.res-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  padding: 14px var(--card-pad-x) 15px;
+}
+.res-cell {
+  display: flex; flex-direction: column; gap: 5px;
+  min-width: 0; padding: 10px 12px 11px;
+  background: var(--surface-2); border: 1px solid var(--line-soft);
+  border-radius: var(--r);
+}
+.res-k { font-size: 11px; color: var(--text-3); }
+.res-v {
+  font-size: 17px; font-weight: 600; color: var(--text);
+  line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.res-bar {
+  display: block; height: 3px; border-radius: 2px;
+  background: var(--line); overflow: hidden;
+}
+.res-bar i { display: block; height: 100%; border-radius: inherit; background: var(--accent); transition: width .35s; }
+.res-bar i.hi { background: var(--warn); }
+.res-sub {
+  font-size: 10.5px; color: var(--text-3); line-height: 1.35;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+@media (max-width: 900px) { .res-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+/* 手机宽度一格只剩 136px，"11.2 GB / 15.9 GB" 单行必然被截成 "1..."。
+   宁可折成两行多占一点高度，也别把主读数砍掉——副标题同样允许折行。 */
+@media (max-width: 520px) {
+  .res-grid { gap: 8px; padding: 10px 10px 12px; }
+  .res-cell { padding: 8px 10px 9px; gap: 4px; }
+  .res-v { font-size: 13px; white-space: normal; line-height: 1.25; }
+  .res-sub { white-space: normal; }
 }
 
 /* 两节：本地（.gguf 起进程）和外部（云端地址）。以前混在一个栅格里，
