@@ -22,7 +22,7 @@
 
 /* 构建号：和 index.html 里那份必须一致，不一致说明浏览器拿的是旧 JS，
    页面加载完会强制换一次（见 index.html 里的自检脚本）。 */
-window.SITE_BUILD = "1.7.46";
+window.SITE_BUILD = "1.7.47";
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
@@ -2434,6 +2434,23 @@ async function send() {
         bot.dataset.main = acc;
         paintAnswer(bot, answerEl);
       }
+      // 两段式翻译可能只成了一部分，甚至四招全落空退回中文原稿；直接模式下
+      // 模型也可能没听话吐中文。两种情况 meta 里的 answer_lang 都还写着目标
+      // 语言（维语），照抄就变成「维语作答」的戳挂在一屏中文上，而补译链按
+      // al=zh 筛选时会跳过这条——这就是"界面切了维语、答案还是中文"的根因。
+      const han = (acc.match(/[\u3400-\u9fff]/g) || []).length;
+      const uy = (acc.match(/[\u0600-\u06ff]/g) || []).length;
+      const wrongLang = bot.dataset.alang === "ug" && han > 20 && han > uy * 2;
+      // answer_translated=false 也可能是「部分段落没译出」：那时正文主体已经
+      // 是维语，整条换回中文再去补译只会让用户看一遍「维语→中文→维语」的
+      // 闪烁，还白等一轮翻译。只有正文主体确实是中文时才走补译链。
+      const trBad = wrongLang || (d.answer_translated === false && han >= uy);
+      if (trBad && typeof d.draft === "string" && d.draft.trim()) {
+        // 半中半维的正文没法整段补译；换回完整中文原稿，让补译链翻一份干净源。
+        acc = d.draft;
+        bot.dataset.main = acc;
+        paintAnswer(bot, answerEl);
+      }
       const st = bot.querySelector(".answer.streaming");
       if (st) st.classList.remove("streaming");
       metaEl.remove();
@@ -2454,7 +2471,7 @@ async function send() {
         tra: d.answer_translated === false,
         // 这条答案实际用的语言。切到另一种界面语言时，正文不会被本地"翻译"，
         // 与其让用户对着一段看不懂的文字，不如在底下写清楚它是什么语言。
-        al: bot.dataset.alang || uiLang,
+        al: trBad ? "zh" : (bot.dataset.alang || uiLang),
         // assistant 消息 id：反馈按它关联。前端不再需要别的信息，
         // 但少了它，这条答案就永远标注不上（也就等于白写了库）。
         mid: d.message_id || null,
@@ -2464,6 +2481,8 @@ async function send() {
         chat.msgs.push(rec);
         saveChats();
         renderSessions();
+        // 正文确实是中文的这条，维语界面下当场交给补译链，不必等切语言。
+        if (trBad) askLocalize();
         history.push({ role: "user", content: q },
                      { role: "assistant", content: acc });
       }

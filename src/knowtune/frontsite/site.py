@@ -873,6 +873,11 @@ def build_site(spec, state: Any) -> FastAPI:
                             yield _sse("delta", {"text": one})
                             if ok_segs < len(segs):
                                 error = error or "部分段落未译出"
+                                # 有段落仍是中文，整条就不是"已译成目标语言"。
+                                # 不标出来，前端会把它当成功、照 meta 里的
+                                # answer_lang 记成维语，补译链也跳过这条——
+                                # 用户看到的就是半中半维还挂着「维语作答」。
+                                tr_failed = True
                         if not "".join(acc).strip():
                             # 四招全落空，才把中文草稿交给用户：语言不对，
                             # 也比"什么都没答"强，何况来源还挂在下面。
