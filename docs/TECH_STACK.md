@@ -15,7 +15,7 @@
 
 | 层 | 职责 | 真实文件路径 |
 |---|---|---|
-| **前端层** | 后台管理台 + 前台问答站，纯原生 HTML/CSS/JS，零前端框架、零打包 | `src/knowtune/api/static/{index.html,app.js,style.css}`（后台，构建号 0.9.120）；`src/knowtune/frontsite/static/{index.html,app.js,style.css}`（前台，构建号 1.7.52） |
+| **前端层** | 后台管理台 + 前台问答站，纯原生 HTML/CSS/JS，零前端框架、零打包 | `src/knowtune/api/static/{index.html,app.js,style.css}`（后台，构建号 0.9.120）；`src/knowtune/frontsite/static/{index.html,app.js,style.css}`（前台，构建号 1.7.53） |
 | **服务层** | 启动装配、全部 HTTP 接口、站点线程、预问诊桥接、配置与角色/提示词解析 | `src/knowtune/cli.py`、`src/knowtune/api/app.py`（装配入口）+ `src/knowtune/api/routes/` 8 个模块（88 个端点）、`api/common.py` / `state.py` / `coverage.py`、`src/knowtune/frontsite/{instcfg,runner,site}.py`、`src/knowtune/{config,kbconfig,roles,promptcfg,modelcfg,settings,secrets}.py`、`src/knowtune/previsit/app.py`（桥接装配）、`src/previsit/`（预问诊实现真身，v0.4.0，零 knowtune 依赖） |
 | **能力层** | 导入 / 索引 / 检索 / 生成四类算法 | `src/knowtune/ingest/{loader,cleaner,chunker,pipeline}.py`、`src/knowtune/index/{embedder,vectors,sparse}.py`、`src/knowtune/retrieve/{engine,rerank}.py`、`src/knowtune/generate/{prompt,llm,cite,evidence,support,think}.py` |
 | **存储层** | 单文件库 + 密钥密文 + 运行资产（均不进版本库） | `data/library.db`（SQLite WAL，8 表 + 1 张 FTS5 虚表 + 5 张影子表）、`data/secrets.json`（Windows DPAPI）、`data/models/`、`data/calibration/`、`data/uploads/` |

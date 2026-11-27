@@ -919,6 +919,20 @@ def build_site(spec, state: Any) -> FastAPI:
                 yield _sse("error", {"message": error, "trace_id": trace_id})
                 return
 
+            # 提问收尾即后台预译：把这一轮的中文文本翻好落进服务端缓存，
+            # 用户随后切维语时命中即返（毫秒级），不再对着一屏中文等 12～20 秒。
+            # 只挑中文——维语原文不需要翻。文本必须与前端稍后查询的逐字一致：
+            # 问题用 trim 后的原文，标题用前端同样的 \s+→空格 + 截 40 字规则。
+            # 异步提交，不占流式时间；失败静默，前端补译链仍会兜底。
+            try:
+                _title = re.sub(r"\s+", " ", req.question).strip()[:40]
+                _warm_zh = [x for x in (answer, draft, req.question, _title)
+                            if x and x.strip() and lang_mod.detect(x) == "zh"]
+                if _warm_zh:
+                    answer_localize_mod.warm(list(dict.fromkeys(_warm_zh)))
+            except Exception:
+                pass
+
             report = cite_mod.verify(answer, len(bundle.citations))
             citations = [asdict(c) for c in bundle.citations]
             msg_id = None
