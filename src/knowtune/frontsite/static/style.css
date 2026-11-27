@@ -1,89 +1,103 @@
-/* 前台问答界面样式（2026-10-29，1.7.0：按"左栏 + 居中欢迎语 + 底部输入框"重做）
-   与后台 style.css 完全独立：配色、字体、圆角都不一样，改后台不会动到这里。
-   维吾尔语用阿拉伯字母，字体首选系统自带的 Microsoft Uighur，缺了就退到
-   Noto Naskh Arabic —— 用错字体会让字母连写断开，整页看着像乱码。
-   ⚠ 阿拉伯字母连写：RTL 文本一律不得加 letter-spacing，加了就把词切断。
+/* 前台问答界面样式（2026-11-27，1.7.43：对齐极简聊天界面的版式）
 
-   ── 这次改版唯一的硬规则：布局骨架永不镜像 ──
-   不管界面是维语还是中文：侧栏在左、语言开关在右上、标题在左上、输入框在
-   底部居中、发送按钮在右端、用户气泡在右、AI 回答占满整行。
-   切语言只换字形与行内方向，不让任何元素换边——上一版把整块容器设成
-   dir=rtl，一点切换，徽记、按钮、文字全跑到另一边去，用户当场找不到东西。
-   所以骨架一律用物理 left/right 定位，方向只交给具体文本节点的 dir=auto。
+   参照的界面只有三样东西：左边一条浅灰栏、中间一句问候、下面一张圆角输入卡。
+   所有装饰都退到背景里——没有色块标题栏、没有渐变按钮、没有描边卡片。
+   改版只动"看起来怎样"，不动任何一条行为契约：
+
+   ── 布局骨架永不镜像 ──
+   不管界面是维语还是中文：侧栏在左、标题在中间、输入框在底部居中、
+   发送按钮在右端、用户气泡在右、AI 回答占满整行。
+   切语言只换字形与行内方向，不让任何元素换边。骨架一律用物理
+   left/right 定位，方向只交给具体文本节点的 dir=auto。
+
+   ── 字号基线 ──
+   11.5px 是全局下限，只留给引用编号；说明文字 12–13px；正文与输入框 16px。
+   输入框那 16px 不是审美：小于 16 时 iOS Safari 聚焦会自动放大整页。
+   维吾尔语整体 +1.5～2px（阿拉伯字母字面小、有附加符），规则集中在文件末尾。
 */
 
-/* ── 字号基线（2026-11-06，1.7.11）──
-   11.5px 是全局下限，只留给引用编号这种"方寸标签"；说明文字 12–13px；
-   正文与输入框 16px。输入框那 16px 不是审美：小于 16 时 iOS Safari 聚焦会
-   自动放大整页，用户点一下输入框页面就跳一下。
-   改字号前先看这四行，别再把说明文字写回 10px。 */
-
 :root {
-  --paper: #fbfbf9;
-  --side: #f4f4f0;
+  /* 中性色：白底 + 浅灰侧栏。参考界面的"干净"来自低对比，不是来自留白本身 */
+  --bg: #ffffff;
+  --side: #f9f9f9;
   --surface: #ffffff;
-  --surface-2: #f7f7f4;
-  --line: #e5e3da;
-  --line-soft: #eeece5;
-  --ink: #16211d;
-  --ink-2: #55625b;
-  --ink-3: #8b938d;
-  --brand: #0e5b46;
-  --brand-2: #0a4536;
-  --brand-soft: #e8f1ec;
-  --brand-line: rgba(14, 91, 70, .2);
-  --gold: #a97f43;
-  --gold-soft: #f4ead8;
-  --gold-line: rgba(169, 127, 67, .3);
-  --warn: #a94a2c;
-  --warn-soft: rgba(169, 74, 44, .08);
-  --user-bg: linear-gradient(150deg, #14664f 0%, #0b4a39 100%);
-  --r-xl: 18px;
-  --r-lg: 14px;
-  --r-md: 10px;
-  --shadow-sm: 0 1px 2px rgba(21, 33, 28, .05);
-  --shadow: 0 1px 2px rgba(21, 33, 28, .05), 0 10px 26px -14px rgba(21, 33, 28, .2);
-  --shadow-lg: 0 2px 6px rgba(21, 33, 28, .06), 0 22px 48px -22px rgba(21, 33, 28, .3);
+  --surface-2: #f5f6f7;
+  --surface-3: #eef0f2;
+  --line: #e8eaec;
+  --line-soft: #f0f1f3;
+  --ink: #1b1c1f;
+  --ink-2: #565c66;
+  --ink-3: #9aa0aa;
+  --ink-4: #b9bec6;
+
+  /* 强调色只用在"可以点"和"有依据"两件事上：发送键、选中态、引用牌。
+     大面积色块会让答案看起来像广告，说教感也会跟着上来。 */
+  --acc: #4d6bfe;
+  --acc-2: #3a56e0;
+  --acc-soft: #eef2ff;
+  --acc-line: rgba(77, 107, 254, .22);
+
+  --warn: #d34a3f;
+  --warn-soft: rgba(211, 74, 63, .08);
+  --gold: #b07a24;
+  --gold-soft: rgba(176, 122, 36, .1);
+  --gold-line: rgba(176, 122, 36, .24);
+  --ok: #1f9d6b;
+
+  /* 用户气泡走浅灰而不是品牌色：这是聊天界面里"我说的话"的默认长相，
+     深色实心块会把整页的重心拽到自己身上。 */
+  --user-bg: #f2f3f5;
+  --user-ink: #1b1c1f;
+
+  --r-xl: 24px;
+  --r-lg: 16px;
+  --r-md: 12px;
+  --shadow-sm: 0 1px 2px rgba(17, 20, 26, .04);
+  --shadow: 0 4px 18px rgba(17, 20, 26, .05), 0 1px 2px rgba(17, 20, 26, .04);
+  --shadow-lg: 0 12px 36px rgba(17, 20, 26, .1), 0 2px 6px rgba(17, 20, 26, .05);
+
   --ug: "Microsoft Uighur", "UKIJ Tuz Tom", "ALKATIP Tor", "Noto Naskh Arabic",
         "Segoe UI", Tahoma, sans-serif;
-  /* 中文字体优先：Windows 上让雅黑承载数字和汉字，数字不会比汉字矮一截。
-     之前把 -apple-system / Segoe UI 放前面，数字命中西文字体、汉字命中雅黑，
-     混排时数字字号看着比汉字小一号。 */
-  --zh: "Microsoft YaHei", "PingFang SC", "Segoe UI", -apple-system, sans-serif;
+  /* 中文字体优先：Windows 上让雅黑承载数字和汉字，数字不会比汉字矮一截。 */
+  --zh: "PingFang SC", "Microsoft YaHei", "Noto Sans SC", "Segoe UI",
+        system-ui, -apple-system, sans-serif;
   --ui: var(--ug);
-  --col: 748px;          /* 正文与输入框的公共列宽 */
-  --side-w: 262px;
-  /* 强调色：整站一套绿。头像、用户气泡、导航选中态、示例胶囊 hover、
-     预问诊医生气泡都认它，换色只改这一处。 */
-  --acc: var(--brand);
-  --acc-line: var(--brand-line);
-  --acc-soft: var(--brand-soft);
+  --col: 760px;          /* 正文与输入框的公共列宽 */
+  --side-w: 264px;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --paper: #0e1513;
-    --side: #121b18;
-    --surface: #16201c;
-    --surface-2: #1a2521;
-    --line: #2a3733;
-    --line-soft: #212d29;
-    --ink: #e9efea;
-    --ink-2: #a5b2ab;
-    --ink-3: #7d8a84;
-    --brand: #35a181;
-    --brand-2: #2a8a6c;
-    --brand-soft: rgba(53, 161, 129, .14);
-    --brand-line: rgba(53, 161, 129, .28);
-    --gold: #d2ab6c;
-    --gold-soft: rgba(210, 171, 108, .13);
-    --gold-line: rgba(210, 171, 108, .28);
-    --warn: #e0805d;
-    --warn-soft: rgba(224, 128, 93, .12);
-    --user-bg: linear-gradient(150deg, #1d7d61 0%, #14553f 100%);
-    --shadow-sm: 0 1px 2px rgba(0, 0, 0, .3);
-    --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 12px 28px -16px rgba(0, 0, 0, .6);
-    --shadow-lg: 0 2px 8px rgba(0, 0, 0, .4), 0 24px 52px -24px rgba(0, 0, 0, .7);
+    --bg: #212327;
+    --side: #191a1c;
+    --surface: #2a2c31;
+    --surface-2: #303237;
+    --surface-3: #383b41;
+    --line: #35373c;
+    --line-soft: #2d2f34;
+    --ink: #e9ebef;
+    --ink-2: #b3b8c1;
+    --ink-3: #80858f;
+    --ink-4: #6a6f78;
+
+    --acc: #8ba0ff;
+    --acc-2: #a4b4ff;
+    --acc-soft: rgba(120, 145, 255, .16);
+    --acc-line: rgba(139, 160, 255, .28);
+
+    --warn: #f08a7e;
+    --warn-soft: rgba(240, 138, 126, .12);
+    --gold: #d9ae66;
+    --gold-soft: rgba(217, 174, 102, .12);
+    --gold-line: rgba(217, 174, 102, .26);
+    --ok: #55c79a;
+
+    --user-bg: #303237;
+    --user-ink: #e9ebef;
+
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, .25);
+    --shadow: 0 4px 20px rgba(0, 0, 0, .3), 0 1px 2px rgba(0, 0, 0, .25);
+    --shadow-lg: 0 16px 40px rgba(0, 0, 0, .45);
   }
 }
 
@@ -95,16 +109,17 @@
 
 html, body {
   margin: 0; height: 100%;
-  background: var(--paper); color: var(--ink);
+  background: var(--bg); color: var(--ink);
   font-family: var(--ui);
-  font-size: 15.5px; line-height: 1.9;
+  font-size: 15px; line-height: 1.7;
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
-/* 为什么这里要显式命中 body：上面的 `html, body` 合写把 body 也钉死在 var(--ui)
-   （维吾尔语栈）上，光改 html 的 lang 覆盖不动 body——中文界面下数字会退回
-   维语字体的阿拉伯数字字形、汉字才 fallback 雅黑，混排字号参差。 */
+/* 为什么这里要显式命中 body：上面的合写把 body 也钉死在维语字体栈上，
+   光改 html 的 lang 覆盖不动 body——中文界面下数字会退回维语字体的字形、
+   汉字才 fallback 雅黑，混排字号参差。 */
 html[lang="zh"], html[lang="zh"] body,
-html[lang="en"], html[lang="en"] body { font-family: var(--zh); line-height: 1.72; }
+html[lang="en"], html[lang="en"] body { font-family: var(--zh); line-height: 1.68; }
 body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
 
 .sr-only {
@@ -118,9 +133,10 @@ body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
 .main {
   flex: 1; min-width: 0; min-height: 0;
   display: flex; flex-direction: column;
+  background: var(--bg);
 }
 
-/* 空态：欢迎语 + 输入框作为一组整体垂直居中（参考 DeepSeek 的落地页）。
+/* 空态：欢迎语 + 输入框 + 示例作为一组整体垂直居中。
    auto 外边距而不是 justify-content:center —— 内容比视口高时，auto 会
    自动收成 0 并允许滚动，center 会把顶部裁掉。 */
 .main.empty { overflow-y: auto; }
@@ -132,50 +148,66 @@ body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
   width: var(--side-w); flex: none;
   display: flex; flex-direction: column;
   background: var(--side);
-  border-right: 1px solid var(--line);
+  /* 参考界面没有分隔线：两块底色本来就不同，再画一条只会让版式变脏 */
+  border: 0;
   z-index: 30;
 }
 .side-head {
   display: flex; align-items: center; gap: 10px;
-  padding: 16px 16px 12px;
+  padding: 16px 14px 12px;
 }
 .brand-mark {
-  position: relative; width: 30px; height: 30px; flex: none;
-  border-radius: 9px;
-  background: linear-gradient(145deg, #157053, #0a3d2e);
-  box-shadow: 0 2px 7px rgba(10, 60, 45, .28), inset 0 1px 0 rgba(255, 255, 255, .24);
+  position: relative; width: 28px; height: 28px; flex: none;
+  border-radius: 8px;
+  background: var(--acc);
+  box-shadow: 0 1px 2px rgba(43, 63, 160, .25);
 }
-.brand-mark i {
-  position: absolute; inset: 8px; border: 1.5px solid rgba(255, 255, 255, .82);
-  border-radius: 2px;
+.brand-mark svg {
+  position: absolute; inset: 6px; width: 16px; height: 16px;
+  fill: none; stroke: #fff; stroke-width: 1.7;
+  stroke-linecap: round; stroke-linejoin: round;
 }
-.brand-mark i:nth-child(2) { transform: rotate(45deg); border-color: rgba(255, 255, 255, .45); }
 
-.side-id { min-width: 0; }
+.side-id { min-width: 0; flex: 1; }
 .side-name {
-  margin: 0; font-size: 14.5px; font-weight: 700; line-height: 1.5;
+  margin: 0; font-size: 14px; font-weight: 600; line-height: 1.45;
   text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .side-meta {
-  margin: 1px 0 0; font-size: 12px; color: var(--ink-3); line-height: 1.5;
+  margin: 1px 0 0; font-size: 11.5px; color: var(--ink-3); line-height: 1.5;
   text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
 
-/* ------------------------------------------------------------ 板块导航
+/* 新对话：通栏胶囊，细边 + 白底。它是这一栏唯一一个"主动作"，
+   所以给边框、给满宽，其余条目一律无边框。 */
+.new-chat {
+  display: flex; align-items: center; justify-content: center; gap: 7px;
+  margin: 2px 12px 12px; height: 38px; flex: none;
+  border: 1px solid var(--line); border-radius: 999px;
+  background: var(--surface); color: var(--ink);
+  font: inherit; font-size: 13.5px; font-weight: 500;
+  cursor: pointer;
+  transition: background .15s, border-color .15s, color .15s;
+}
+.new-chat svg {
+  width: 15px; height: 15px; flex: none; fill: none;
+  stroke: currentColor; stroke-width: 2; stroke-linecap: round;
+}
+.new-chat:hover { background: var(--surface-2); border-color: var(--ink-4); }
+.new-chat:active { transform: scale(.995); }
 
-   三颗等宽条目，不是三张卡：它们回答的是"现在在哪一栏"，不是"要不要点我"。
-   选中态用白底 + 品牌色描边，和会话列表里"当前会话"是同一套视觉语言——
-   同一个侧栏里两种"选中"长得不一样，用户会以为其中一个不是选中。 */
-.nav { display: flex; flex-direction: column; gap: 2px; padding: 2px 10px 10px; }
+/* 板块导航：和会话列表同一套行高与缩进，只是多了个图标和一个计数。
+   选中态用浅灰底（不是白卡 + 描边）——参考界面里"当前项"就是一块灰。 */
+.nav { display: flex; flex-direction: column; gap: 1px; padding: 0 10px 8px; flex: none; }
 .nav-item {
   display: flex; align-items: center; gap: 9px;
-  width: 100%; height: 36px; padding: 0 10px;
-  border: 1px solid transparent; border-radius: 10px;
+  width: 100%; height: 34px; padding: 0 10px;
+  border: 0; border-radius: 9px;
   background: transparent; color: var(--ink-2);
-  font: inherit; font-size: 14px; font-weight: 600; line-height: 1.4;
+  font: inherit; font-size: 13.5px; font-weight: 400; line-height: 1.4;
   cursor: pointer; text-align: left;
-  transition: background .14s, color .14s, border-color .14s, box-shadow .14s;
+  transition: background .14s, color .14s;
 }
 .nav-item svg {
   width: 16px; height: 16px; flex: none; fill: none;
@@ -189,36 +221,29 @@ body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
 /* 右侧那个数字是"这一栏有多少篇资料"。维医和古籍的差别就在语料上，
    不写出来，用户不知道两个入口为什么答案风格差这么远。 */
 .nav-item .ni-meta {
-  flex: none; font-size: 12px; font-weight: 500; color: var(--ink-3);
-  /* 等宽数字：26 篇 / 5 篇 上下对齐，扫一眼就能比出两个库的体量差 */
+  flex: none; font-size: 11.5px; font-weight: 400; color: var(--ink-3);
   font-variant-numeric: tabular-nums;
 }
-/* 预问诊那栏没有"多少篇"，给的是一个说明标签而不是留空：同一个位置、
-   更弱一级，既不会让人以为数字没加载出来，也不会和上面两个计数混淆。 */
-.nav-item .ni-meta.is-tag {
-  font-size: 11.5px; letter-spacing: .02em; opacity: .8;
-}
-.nav-item:hover { background: color-mix(in srgb, var(--ink) 6%, transparent); color: var(--ink); }
-.nav-item.on {
-  background: var(--surface); color: var(--acc);
-  border-color: var(--line); box-shadow: var(--shadow-sm);
-}
-.nav-item.on svg { stroke-width: 2; }
-.nav-item.on .ni-meta { color: var(--acc); opacity: .7; }
-/* 空板块：能看见、点得动（点进去会说"这一栏还没有资料"），但明显弱化——
-   直接置灰会让人以为按钮坏了，而它其实是想告诉你"去导入资料"。 */
+.nav-item .ni-meta.is-tag { font-size: 11px; opacity: .85; }
+.nav-item:hover { background: var(--surface-3); color: var(--ink); }
+.nav-item.on { background: var(--surface-3); color: var(--ink); font-weight: 600; }
+.nav-item.on .ni-meta { color: var(--ink-2); }
+/* 空板块：能看见、点得动（点进去会说"这一栏还没有资料"），但明显弱化 */
 .nav-item.is-empty .ni-label { opacity: .55; }
 
-/* 会话区：标题行（"对话" + 新对话）+ 列表。
-   「新对话」从一颗通栏大按钮降级成这里的小加号：三栏并排之后，再放一颗
-   通栏按钮就和导航抢视觉层级，而且它只对前两栏有意义。 */
+/* 会话区：标题行（"对话"）+ 列表。「新对话」已经升级成上面那颗通栏按钮，
+   这里只留一行很小的分组标题。 */
 .side-hist { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+/* 「对话」这行小标题整个藏掉：问答栏下面是「7 天内」，两个标签叠在一起
+   只多一层噪音；预问诊那行写「重新开始」，和上面那颗通栏按钮重复。
+   参考界面没有这行。 */
+.hist-head { display: none; }
 .hist-head {
   display: flex; align-items: center; gap: 6px;
-  padding: 6px 12px 2px 18px;
+  padding: 10px 14px 0 20px; min-height: 18px;
 }
 .hist-head > span {
-  flex: 1; font-size: 11.5px; font-weight: 600; letter-spacing: .04em;
+  flex: 1; font-size: 11px; font-weight: 500; letter-spacing: .03em;
   color: var(--ink-3);
 }
 .hist-add {
@@ -226,42 +251,33 @@ body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
   width: 24px; height: 24px; padding: 0;
   border: 1px solid transparent; border-radius: 7px;
   background: transparent; color: var(--ink-2); cursor: pointer;
-  transition: background .13s, color .13s, border-color .13s;
 }
-.hist-add svg {
-  width: 14px; height: 14px; fill: none;
-  stroke: currentColor; stroke-width: 2.2; stroke-linecap: round;
-}
-.hist-add:hover {
-  background: var(--brand-soft); color: var(--brand); border-color: var(--brand-line);
-}
+.hist-add:hover { background: var(--surface-3); color: var(--ink); }
 
-
-.side-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 2px 8px 14px; }
+.side-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 0 8px 14px; }
 .side-scroll::-webkit-scrollbar { width: 8px; }
 .side-scroll::-webkit-scrollbar-thumb {
-  background: color-mix(in srgb, var(--ink) 14%, transparent);
+  background: color-mix(in srgb, var(--ink) 12%, transparent);
   border-radius: 6px; border: 2px solid transparent; background-clip: padding-box;
 }
 
+/* 分组标题：7 天内 / 30 天内 / 更早。参考界面用的就是这种时间分组，
+   比"今天 / 更早"更好判断——用户记得的是"上周问过"，不是"是不是今天"。 */
 .side-group {
-  margin: 0; padding: 10px 8px 3px;
-  font-size: 11.5px; font-weight: 600; letter-spacing: .04em;
-  color: var(--ink-3); text-align: left; text-transform: none;
+  margin: 0; padding: 12px 10px 4px;
+  font-size: 11px; font-weight: 500; letter-spacing: .02em;
+  color: var(--ink-3); text-align: left;
 }
 .sess {
-  display: block; width: 100%; padding: 7px 9px; margin: 1px 0;
-  border: 1px solid transparent; border-radius: 9px; background: transparent;
-  color: var(--ink-2); font: inherit; font-size: 13.5px; line-height: 1.6;
+  display: block; width: 100%; padding: 7px 10px; margin: 1px 0;
+  border: 0; border-radius: 9px; background: transparent;
+  color: var(--ink-2); font: inherit; font-size: 13.5px; line-height: 1.5;
   text-align: left; cursor: pointer;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  transition: background .13s, color .13s, border-color .13s;
+  transition: background .13s, color .13s;
 }
-.sess:hover { background: color-mix(in srgb, var(--ink) 5%, transparent); color: var(--ink); }
-.sess.on {
-  background: var(--surface); color: var(--ink); font-weight: 600;
-  border-color: var(--line); box-shadow: var(--shadow-sm);
-}
+.sess:hover { background: var(--surface-3); color: var(--ink); }
+.sess.on { background: var(--surface-3); color: var(--ink); font-weight: 500; }
 .sess-row { position: relative; display: flex; align-items: stretch; margin: 1px 0; }
 .sess-row .sess { margin: 0; padding-right: 34px; }
 .sess-del {
@@ -275,8 +291,7 @@ body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
 }
 .sess-row:hover .sess-del, .sess-row:focus-within .sess-del { opacity: 1; }
 .sess-del:hover { background: var(--warn-soft); color: var(--warn); }
-/* 待确认态：按钮从图标变成一颗红色实心块，第二次点击才真删。
-   同时给标题让出位置，否则那颗红块会压住标题末尾的字。 */
+/* 待确认态：按钮从图标变成一颗红色实心块，第二次点击才真删。 */
 .sess-row.ask .sess { padding-right: 78px; }
 .sess-row.ask .sess-del, .sess-row.ask .sess-del:hover {
   width: auto; height: 22px; padding: 0 7px;
@@ -290,36 +305,78 @@ body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
 }
 
 .side-empty {
-  margin: 14px 10px; font-size: 12.5px; color: var(--ink-3); line-height: 1.7;
+  margin: 14px 12px; font-size: 12.5px; color: var(--ink-3); line-height: 1.7;
   text-align: left;
+}
+
+/* 侧栏底部：语言开关。放在账号行的位置，一整条都给它，
+   两颗按钮各占一半——比右上角那颗胶囊更好点，也不占标题的位置。 */
+.side-foot {
+  flex: none; padding: 8px 12px 14px;
+}
+.lang-switch {
+  display: flex; width: 100%; gap: 2px; padding: 2px;
+  border: 1px solid var(--line); border-radius: 10px;
+  background: var(--surface-2);
+}
+.lang-switch button {
+  appearance: none; border: 0; background: transparent; cursor: pointer;
+  flex: 1; min-width: 0;
+  font: inherit; font-size: 12.5px; line-height: 1.5; padding: 5px 6px;
+  border-radius: 8px; color: var(--ink-2); white-space: nowrap;
+  text-align: center;
+  transition: background .16s, color .16s, box-shadow .16s;
+}
+.lang-switch button:hover { color: var(--ink); }
+.lang-switch button.on,
+.lang-switch button.on:hover {
+  background: var(--surface); color: var(--ink); font-weight: 600;
+  box-shadow: var(--shadow-sm); cursor: default;
 }
 
 /* 移动端抽屉 */
 .scrim {
-  position: fixed; inset: 0; z-index: 20; background: rgba(12, 22, 18, .34);
+  position: fixed; inset: 0; z-index: 20; background: rgba(15, 18, 24, .32);
   backdrop-filter: blur(1px);
 }
 
 /* ------------------------------------------------------------ 顶栏 */
+/* 对话态：一个居中的小胶囊，写着现在在哪一栏。
+   空态：胶囊隐藏，整条只剩左上角的菜单键——把第一眼让给欢迎语。 */
 .top {
-  flex: none; display: flex; align-items: center; gap: 10px;
-  padding: 12px 18px; min-height: 58px;
+  flex: none; position: relative;
+  display: flex; align-items: center; justify-content: center;
+  padding: 10px 18px; min-height: 54px;
 }
-.top-id { min-width: 0; flex: 1; }
+.top-id {
+  min-width: 0; max-width: 60%;
+  display: inline-flex; align-items: center; gap: 8px;
+  height: 32px; padding: 0 13px;
+  border: 1px solid var(--line); border-radius: 999px;
+  background: var(--surface);
+  transition: opacity .18s;
+}
+/* 小圆点：只用来说明"这里是一个入口"，不承载信息 */
+.top-id::before {
+  content: ""; width: 6px; height: 6px; flex: none;
+  border-radius: 50%; background: var(--acc);
+}
+.main.empty .top-id { opacity: 0; }
 .top h1 {
-  margin: 0; font-size: 15px; font-weight: 700; line-height: 1.5;
+  margin: 0; font-size: 13px; font-weight: 500; line-height: 1.5;
   /* 物理左对齐：dir=rtl 时只改字形顺序，不把标题推到右边 */
   text-align: left;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .top .sub {
-  margin: 1px 0 0; font-size: 12.5px; color: var(--ink-3); line-height: 1.5;
+  margin: 0; font-size: 12px; color: var(--ink-3); line-height: 1.5;
   text-align: left;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
 .icon-btn {
   display: none; align-items: center; justify-content: center;
+  position: absolute; left: 14px; top: 50%; transform: translateY(-50%);
   width: 32px; height: 32px; flex: none; padding: 0;
   border: 1px solid var(--line); border-radius: 9px;
   background: var(--surface); color: var(--ink-2); cursor: pointer;
@@ -328,81 +385,70 @@ body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
   width: 17px; height: 17px; fill: none;
   stroke: currentColor; stroke-width: 2; stroke-linecap: round;
 }
-.icon-btn:hover { color: var(--brand); border-color: var(--brand-line); }
-
-/* 语言切换：两颗并排按钮，当前语言实心。
-   一颗按钮写"点了会变的那种语言"是这个界面最容易被误解的地方——
-   看到"中文"两个字，分不清是现状还是目标。 */
-.lang-switch {
-  display: inline-flex; align-items: stretch; flex: none;
-  border: 1px solid var(--line); border-radius: 999px;
-  overflow: hidden; background: var(--surface); padding: 2px; gap: 2px;
-}
-.lang-switch button {
-  appearance: none; border: 0; background: transparent; cursor: pointer;
-  font: inherit; font-size: 13px; line-height: 1.6; padding: 4px 11px;
-  /* 两段等宽：'ئۇيغۇرچە' 和 '中文' 字数差三倍，不定宽的话点一次切换，
-     整个胶囊的宽度就变一次，右边的按钮肉眼可见地横移。 */
-  min-width: 62px; text-align: center;
-  border-radius: 999px; color: var(--ink-2); white-space: nowrap;
-  transition: background .16s, color .16s;
-}
-.lang-switch button:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 6%, transparent); }
-.lang-switch button.on,
-.lang-switch button.on:hover {
-  background: var(--brand); color: #fff; font-weight: 600; cursor: default;
-}
+.icon-btn:hover { color: var(--ink); background: var(--surface-2); }
 
 /* ------------------------------------------------------------ 聊天区 */
-.chat { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 0 6px; }
+.chat { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 0 8px; }
 /* 注意：这里**不能**加 scroll-behavior: smooth。流式回答每帧都在设 scrollTop，
    平滑动画会被下一次赋值打断，表现就是滚到底时抖一下。回到底部那个按钮
    单独用 scrollTo({behavior}) 平滑即可。 */
 .chat::-webkit-scrollbar { width: 9px; }
 .chat::-webkit-scrollbar-thumb {
-  background: color-mix(in srgb, var(--ink) 14%, transparent);
+  background: color-mix(in srgb, var(--ink) 12%, transparent);
   border-radius: 6px; border: 2px solid transparent; background-clip: padding-box;
 }
 .chat::-webkit-scrollbar-track { background: transparent; }
 
 /* ------------------------------------------------------------ 空态 */
 .welcome {
-  max-width: var(--col); margin: 0 auto; padding: 8px 24px 22px;
+  max-width: var(--col); margin: 0 auto; padding: 8px 24px 26px;
   text-align: center; animation: rise .3s ease-out both;
 }
+/* 徽记和问候同一行：参考界面就是"logo + 一句话"，不是上方一个大图标、
+   下方一行字——两段式会把欢迎语变成一块版块，而不是一句招呼。 */
+.wel-wrap {
+  display: flex; align-items: center; justify-content: center; gap: 12px;
+  max-width: 34em; margin: 0 auto;
+}
+.wel-mark {
+  width: 30px; height: 30px; border-radius: 9px;
+  box-shadow: none;
+}
+.wel-mark svg { inset: 6px; width: 18px; height: 18px; }
 .wel-text {
-  margin: 0 auto; max-width: 30em;
-  font-size: 23px; line-height: 1.7; font-weight: 700; color: var(--ink);
+  margin: 0;
+  font-size: 26px; line-height: 1.45; font-weight: 600; color: var(--ink);
+  letter-spacing: -.01em;
 }
 .wel-hint {
   margin: 10px auto 0; max-width: 34em;
-  font-size: 13.5px; line-height: 1.7; color: var(--ink-3);
+  font-size: 13px; line-height: 1.7; color: var(--ink-3);
 }
-/* 示例问题：居中的胶囊，换行自动收拢。不做成卡片网格——落地页上
-   三块大方卡会把"输入框"这个主角抢掉。 */
+
+/* 示例问题：输入框下方一行轻量胶囊。不做成卡片网格——空态的主角是输入框，
+   示例只是"不知道该问什么"时的扶手。 */
 .samples {
-  display: flex; flex-wrap: wrap; justify-content: center; gap: 8px;
-  margin-top: 22px;
+  display: none;
+  flex-wrap: wrap; justify-content: center; gap: 8px;
+  max-width: var(--col); margin: 10px auto 0; padding: 0;
 }
+.main.empty .samples { display: flex; }
 .chip {
-  display: inline-flex; align-items: center; gap: 7px;
-  max-width: 100%; padding: 8px 14px;
-  background: var(--surface); border: 1px solid var(--line); border-radius: 999px;
-  color: var(--ink-2); font: inherit; font-size: 13.5px; line-height: 1.6;
+  display: inline-flex; align-items: center; gap: 6px;
+  max-width: 100%; height: 30px; padding: 0 12px;
+  background: transparent; border: 1px solid var(--line); border-radius: 999px;
+  color: var(--ink-2); font: inherit; font-size: 12.5px; line-height: 1.4;
   text-align: left; cursor: pointer;
-  transition: border-color .16s, color .16s, background .16s, box-shadow .16s;
+  transition: border-color .16s, color .16s, background .16s;
 }
-.chip .txt { min-width: 0; }
-.chip:hover {
-  border-color: var(--acc-line); color: var(--acc);
-  background: var(--acc-soft); box-shadow: var(--shadow-sm);
-}
-.chip:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.chip .txt { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chip:hover { border-color: var(--acc-line); color: var(--acc); background: var(--acc-soft); }
+.chip:focus-visible { outline: 2px solid var(--acc); outline-offset: 2px; }
 
 /* ------------------------------------------------------------ 消息 */
 .msgs {
-  max-width: var(--col); margin: 0 auto; padding: 6px 16px 10px;
-  display: flex; flex-direction: column; gap: 22px;
+  max-width: var(--col); margin: 0 auto; padding: 10px 24px 12px;
+  display: flex; flex-direction: column; gap: 26px;
 }
 .msg { animation: pop .2s ease-out; }
 @keyframes pop {
@@ -417,62 +463,51 @@ body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
   .msg, .welcome, .chip { animation: none !important; }
 }
 
-/* 用户气泡：实心深青绿 + 白字，恒靠右（容器是 ltr，不随界面语言翻转）。
-   浅色气泡在纸底上几乎看不见，用户分不清哪句是自己问的。 */
+/* 用户气泡：浅灰底 + 深字，靠右。这是参考界面里"我说的"那块，
+   比实心品牌色更安静，长问题也不会变成一大块色卡。 */
 .msg.user {
-  align-self: flex-end; max-width: 76%;
-  background: var(--user-bg); color: #fff;
-  border-radius: 16px 16px 4px 16px;
+  align-self: flex-end; max-width: 78%;
+  background: var(--user-bg); color: var(--user-ink);
+  border-radius: 18px 18px 5px 18px;
   padding: 9px 15px; white-space: pre-wrap;
-  box-shadow: 0 6px 18px -12px rgba(10, 60, 45, .7);
+  font-size: 15.5px; line-height: 1.75;
 }
-/* AI 回答两列排：头像在左、正文在右（头像见 .avatar）。回答、徽标、
-   来源胶囊、脚注都收在 bot-main 里，保证它们左缘对齐而不是绕着头像打转。 */
-.msg.bot { align-self: stretch; max-width: 100%; padding: 2px 0; display: flex; gap: 10px; }
+/* AI 回答不戴头像：参考界面里答案就是正文，头像会把左缘推成锯齿。
+   回答、徽标、来源、脚注都收在 bot-main 里，左缘统一。 */
+.msg.bot { align-self: stretch; max-width: 100%; padding: 1px 0; display: flex; }
 .bot-main { flex: 1; min-width: 0; }
-.avatar {
-  flex: none; width: 28px; height: 28px; margin-top: 3px;
-  border-radius: 50%;
-  background: var(--acc-soft);
-  box-shadow: inset 0 0 0 1px var(--acc-line);
-  color: var(--acc);
-  display: flex; align-items: center; justify-content: center;
-}
-.avatar svg {
-  width: 15px; height: 15px;
-  fill: none; stroke: currentColor; stroke-width: 1.8;
-  stroke-linecap: round; stroke-linejoin: round;
-}
+.avatar { display: none; }
 .msg.bot.failed,
 .msg.bot > .bot-main.failed {
   border-radius: var(--r-lg); padding: 12px 14px;
-  background: var(--warn-soft); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warn) 22%, transparent);
+  background: var(--warn-soft); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warn) 20%, transparent);
 }
 /* 预问诊是医患对话：每轮就一两句，套个气泡才像聊天；问答那边原稿长、
-   刻意不套卡片，两处不共用。颜色走板块强调色（预问诊=蓝）。 */
+   刻意不套卡片，两处不共用。 */
 #pvMsgs .msg.bot > .bot-main {
-  align-self: flex-start; max-width: 82%;
+  /* 气泡贴着字走：.bot-main 的 flex:1 会把每条都撑到 82%，
+     一句「哪里不舒服」也占半屏，看着像通知不像对话。 */
+  align-self: flex-start; max-width: 82%; flex: 0 1 auto; width: fit-content;
   padding: 10px 15px;
   background: var(--acc-soft);
-  border-radius: 4px 16px 16px 16px;
-  box-shadow: inset 0 0 0 1px var(--acc-line);
+  border-radius: 5px 18px 18px 18px;
 }
-#pvMsgs .msg.bot .answer { font-size: 15.5px; line-height: 1.7; }
+#pvMsgs .msg.bot .answer { font-size: 15.5px; line-height: 1.75; }
 #pvMsgs .msg.bot .answer.err { padding-inline-start: 0; }
 #pvMsgs .msg.bot .answer.err::before { content: none; }
 
 /* ------------------------------------------------------------ 答案正文 */
-.answer { white-space: pre-wrap; font-size: 16px; }
+.answer { white-space: pre-wrap; font-size: 16px; color: var(--ink); }
 .answer .md { white-space: normal; }
 /* 流式光标：正在出字和"出完了"必须能分辨，否则用户会一直等下去 */
 .answer.streaming > .md > :last-child::after {
   content: ""; display: inline-block; width: 2px; height: 1em;
   margin-inline-start: 2px; vertical-align: -.14em;
-  background: var(--brand); animation: caret 1s step-end infinite;
+  background: var(--acc); animation: caret 1s step-end infinite;
 }
 @keyframes caret { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
 .answer.muted { color: var(--ink-2); }
-/* 失败：一个感叹号 + 砖橙色，扫一眼就知道"这次没拿到答案" */
+/* 失败：一个感叹号 + 砖红色，扫一眼就知道"这次没拿到答案" */
 .answer.err { color: var(--warn); padding-inline-start: 24px; position: relative; }
 .answer.err::before {
   content: "!"; position: absolute; inset-inline-start: 0; top: .18em;
@@ -482,81 +517,74 @@ body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
   text-align: center;
 }
 /* 切到中文草稿时的"另一套排版"：换中文字体 */
-.answer.alt { font-family: var(--zh); line-height: 1.78; }
+.answer.alt { font-family: var(--zh); line-height: 1.8; }
 
-/* 1.7.13 排版：答案从"一大片等重的字"变成有层次的段落。
-   段落之间留一口气，引导句（「……如下：」）单独一行加粗当小标题用，
-   列表、小标题各有自己的起点——读者扫一眼就能分出"结论 / 步骤 / 提醒"。 */
-.md p { margin: 0 0 1.02em; }
+/* ── 答案排版（1.7.43）──
+   目标是"扫一眼就能分出结论 / 分节 / 要点 / 提醒"，而不是一整片等重的字。
+   层级只靠字号、字重、间距三件事，不加边框和底色——医学答案里多一块底色，
+   读者就会以为那是引用或警告。 */
+.md { line-height: 1.85; }
+.md p { margin: 0 0 .9em; }
 .md > :last-child { margin-bottom: 0; }
 /* 引导句：贴着它带的内容，和上一段之间留大一点——它是个路标，不是正文。 */
 .md p.lead {
-  margin: 1.15em 0 .42em;
-  font-weight: 700; color: var(--ink);
+  margin: 1.2em 0 .4em;
+  font-weight: 600; color: var(--ink);
   line-height: 1.65;
 }
 .md > p.lead:first-child { margin-top: 0; }
-.md ol, .md ul { margin: .1em 0 .95em; padding-inline-start: 1.55em; }
-.md li { margin: .26em 0; padding-inline-start: .18em; }
-/* 列表项里常带 [n]，行距给足，牌不会顶到上一行 */
-.md li { line-height: 1.8; }
-.md li::marker { color: var(--brand); font-weight: 700; }
-.md strong { font-weight: 700; color: var(--ink); }
+.md ol, .md ul { margin: .15em 0 .95em; padding-inline-start: 1.5em; }
+.md li { margin: .3em 0; padding-inline-start: .2em; line-height: 1.8; }
+.md li::marker { color: var(--acc); font-weight: 600; }
+/* 列表里的加粗小标题（"1. **分型**：……"）不要和正文字重拉太开 */
+.md strong { font-weight: 600; color: var(--ink); }
 .md code {
   font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: .9em;
   background: var(--surface-2); border: 1px solid var(--line-soft);
   border-radius: 5px; padding: 1px 5px;
 }
-/* 小标题：左侧一道短竖条，和正文里加粗的引导句区分开（那个没有条）。 */
-.md h4 {
-  display: flex; align-items: center; gap: 8px;
-  margin: 1.25em 0 .5em; font-size: 16.5px; line-height: 1.6;
+/* 小标题：比正文大半号 + 加粗，上下留白分开两节。
+   以前左侧有一道竖条，视觉上像引用块；参考界面的小标题是纯文字。 */
+.md h3, .md h4 {
+  margin: 1.5em 0 .55em;
+  font-size: 16.5px; font-weight: 600; line-height: 1.6; color: var(--ink);
 }
-.md h4::before {
-  content: ""; flex: none; width: 3px; height: .92em;
-  border-radius: 2px; background: var(--brand);
-}
+.md > h3:first-child, .md > h4:first-child { margin-top: 0; }
 
 /* 引用编号：必须隔离，否则 RTL 段落里 [1] 会被双向算法挪到数字另一侧。
    做成可点的小牌——"这结论从哪来"是这种问答界面唯一值得点的地方。 */
 .cite {
-  /* 尺寸按 px 定死。原先用 em（.7em ≈ 10.5px、高 1.36em ≈ 14px）跟着正文缩放，
-     挤在 15px 汉字旁边只有指甲盖大，浅青底又接近纸色，看着像正文里混进一个
-     圈号数字，读者根本不知道那是个能点的来源。18px 的方块 + 两侧 3px 间距，
-     才在一屏汉字里立得住。 */
   display: inline-flex; align-items: center; justify-content: center;
-  min-width: 19px; height: 19px; padding: 0 4px; margin: 0 3px;
-  border-radius: 5px; border: 1px solid var(--brand-line);
-  background: var(--brand-soft); color: var(--brand);
-  font-family: var(--zh); font-size: 11.5px; font-weight: 700; line-height: 1;
-  direction: ltr; unicode-bidi: isolate; vertical-align: -.08em;
+  min-width: 18px; height: 18px; padding: 0 4px; margin: 0 3px;
+  border-radius: 5px; border: 1px solid var(--acc-line);
+  background: var(--acc-soft); color: var(--acc);
+  font-family: var(--zh); font-size: 11px; font-weight: 600; line-height: 1;
+  direction: ltr; unicode-bidi: isolate; vertical-align: -.06em;
   cursor: pointer; transition: background .14s, color .14s, transform .14s;
 }
-.cite:hover { background: var(--brand); color: #fff; transform: translateY(-1px); }
-.cite:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
-/* 区间牌「1–5」：连续三条以上的引用合成一枚。宽度交给内容，数字之间不加
-   letter-spacing（那会让它看着像被拆成两个数）；hover 抬起来一点点，
-   让人知道它和单牌一样能点。 */
+.cite:hover { background: var(--acc); color: #fff; transform: translateY(-1px); }
+.cite:focus-visible { outline: 2px solid var(--acc); outline-offset: 1px; }
+/* 区间牌「1–5」：宽度交给内容，数字之间不加 letter-spacing */
 .cite.range { min-width: auto; padding: 0 7px; letter-spacing: 0; }
-/* 引用牌 + 它注释的那个字绑成不可断的一小段（见 app.js 里的 bindCites）。
-   少了这条，牌会在行尾被单独挤到下一行行首，看起来像个新序号。 */
+/* 引用牌 + 它注释的那个字绑成不可断的一小段（见 app.js 里的 bindCites）。 */
 .nb { white-space: nowrap; }
-/* 一段话里连引两条（"[2][4]"）时两枚牌挨着，各自的 3px 叠加成 6px，
-   读起来像"2 4"两个孤立的数字。收紧成 2px。 */
+/* 一段话里连引两条（"[2][4]"）时两枚牌挨着，收紧成 2px。 */
 .nb .cite + .cite { margin-inline: 1px; }
 
-/* 检索证据档位：答案有多少来自资料，必须在读正文之前就看见 */
+/* 检索证据档位：答案有多少来自资料，必须在读正文之前就看见。
+   做成一行小字而不是彩色胶囊——档位是元信息，不该比答案更抢眼。 */
 .ev-badge {
   display: inline-flex; align-items: center; gap: 6px;
-  margin-bottom: 9px;
-  font-size: 12.5px; font-weight: 600; line-height: 1.6;
-  padding: 2px 10px; border-radius: 999px;
-  border: 1px solid var(--line);
+  margin-bottom: 10px;
+  font-size: 12px; font-weight: 500; line-height: 1.6;
+  padding: 1px 9px; border-radius: 999px;
+  border: 1px solid var(--line); color: var(--ink-2);
+  background: var(--surface-2);
 }
-.ev-badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
-.ev-badge.high { color: var(--brand); background: var(--brand-soft); border-color: var(--brand-line); }
+.ev-badge::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+.ev-badge.high { color: var(--ok); background: color-mix(in srgb, var(--ok) 8%, transparent); border-color: color-mix(in srgb, var(--ok) 22%, transparent); }
 .ev-badge.mid { color: var(--gold); background: var(--gold-soft); border-color: var(--gold-line); }
-.ev-badge.low { color: var(--warn); background: var(--warn-soft); border-color: color-mix(in srgb, var(--warn) 30%, transparent); }
+.ev-badge.low { color: var(--warn); background: var(--warn-soft); border-color: color-mix(in srgb, var(--warn) 22%, transparent); }
 
 .thinking {
   display: inline-flex; align-items: center; gap: 7px;
@@ -565,7 +593,7 @@ body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
 /* 三点呼吸：流式等待时页面必须有东西在动，否则 30 秒的翻译阶段像死机 */
 .thinking::before {
   content: ""; width: 6px; height: 6px; border-radius: 50%;
-  background: var(--brand); animation: pulse 1.1s ease-in-out infinite;
+  background: var(--acc); animation: pulse 1.1s ease-in-out infinite;
   flex: none;
 }
 @keyframes pulse {
@@ -574,72 +602,57 @@ body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
 }
 
 /* 这一行定死 ltr：AI 气泡本身是 dir=auto（维语答案时整块文字右起），
-   若不钉住，耗时和复制键会跟着翻到另一头——同一套界面里"复制"忽左忽右，
-   用户每次都要重新找。只有这行是"骨架"，不跟随正文方向。 */
+   若不钉住，耗时和复制键会跟着翻到另一头。 */
 .foot {
   direction: ltr;
-  display: flex; align-items: center; gap: 10px;
-  /* 加了反馈键之后这一行最多有 5 个元素（耗时/语言/占位/两个反馈/复制）。
-     窄屏 + 长耗时文案时允许折行，否则按钮会被压成两行字。 */
+  display: flex; align-items: center; gap: 6px;
   flex-wrap: wrap; row-gap: 4px;
-  margin-top: 10px; font-size: 12.5px; color: var(--ink-3);
+  margin-top: 8px; font-size: 12px; color: var(--ink-3);
 }
 .foot .spacer { flex: 1; }
-/* 答案语言标记：只在"这条答案不是当前界面语言"时出现。
-   小、灰、不抢眼——它的作用是不让人误会，不是让人盯。 */
+/* 答案语言标记：只在"这条答案不是当前界面语言"时出现。 */
 .foot .alang {
-  font-size: 12px; color: var(--ink-3);
+  font-size: 11.5px; color: var(--ink-3);
   border: 1px solid var(--line); border-radius: 999px;
-  padding: 1px 8px; line-height: 1.6; white-space: nowrap;
+  padding: 0 8px; line-height: 1.7; white-space: nowrap;
 }
-/* 预问诊气泡不在 .foot 里，同一条规则给它一份——语言标记只有一种长相。 */
 .msg .alang {
   display: inline-block; margin-top: 8px;
   font-size: 12px; color: var(--ink-3);
   border: 1px solid var(--line); border-radius: 999px;
   padding: 1px 8px; line-height: 1.6; white-space: nowrap;
 }
-.copy {
+/* 复制 / 反馈：默认是灰字，鼠标上来才显出是一颗按钮。
+   DeepSeek 这类界面的操作区都这样——常显会把答案下方变成工具条。 */
+.copy, .foot .fb {
   appearance: none; border: 1px solid transparent; background: transparent;
-  color: var(--ink-3); font: inherit; font-size: 12.5px; line-height: 1.6;
-  border-radius: 7px; padding: 2px 9px; cursor: pointer;
-  transition: color .14s, background .14s, border-color .14s;
-}
-.copy:hover { color: var(--brand); background: var(--brand-soft); border-color: var(--brand-line); }
-.copy.done { color: var(--brand); border-color: var(--brand-line); background: var(--brand-soft); }
-
-/* 反馈：和复制键同排、同尺寸，但图标欠奉所以留出间距。
-   置灰态可见（而不是消失）——用户点完要能看见"已经记下了"，
-   按钮原地消失会让人怀疑自己点错了。 */
-.foot .fb {
-  appearance: none; border: 1px solid transparent; background: transparent;
-  color: var(--ink-3); font: inherit; font-size: 12.5px; line-height: 1.6;
-  border-radius: 7px; padding: 2px 9px; cursor: pointer;
+  color: var(--ink-3); font: inherit; font-size: 12px; line-height: 1.6;
+  border-radius: 7px; padding: 2px 8px; cursor: pointer;
   white-space: nowrap; flex: 0 0 auto;
   transition: color .14s, background .14s, border-color .14s;
 }
-.foot .fb + .fb { margin-inline-start: 2px; }
-.foot .fb:hover:not(:disabled) {
-  color: var(--brand); background: var(--brand-soft); border-color: var(--brand-line);
+.copy:hover, .foot .fb:hover:not(:disabled) {
+  color: var(--ink); background: var(--surface-2);
 }
-.foot .fb:disabled { cursor: default; opacity: .72; }
+.copy.done { color: var(--acc); background: var(--acc-soft); }
+.foot .fb:disabled { cursor: default; opacity: .7; }
 
-/* 来源：默认折叠，但摘要是一枚实体胶囊而不是灰字——
-   它承载的是"这个答案有没有依据"，不该比正文还弱。 */
+/* 来源：默认折叠，摘要是一行中性灰胶囊——它承载"有没有依据"，
+   但不该比正文更显眼。 */
 .srcs { margin-top: 12px; }
 .srcs summary {
   display: inline-flex; align-items: center; gap: 7px;
   list-style: none; cursor: pointer; user-select: none;
-  font-size: 13px; font-weight: 600; color: var(--brand);
-  background: var(--brand-soft); border: 1px solid var(--brand-line);
-  border-radius: 999px; padding: 4px 13px;
-  transition: background .14s;
+  font-size: 12.5px; font-weight: 500; color: var(--ink-2);
+  background: var(--surface-2); border: 1px solid var(--line);
+  border-radius: 999px; padding: 3px 12px;
+  transition: background .14s, color .14s;
 }
 .srcs summary::-webkit-details-marker { display: none; }
-.srcs summary:hover { background: color-mix(in srgb, var(--brand) 14%, transparent); }
+.srcs summary:hover { background: var(--surface-3); color: var(--ink); }
 .srcs summary .caret {
-  width: 6px; height: 6px; border-right: 1.5px solid currentColor;
-  border-bottom: 1.5px solid currentColor; transform: rotate(45deg) translate(-1px, -1px);
+  width: 5px; height: 5px; border-right: 1.4px solid currentColor;
+  border-bottom: 1.4px solid currentColor; transform: rotate(45deg) translate(-1px, -1px);
   transition: transform .18s; margin-inline-start: 1px;
 }
 .srcs[open] summary .caret { transform: rotate(225deg) translate(-1px, -1px); }
@@ -652,46 +665,40 @@ body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
 }
 .src-item .n {
   flex: none; display: inline-flex; align-items: center; justify-content: center;
-  min-width: 21px; height: 21px; padding: 0 5px; border-radius: 6px;
-  background: var(--brand); color: #fff;
-  font-family: var(--zh); font-size: 11.5px; font-weight: 700; line-height: 1;
+  min-width: 20px; height: 20px; padding: 0 5px; border-radius: 5px;
+  background: var(--acc); color: #fff;
+  font-family: var(--zh); font-size: 11px; font-weight: 600; line-height: 1;
   direction: ltr; unicode-bidi: isolate;
 }
 /* 按文档归组后，一篇文档贡献的多个编号并排挂在行首 */
 .src-ns { flex: none; display: inline-flex; gap: 4px; flex-wrap: wrap; max-width: 96px; }
 .src-body { min-width: 0; flex: 1; }
-.src-head { font-size: 13px; font-weight: 600; color: var(--ink); line-height: 1.6; }
+.src-head { font-size: 12.5px; font-weight: 600; color: var(--ink); line-height: 1.6; }
 .src-prev {
-  margin-top: 3px; font-size: 13px; color: var(--ink-2); line-height: 1.75;
+  margin-top: 3px; font-size: 12.5px; color: var(--ink-2); line-height: 1.7;
   display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
 }
-/* 点了正文里的 [1]，对应来源闪一下——不然用户滚过去也不知道该看哪条 */
+/* 点了正文里的 [1]，对应来源闪一下 */
 .src-item.flash {
-  border-color: var(--brand);
-  background: color-mix(in srgb, var(--brand) 8%, var(--surface-2));
+  border-color: var(--acc);
+  background: var(--acc-soft);
   animation: flash 1.4s ease-out;
 }
 @keyframes flash {
-  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--brand) 40%, transparent); }
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--acc) 40%, transparent); }
   100% { box-shadow: 0 0 0 12px transparent; }
 }
 
-/* 复读截断提示：不能假装没发生，否则用户会以为答案本来就长这样。 */
+/* 复读截断提示：不能假装没发生 */
 .loop-warn {
-  margin-top: 10px; font-size: 13px; color: var(--warn);
-  background: var(--warn-soft); border: 1px solid color-mix(in srgb, var(--warn) 22%, transparent);
+  margin-top: 10px; font-size: 12.5px; color: var(--warn);
+  background: var(--warn-soft); border: 1px solid color-mix(in srgb, var(--warn) 20%, transparent);
   border-radius: 8px; padding: 7px 10px; line-height: 1.7;
 }
+/* 翻译没成：这是"降级通知"，不是错误——正文仍然可用。 */
+.tr-warn { color: var(--ink-2); background: var(--surface-2); border-color: var(--line); }
 
-/* 翻译没成：这是"降级通知"，不是错误——正文仍然是内容，只是语言不对。
-   用比复读警告更弱的中性色，免得和真正的失败混为一谈。 */
-.tr-warn {
-  color: var(--ink-2);
-  background: var(--surface-2);
-  border-color: var(--line);
-}
-
-/* 状态行里夹的中文检索词：单独隔离成 LTR，否则在维语句子里会被重排得乱跳 */
+/* 状态行里夹的中文检索词：单独隔离成 LTR */
 .q-zh {
   direction: ltr; unicode-bidi: isolate;
   font-family: var(--zh); font-weight: 600; color: var(--ink-2);
@@ -699,91 +706,103 @@ body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
 
 /* ------------------------------------------------------------ 回到底部 */
 .to-bottom {
-  position: absolute; left: 50%; bottom: 132px; transform: translateX(-50%);
+  position: absolute; left: 50%; bottom: 140px; transform: translateX(-50%);
   display: inline-flex; align-items: center; gap: 6px;
-  background: var(--surface); color: var(--brand);
-  border: 1px solid var(--brand-line); border-radius: 999px;
-  padding: 5px 13px; font: inherit; font-size: 13px; cursor: pointer;
+  background: var(--surface); color: var(--ink-2);
+  border: 1px solid var(--line); border-radius: 999px;
+  padding: 5px 13px; font: inherit; font-size: 12.5px; cursor: pointer;
   box-shadow: var(--shadow); z-index: 5;
   animation: pop .18s ease-out;
 }
-.to-bottom:hover { background: var(--brand-soft); }
-.to-bottom .arrow { font-size: 13px; line-height: 1; }
+.to-bottom:hover { color: var(--ink); border-color: var(--ink-4); }
+.to-bottom .arrow { font-size: 12.5px; line-height: 1; }
 
 /* ------------------------------------------------------------ 输入区 */
-.composer { flex: none; padding: 6px 24px 14px; }
+.composer { flex: none; padding: 6px 24px 4px; }
 .status {
   display: flex; align-items: center; gap: 8px;
-  max-width: var(--col); margin: 0 auto 7px;
-  font-size: 13px; color: var(--ink-2); line-height: 1.7;
+  max-width: var(--col); margin: 0 auto 8px;
+  font-size: 12.5px; color: var(--ink-3); line-height: 1.7;
 }
 
-/* 输入框做成一张圆角大卡：上面一行写字，下面一行放工具与发送键。
-   发送键是圆形箭头——比"发送"两个字窄一半，维语长词也不会把按钮撑歪。 */
+/* 输入框做成一张大圆角卡：上面写字，下面一行放工具与发送键。
+   参考界面的输入框比正文栏略宽、圆角更大，视觉上"浮"在页面底部。 */
 .box {
   max-width: var(--col); margin: 0 auto;
   background: var(--surface); border: 1px solid var(--line);
-  border-radius: 22px; padding: 10px 10px 8px 16px;
+  border-radius: var(--r-xl); padding: 12px 12px 10px 18px;
   box-shadow: var(--shadow);
   transition: border-color .16s, box-shadow .16s;
 }
 .box:focus-within {
-  border-color: var(--brand-line);
-  box-shadow: 0 0 0 3px var(--brand-soft), var(--shadow);
+  border-color: var(--acc-line);
+  box-shadow: 0 0 0 3px var(--acc-soft), var(--shadow);
 }
 #q {
   display: block; width: 100%; resize: none; border: none; outline: none;
-  background: transparent; padding: 2px 0 6px;
-  font: inherit; font-size: 16px; line-height: 1.75;
-  color: var(--ink); max-height: 176px; min-height: 27px;
+  background: transparent; padding: 2px 0 8px;
+  font: inherit; font-size: 16px; line-height: 1.7;
+  color: var(--ink); max-height: 176px; min-height: 48px;
 }
-#q::placeholder { color: var(--ink-3); opacity: .85; }
+#q::placeholder { color: var(--ink-3); opacity: .9; }
 
-.box-foot { display: flex; align-items: center; gap: 8px; }
+.box-foot { display: flex; align-items: center; gap: 7px; min-height: 30px; }
 .box-foot .grow { flex: 1; }
-.tool {
+/* 两颗胶囊：左边是"资料/作答语言"的说明，右边是维语输入。
+   和参考界面底部那两颗功能键同高、同圆角、同灰度——它们都是次要动作。 */
+.tool, .kb-btn {
   display: inline-flex; align-items: center; gap: 6px;
+  height: 28px; padding: 0 11px; flex: none;
+  border: 1px solid transparent; border-radius: 999px;
+  background: var(--surface-2); color: var(--ink-2);
+  font: inherit; font-size: 12px; line-height: 1;
   max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  font-size: 12.5px; line-height: 1.6; color: var(--brand);
-  background: var(--brand-soft); border: 1px solid var(--brand-line);
-  border-radius: 999px; padding: 3px 10px;
 }
+.tool { cursor: default; }
 .tool::before {
   content: ""; width: 5px; height: 5px; border-radius: 50%;
-  background: currentColor; flex: none;
+  background: var(--acc); flex: none;
 }
+.kb-btn { cursor: pointer; transition: background .14s, color .14s; }
+.kb-btn svg {
+  width: 14px; height: 14px; flex: none;
+  fill: none; stroke: currentColor; stroke-width: 1.7;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+.kb-btn:hover { background: var(--surface-3); color: var(--ink); }
+.kb-btn.on { background: var(--acc-soft); color: var(--acc); }
 
+/* 发送键：圆形箭头。禁用时是一颗浅灰实心圆——参考界面里"还不能发"
+   就是一个明确的灰块，不是半透明，也不是藏起来。 */
 .send {
   flex: none; display: inline-flex; align-items: center; justify-content: center;
   width: 34px; height: 34px; padding: 0;
-  background: var(--brand); color: #fff; border: none; border-radius: 50%;
+  background: var(--acc); color: #fff; border: none; border-radius: 50%;
   cursor: pointer;
-  box-shadow: 0 6px 16px -10px rgba(10, 60, 45, .9);
   transition: background .14s, transform .1s, opacity .14s;
 }
-.send svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.send svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 2.1; stroke-linecap: round; stroke-linejoin: round; }
 .send .ico-stop { display: none; fill: currentColor; stroke: none; }
 .send.stopping .ico-send { display: none; }
 .send.stopping .ico-stop { display: block; }
-.send:hover:not(:disabled) { background: var(--brand-2); }
+.send:hover:not(:disabled) { background: var(--acc-2); }
 .send:active:not(:disabled) { transform: scale(.94); }
 .send:disabled {
-  background: color-mix(in srgb, var(--ink) 11%, transparent);
-  color: var(--ink-3); box-shadow: none; cursor: default;
+  background: var(--surface-3);
+  color: var(--ink-4); cursor: default;
 }
-/* 生成中：按钮变成"停止"，用砂金区分——同一个位置换了两件事，
-   颜色不同才不会误点 */
-.send.stopping { background: var(--gold); }
-.send.stopping:hover { background: color-mix(in srgb, var(--gold) 86%, #000); }
+/* 生成中：按钮变成"停止"，用砖红区分——同一个位置换了两件事 */
+.send.stopping { background: var(--warn); }
+.send.stopping:hover { background: color-mix(in srgb, var(--warn) 86%, #000); }
 
 .disclaimer {
-  max-width: var(--col); margin: 8px auto 0;
-  font-size: 12px; color: var(--ink-3); line-height: 1.7; text-align: center;
+  max-width: var(--col); margin: 9px auto 0;
+  font-size: 11.5px; color: var(--ink-3); line-height: 1.6; text-align: center;
 }
 
 .fatal {
   margin: 60px auto; max-width: 520px; text-align: center; color: var(--warn);
-  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-xl);
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg);
   padding: 26px; font-family: var(--zh); line-height: 1.8;
 }
 
@@ -791,69 +810,76 @@ body { overflow: hidden; }   /* 整页不滚，只有 .chat 滚 */
 @media (max-width: 860px) {
   .side {
     position: fixed; top: 0; bottom: 0; left: 0;
-    width: 280px; transform: translateX(-100%);
+    width: 282px; transform: translateX(-100%);
     transition: transform .22s ease;
     box-shadow: var(--shadow-lg);
   }
   .side.open { transform: none; }
   .icon-btn { display: inline-flex; }
-  .top { padding: 10px 12px; min-height: 54px; }
-  .top .sub { display: none; }
-  .composer { padding: 4px 12px 10px; }
-  .box { border-radius: 19px; padding: 8px 8px 7px 13px; }
-  .welcome { padding: 8px 16px 16px; }
+  .top { padding: 10px 12px; min-height: 52px; }
+  .top-id { max-width: calc(100% - 110px); }
+  .composer { padding: 4px 12px 4px; }
+  .box { border-radius: 22px; padding: 10px 10px 8px 15px; }
+  #q { min-height: 44px; }
+  .welcome { padding: 8px 18px 22px; }
+  .wel-text { font-size: 21px; }
+  .wel-mark { width: 26px; height: 26px; border-radius: 8px; }
+  .msgs { padding: 8px 16px 10px; gap: 22px; }
+  .msg.user { max-width: 86%; }
+  .samples { margin-top: 8px; }
+  .to-bottom { bottom: 132px; }
+}
+
+@media (max-width: 560px) {
+  .tool { display: none; }
   .wel-text { font-size: 19px; }
-  .msgs { padding: 6px 14px 8px; gap: 18px; }
-  .msg.user { max-width: 88%; }
-  .to-bottom { bottom: 124px; }
-  /* 免责声明不再在窄屏缩小：手机上它本来就已经是最小的字，
-     再缩 1.5px 等于让最该看清的一段变成灰度装饰。 */
+  .wel-wrap { gap: 9px; }
 }
 
 @media (max-width: 400px) {
-  .lang-switch button { padding: 4px 9px; font-size: 13px; }
-  .top h1 { font-size: 14px; }
+  .top h1 { font-size: 12.5px; }
+  .chip { font-size: 12px; }
 }
-
 
 /* 首屏等待遮罩：服务刚启动时 /api/info 要重试几轮，这期间不能是白屏——
    白屏和"坏了"在用户眼里是同一件事。 */
 .bootmask {
   position: fixed; inset: 0; z-index: 99;
   display: flex; align-items: center; justify-content: center;
-  background: var(--bg); color: var(--muted);
-  font-family: var(--zh); font-size: 15px; letter-spacing: .02em;
+  background: var(--bg); color: var(--ink-3);
+  font-family: var(--zh); font-size: 14px; letter-spacing: .02em;
 }
 
 /* ── 维吾尔语字号补偿（1.7.38）──
    同样的 px，维吾尔文看着比汉字小一号：阿拉伯字母没有大写、上下伸展短，
-   字面（x-height）在墨迹里占的比例也小。放在一起看就是"这块字怎么这么小"。
-   所以维语界面整体 +1.5～2px，并把行高放到 1.85——维语有 ئ 这类带 hamza
-   的字头、还有 ۇ ۆ ۈ 这类带附加符的字母，行距紧了会顶到上一行。
-   只动字号与行高，不动任何布局尺寸：按钮高度、圆角、列宽、侧栏宽度全不变，
-   否则切换语言时整页会跳一下。选择器都带 html[lang="ug"]，中文界面零影响。 */
+   字面在墨迹里占的比例也小。所以维语界面整体 +1.5～2px，行高放到 1.85——
+   维语有 ئ 这类带 hamza 的字头、还有 ۇ ۆ ۈ 这类带附加符的字母，行距紧了会顶行。
+   只动字号与行高，不动任何布局尺寸：按钮高度、圆角、列宽、侧栏宽度全不变。 */
 html[lang="ug"] body { line-height: 1.85; }
-html[lang="ug"] .wel-text { font-size: 25.5px; line-height: 1.8; }
-html[lang="ug"] .wel-hint { font-size: 15px; }
-html[lang="ug"] .chip { font-size: 15px; }
+html[lang="ug"] .wel-text { font-size: 28px; line-height: 1.55; }
+html[lang="ug"] .wel-hint { font-size: 14px; }
+html[lang="ug"] .chip { font-size: 13.5px; }
 html[lang="ug"] #q { font-size: 17.5px; line-height: 1.85; }
-html[lang="ug"] .tool { font-size: 13.5px; }
-html[lang="ug"] .disclaimer { font-size: 13px; }
-html[lang="ug"] .nav-item { font-size: 15.5px; }
-html[lang="ug"] .nav-item .ni-meta { font-size: 12.5px; }
-html[lang="ug"] .side-name { font-size: 16px; }
-html[lang="ug"] .side-meta { font-size: 13px; }
-html[lang="ug"] .top h1 { font-size: 15.5px; }
-html[lang="ug"] .answer { font-size: 17.5px; line-height: 1.9; }
+html[lang="ug"] .tool, html[lang="ug"] .kb-btn { font-size: 13px; }
+html[lang="ug"] .disclaimer { font-size: 12.5px; }
+html[lang="ug"] .nav-item { font-size: 15px; }
+html[lang="ug"] .nav-item .ni-meta { font-size: 12px; }
+html[lang="ug"] .side-name { font-size: 15.5px; }
+html[lang="ug"] .side-meta { font-size: 12.5px; }
+html[lang="ug"] .new-chat { font-size: 14.5px; }
+html[lang="ug"] .top h1 { font-size: 14px; }
+html[lang="ug"] .answer { font-size: 17.5px; line-height: 1.95; }
+html[lang="ug"] .md { line-height: 1.95; }
+html[lang="ug"] .md h3, html[lang="ug"] .md h4 { font-size: 18px; }
 html[lang="ug"] #pvMsgs .msg.bot .answer { font-size: 16.5px; }
-html[lang="ug"] .status { font-size: 14px; }
-html[lang="ug"] .src-head { font-size: 14px; }
-html[lang="ug"] .src-prev { font-size: 14px; }
-html[lang="ug"] .foot { font-size: 13.5px; }
-html[lang="ug"] .foot .alang, html[lang="ug"] .msg .alang { font-size: 13px; }
-/* 窄屏再让一档：25.5px 的标题在 360px 宽的手机上会折成三行 */
+html[lang="ug"] .status { font-size: 13.5px; }
+html[lang="ug"] .src-head { font-size: 13.5px; }
+html[lang="ug"] .src-prev { font-size: 13.5px; }
+html[lang="ug"] .foot { font-size: 12.5px; }
+html[lang="ug"] .lang-switch button { font-size: 13px; }
+/* 窄屏再让一档：28px 的标题在 360px 宽的手机上会折成三行 */
 @media (max-width: 860px) {
-  html[lang="ug"] .wel-text { font-size: 21px; line-height: 1.7; }
+  html[lang="ug"] .wel-text { font-size: 22px; line-height: 1.6; }
   html[lang="ug"] #q { font-size: 17px; }
   html[lang="ug"] .answer { font-size: 16.5px; }
 }
@@ -862,35 +888,18 @@ html[lang="ug"] .foot .alang, html[lang="ug"] .msg .alang { font-size: 13px; }
    中文 Windows 上没有维吾尔语键盘，手机端可能连阿拉伯字母都不会打，所以
    输入框里给一条"不装任何东西也能打维语"的路：拉丁转写 + 字母表。
    面板浮在输入卡**上方**（position:absolute，不参与流式布局）：展开收起时
-   输入框一动不动，用户不用重新找光标；也不做成遮罩层——填一个词就要回看
-   聊天区，挡住半屏是帮倒忙。 */
+   输入框一动不动，用户不用重新找光标。 */
 .box { position: relative; }
-
-.kb-btn {
-  display: inline-flex; align-items: center; gap: 5px;
-  height: 24px; padding: 0 9px 0 7px; flex: none;
-  border: 1px solid var(--line); border-radius: 999px;
-  background: transparent; color: var(--ink-2);
-  font: inherit; font-size: 12.5px; line-height: 1; cursor: pointer;
-  transition: background .14s, color .14s, border-color .14s;
-}
-.kb-btn svg {
-  width: 14px; height: 14px; flex: none;
-  fill: none; stroke: currentColor; stroke-width: 1.7;
-  stroke-linecap: round; stroke-linejoin: round;
-}
-.kb-btn:hover { color: var(--ink); border-color: var(--brand-line); background: var(--surface-2); }
-.kb-btn.on { color: var(--brand); border-color: var(--brand-line); background: var(--brand-soft); }
 
 .kb {
   position: absolute; left: 0; right: 0; bottom: calc(100% + 8px); z-index: 25;
   max-height: 52vh; overflow: auto;
   background: var(--surface); border: 1px solid var(--line);
   border-radius: var(--r-lg); box-shadow: var(--shadow-lg);
-  padding: 10px 12px 12px;
+  padding: 12px 14px 14px;
 }
 .kb-head { display: flex; align-items: center; gap: 8px; }
-.kb-head b { font-size: 13px; font-weight: 700; color: var(--ink); }
+.kb-head b { font-size: 13px; font-weight: 600; color: var(--ink); }
 /* 提示单独占一行：塞在标题右边时，维语标题和这句提示会挤成一坨灰字 */
 .kb-tip {
   margin: 4px 0 0; font-size: 11.5px; color: var(--ink-3); line-height: 1.6;
@@ -898,19 +907,20 @@ html[lang="ug"] .foot .alang, html[lang="ug"] .msg .alang { font-size: 13px; }
 .kb-head .grow { flex: 1; }
 .kb-x {
   flex: none; width: 22px; height: 22px; border-radius: 6px;
-  color: var(--ink-3); font-size: 15px; line-height: 1;
+  border: 0; background: transparent; color: var(--ink-3);
+  font-size: 15px; line-height: 1; cursor: pointer;
 }
 .kb-x:hover { background: var(--surface-2); color: var(--ink); }
 
-.kb-lat { display: flex; align-items: center; gap: 8px; margin-top: 9px; }
+.kb-lat { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
 .kb-input {
   flex: 1 1 46%; min-width: 0; height: 32px;
   border: 1px solid var(--line); border-radius: 8px;
   background: var(--surface-2); padding: 0 10px;
   font-size: 13px; color: var(--ink); outline: none;
 }
-.kb-input:focus { border-color: var(--brand-line); background: var(--surface); }
-/* 预览区：写成一段"结果"，不是输入框——用户要看的是"我打的字变成了什么" */
+.kb-input:focus { border-color: var(--acc-line); background: var(--surface); }
+/* 预览区：写成一段"结果"，不是输入框 */
 .kb-prev {
   flex: 1 1 46%; min-width: 0; height: 32px; line-height: 30px;
   padding: 0 8px; text-align: right;
@@ -920,17 +930,14 @@ html[lang="ug"] .foot .alang, html[lang="ug"] .msg .alang { font-size: 13px; }
 }
 .kb-ins {
   flex: none; height: 32px; padding: 0 13px; border-radius: 8px;
-  background: var(--brand); color: #fff;
-  font-size: 12.5px; font-weight: 600;
+  border: 0; background: var(--acc); color: #fff;
+  font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer;
 }
-.kb-ins:hover { background: var(--brand-2); }
+.kb-ins:hover { background: var(--acc-2); }
 .kb-ins:disabled { opacity: .45; cursor: default; }
 
-/* 8×4 = 32 个字母，正好一屏；比"按标准维语键盘排"更好找——不会盲打的人
-   找字母靠的是扫一眼，不是记键位。 */
-/* 字母表按 rtl 排：ا 落在右上角，跟维语读者的扫视方向一致（从左往右找
-   第 1 个字母，等于从 ي 开始，怎么找都别扭）。只改这一格的填充方向，
-   面板骨架仍是 ltr——和全站"切语言不换边"的规则不冲突。 */
+/* 8×4 = 32 个字母，正好一屏。按 rtl 排：ا 落在右上角，跟维语读者的
+   扫视方向一致。只改这一格的填充方向，面板骨架仍是 ltr。 */
 .kb-keys { direction: rtl; display: grid; grid-template-columns: repeat(8, 1fr); gap: 6px; margin-top: 10px; }
 .kb-key {
   height: 38px; border: 1px solid var(--line); border-radius: 9px;
@@ -938,16 +945,15 @@ html[lang="ug"] .foot .alang, html[lang="ug"] .msg .alang { font-size: 13px; }
   font-family: var(--ug); font-size: 18px; line-height: 1; cursor: pointer;
   transition: background .12s, border-color .12s;
 }
-.kb-key:hover { background: var(--brand-soft); border-color: var(--brand-line); }
-.kb-key:active { background: var(--brand); color: #fff; }
+.kb-key:hover { background: var(--acc-soft); border-color: var(--acc-line); }
+.kb-key:active { background: var(--acc); color: #fff; }
 .kb-foot { display: flex; gap: 6px; margin-top: 6px; }
 .kb-key-extra { flex: none; width: 76px; font-size: 15px; }
 .kb-space { flex: 1; font-family: var(--ui); font-size: 12px; color: var(--ink-3); }
 
-/* 窄屏：按钮只剩图标（"ئۇيغۇرچە كىرگۈزۈش" 会把工具标签挤没），
-   字母格子再收一号，保证 360px 宽也能一格不落地摆下 8 列。 */
+/* 窄屏：按钮只剩图标，字母格子再收一号 */
 @media (max-width: 560px) {
-  .kb-btn { padding: 0 8px; }
+  .kb-btn { padding: 0 9px; }
   .kb-btn span { display: none; }
   .kb-keys { gap: 4px; }
   .kb-key { height: 34px; font-size: 17px; }

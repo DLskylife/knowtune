@@ -125,16 +125,39 @@ def _pack_for_parallel(text: str, limit: int = 240) -> list[str]:
     小段落也单独成段——并发时这直接把段数抬到 6 个以上，4 路要跑两轮，
     等于白等一轮。这里改成先按句末标点拆散、再贪心填满：700 字的草稿
     得到 3 段而不是 6 段，一轮并发就翻完。
+
+    段内必须**保留换行**。早先这里用 `buf += p` 直接拼，把 `### 小标题`、
+    `- 要点` 和上一句粘成一行：模型收到的原文已经没有结构，译文自然也
+    没有结构，界面上就是"### 四类特点- 干热气质：……"糊成一整段。
+    现在按行成单元、段内用换行连接；只有同一行里被句末标点切开的碎片
+    才直接相连（那是同一句话的续写）。
     """
-    parts = [p for p in re.split(r"(?<=[。！？；!?;])|\n+", text or "") if p and p.strip()]
+    units: list[str] = []
+    for line in (text or "").split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        if len(line) <= limit:
+            units.append(line)
+            continue
+        buf = ""
+        for ch in line:
+            buf += ch
+            if len(buf) >= limit and ch in "。！？；.!?;":
+                units.append(buf)
+                buf = ""
+        if buf.strip():
+            units.append(buf)
+
     segs: list[str] = []
     buf = ""
-    for p in parts:
-        if buf and len(buf) + len(p) > limit:
+    for unit in units:
+        cand = unit if not buf else buf + "\n" + unit
+        if buf and len(cand) > limit:
             segs.append(buf)
-            buf = p
+            buf = unit
         else:
-            buf += p
+            buf = cand
     if buf.strip():
         segs.append(buf)
     return segs
@@ -740,6 +763,8 @@ def build_site(spec, state: Any) -> FastAPI:
                         {"role": "system", "content": (
                             f"你是翻译器。把中文答案翻译成{dst_label}。"
                             "要求：只输出译文；保留 [1]、[2] 这类来源编号原样不动；"
+                            "保留原文的换行、「### 」小标题和「- 」列表符号，一行对一行，"
+                            "不要把小标题和相邻段落合成一段；"
                             "不要复述问题，不要添加原文没有的内容，不要解释。"),
                          },
                         {"role": "user", "content": draft},

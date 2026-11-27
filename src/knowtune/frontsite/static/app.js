@@ -22,7 +22,7 @@
 
 /* 构建号：和 index.html 里那份必须一致，不一致说明浏览器拿的是旧 JS，
    页面加载完会强制换一次（见 index.html 里的自检脚本）。 */
-window.SITE_BUILD = "1.7.42";
+window.SITE_BUILD = "1.7.43";
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
@@ -76,9 +76,12 @@ const T = {
     netErr: "تور ئۇلىنىشى ئۈزۈلدى، قايتا سىناڭ.",
     srvErr: "مۇلازىمەت ۋاقىتلىق ئىشلىمەيۋاتىدۇ.",
     modelErr: "جاۋاب مۇلازىمىتى تېخى ئۇلانمىدى، سەل تۇرۇپ قايتا سىناڭ.",
-    newChat: "يېڭى سۆھبەت",
+    newChat: "يېڭى سۆھبەت باشلاش",
     noChats: "سۆھبەت تارىخى يوق",
     today: "بۈگۈن",
+    week: "7 كۈن ئىچىدە",
+    month: "30 كۈن ئىچىدە",
+    older: "ئىلگىرى",
     earlier: "ئىلگىرى",
     del: "سۆھبەتنى ئۆچۈرۈش",
     delConfirm: "ئۆچۈرەمسىز؟",
@@ -163,9 +166,12 @@ const T = {
     netErr: "网络连接中断，请重试。",
     srvErr: "服务暂时不可用。",
     modelErr: "答案服务还没连上，稍后再试。",
-    newChat: "新对话",
+    newChat: "开启新对话",
     noChats: "还没有对话",
     today: "今天",
+    week: "7 天内",
+    month: "30 天内",
+    older: "更早",
     earlier: "更早",
     del: "删除这条对话",
     delConfirm: "确认删除",
@@ -229,7 +235,8 @@ const T = {
     srvErr: "Service temporarily unavailable.",
     modelErr: "The answer service is not connected yet. Please retry shortly.",
     newChat: "New chat", noChats: "No conversations yet",
-    today: "Today", earlier: "Earlier",
+    today: "Today", week: "Last 7 days", month: "Last 30 days", older: "Earlier",
+    earlier: "Earlier",
     del: "Delete this chat", delConfirm: "Delete",
     navMed: "Uyghur medicine", navClassic: "Classics", navPv: "Pre-visit",
     classicTitle: "Classics Q&A", pvTitle: "Pre-visit",
@@ -484,10 +491,13 @@ function renderSessions() {
     box.innerHTML = `<p class="side-empty">${esc(t.noChats)}</p>`;
     return;
   }
-  const today = new Date().toDateString();
-  const groups = [[t.today, []], [t.earlier, []]];
+  // 按"多久以前"分组，而不是"是不是今天"：用户记得的是"上周问过"，
+  // 不是"那天是不是今天"。三档和参考界面一致，多出的旧对话落进「更早」。
+  const DAY = 86400000;
+  const groups = [[t.week || t.today, []], [t.month || t.earlier, []], [t.older || t.earlier, []]];
   mine.forEach((c) => {
-    groups[new Date(c.at).toDateString() === today ? 0 : 1][1].push(c);
+    const age = Date.now() - (c.at || 0);
+    groups[age < 7 * DAY ? 0 : age < 30 * DAY ? 1 : 2][1].push(c);
   });
   box.innerHTML = groups.filter((g) => g[1].length).map(([name, list]) =>
     `<p class="side-group">${esc(name)}</p>` + list.map(sessRow).join("")).join("");
@@ -1089,7 +1099,11 @@ function renderRich(text) {
   };
 
   for (const raw of lines) {
-    const line = raw.replace(/\s+$/, "");
+    // 行首的方向控制符要先摘掉再做块级判断：翻译模型经常在维语行首塞一个
+    // RLM（U+200F），于是 "^### " 匹配不上，整行退化成正文——屏幕上就是
+    // 三个井号原样显示、小标题也不加粗。这些字符对行首没有语义，摘掉安全。
+    const line = raw.replace(/\s+$/, "")
+      .replace(/^[\u200e\u200f\u061c\u202a-\u202e\ufeff]+/, "");
     if (!line.trim()) {
       flushPara();
       // 空行**不关闭**列表。模型几乎都按"每条一段"排版，一遇空行就 flush，
@@ -1101,7 +1115,10 @@ function renderRich(text) {
     const head = /^(#{1,4})\s+(.*)$/.exec(line);
     if (head) {
       flushPara(); flushList();
-      out.push(`<h4>${inline(head[2])}</h4>`);
+      // 3 级及以内走 h3、4 级走 h4：两者字号一样，语义上分开，
+      // 屏幕阅读器按层级跳读时不会把"分节"和"小节"混成一级。
+      const tag = head[1].length >= 4 ? "h4" : "h3";
+      out.push(`<${tag}>${inline(head[2])}</${tag}>`);
       continue;
     }
 
@@ -1490,6 +1507,7 @@ function applyChrome() {
   // 不能用 dir=auto——输入框为空时 auto 会退回父级 ltr，维语占位符被甩到左边。
   $("q").dir = dirOf(uiLang);
   $("btnNewChat").title = t.newChat;
+  $("newChatLabel").textContent = t.newChat;
   $("histTitle").textContent = t.histTitle;
   syncSend();
   renderLangSwitch();
@@ -1663,6 +1681,7 @@ function applyViewCopy() {
   $("sideHist").hidden = false;
   $("histTitle").textContent = pvOn ? (t.pvRestart || "") : t.histTitle;
   $("btnNewChat").title = pvOn ? (t.pvRestart || "") : t.newChat;
+  $("newChatLabel").textContent = pvOn ? (t.pvRestart || "") : t.newChat;
   $("pvMsgs").hidden = !pvOn;
   $("msgs").hidden = pvOn;
 }
@@ -1685,6 +1704,9 @@ function switchView(key) {
     $("welcome").hidden = true;
     $("main").classList.remove("empty");
     $("chat").classList.remove("empty");
+    // 预问诊不列历史，但上一栏的列表还在 DOM 里：不清掉，切过去会看到
+    // 维医那段对话的标题挂在"重新开始"下面，像是串库。
+    renderSessions();
     enterPv(changed);
   } else {
     renderChat();

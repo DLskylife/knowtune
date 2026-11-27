@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
 <title>ئۇيغۇر تېبابىتى بىلىم سوئال-جاۋاب سىستېمىسى</title>
-<link rel="stylesheet" href="/style.css?v=1.7.42">
+<link rel="stylesheet" href="/style.css?v=1.7.43">
 <link rel="icon" href="data:,">
 <script>
   /*
@@ -15,7 +15,7 @@
    * 核对 app.js 报上来的编号，对不上就强制换一次。只换一次（sessionStorage 记
    * 一笔），免得极端情况下刷成死循环。
    */
-  window.SITE_REQ_BUILD = "1.7.42";
+  window.SITE_REQ_BUILD = "1.7.43";
   addEventListener("load", function () {
     if (window.SITE_BUILD === window.SITE_REQ_BUILD) return;
     if (sessionStorage.getItem("knowtune.site.reloaded")) return;
@@ -27,67 +27,79 @@
 <body>
 <div class="app">
 
-  <!-- 左侧栏：导航与语言开关。位置永远在左，切语言也不动——
-       这是这次改版最重要的一条：镜像整页会让所有元素换边，用户点完
-       开关就找不到刚才那个按钮了。 -->
+  <!-- 左侧栏：品牌 + 新对话 + 板块 + 历史 + 语言。
+       位置永远在左，切语言也不动——镜像整页会让所有元素换边，用户点完
+       语言开关就找不到刚才那个按钮了。 -->
   <aside class="side" id="side" aria-label="导航">
     <div class="side-head">
-      <!-- 品牌徽记：纯 CSS 画的八角星（两个方块旋转叠加），不引外部图片，
-           离线下也不会变成碎图标 -->
-      <span class="brand-mark" aria-hidden="true"><i></i><i></i></span>
+      <!-- 品牌徽记：内联 SVG 的一片叶子（一撇叶脉 + 一笔叶缘），不引外部图片，
+           离线下也不会变成碎图标。此前是两个旋转方块叠八角星——在 28px 下
+           1.4px 的描边糊成一团白点，缩到侧栏尺寸就只剩个方块。 -->
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M4.6 19.4C4.6 11 9.6 5.6 19.8 4.2c-1 10.2-6.4 15.2-15.2 15.2Z"/><path d="M4.6 19.4c3.4-5.4 7.8-9.4 13.6-13.2"/></svg>
+      </span>
       <div class="side-id">
         <p class="side-name" id="sideName" dir="auto"></p>
         <p class="side-meta" id="sideMeta" dir="ltr"></p>
       </div>
     </div>
 
+    <!-- 新对话：整栏一颗通栏按钮，和参考界面同一个位置、同一个分量。
+         以前藏在「对话」标题行的一个小加号里——三栏并排之后，那颗加号
+         跟板块导航抢层级，用户找新对话得先找标题行。 -->
+    <button class="new-chat" id="btnNewChat" type="button">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+      <span id="newChatLabel"></span>
+    </button>
+
     <!-- 三个板块：维医问答 / 古籍问答 / 预问诊。
          前两个是同一套问答、只是检索范围不同（维医库 vs 古籍），所以它们
-         共用一个会话列表；预问诊是另一条链路，进去就没有"对话历史"可列。
-         以前这里是两颗按钮（新对话、预问诊）——一个动词、一个名词并排，
-         用户看不出"预问诊"是另一套东西，点进去还换了个模样。 -->
+         共用一个会话列表；预问诊是另一条链路，进去就没有"对话历史"可列。 -->
     <nav class="nav" id="nav" aria-label="板块"></nav>
 
     <div class="side-hist" id="sideHist">
       <div class="hist-head">
         <span id="histTitle"></span>
-        <button class="hist-add" id="btnNewChat" type="button">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
-        </button>
       </div>
       <div class="side-scroll" id="sideScroll"></div>
+    </div>
+
+    <!-- 语言开关放在侧栏底部（参考界面是账号行的位置）。
+         两颗并排按钮 + 当前语言高亮：比一颗"点了会变成X"的按钮清楚得多。
+         位置固定，不随界面语言换边。 -->
+    <div class="side-foot">
+      <div class="lang-switch" id="langSwitch" role="group" aria-label="语言"></div>
     </div>
   </aside>
 
   <div class="scrim" id="scrim" hidden></div>
 
   <div class="main" id="main">
+    <!-- 顶栏只在对话态出现一个居中胶囊（现在在哪一栏）。空态整条是透明的，
+         菜单键浮在左上——参考界面的首屏没有标题栏，欢迎语才是第一眼。 -->
     <header class="top">
       <button class="icon-btn only-narrow" id="btnSide" type="button" aria-label="menu">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
       </button>
       <div class="top-id">
-        <!-- 标题左对齐是写死的物理方向（不是 start），所以 dir 只影响字形顺序，
-             切换语言时文字位置不会跳。 -->
         <h1 id="siteTitle" dir="auto"></h1>
-        <p class="sub" id="siteSub" dir="auto"></p>
+        <p class="sub" id="siteSub" dir="auto" hidden></p>
       </div>
-      <!-- 中/维切换是全局的：一次点完，整页所有回答一起换语言。常显——
-           "拿到原稿才出现"的写法等于没问过问题就永远看不见按钮。
-           两颗并排按钮 + 当前语言高亮：比一颗"点了会变成X"的按钮清楚得多。 -->
-      <div class="lang-switch" id="langSwitch" role="group" aria-label="语言"></div>
     </header>
 
     <main class="chat" id="chat">
       <div class="welcome" id="welcome" hidden>
-        <h2 class="wel-text" id="welText" dir="auto"></h2>
+        <div class="wel-wrap">
+          <span class="brand-mark wel-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M4.6 19.4C4.6 11 9.6 5.6 19.8 4.2c-1 10.2-6.4 15.2-15.2 15.2Z"/><path d="M4.6 19.4c3.4-5.4 7.8-9.4 13.6-13.2"/></svg>
+          </span>
+          <h2 class="wel-text" id="welText" dir="auto"></h2>
+        </div>
         <p class="wel-hint" id="welHint" dir="auto"></p>
-        <div class="samples" id="samples"></div>
       </div>
       <div class="msgs" id="msgs"></div>
       <!-- 预问诊用同一个聊天区、同一套气泡与输入框，只是把消息画在这里。
-           两块列表分开是为了切板块时不互相冲掉：共用一个容器的话，从预问诊
-           切回维医问答，刚才那串症状问答就会顶在知识库问答上面。 -->
+           两块列表分开是为了切板块时不互相冲掉。 -->
       <div class="msgs" id="pvMsgs" hidden></div>
     </main>
 
@@ -152,10 +164,14 @@
           </div>
         </div>
       </div>
+      <!-- 示例问题放在输入框下方、只在空态出现：参考界面首屏只有欢迎语和输入框，
+           示例是给"不知道该问什么"的患者的辅助，不该挡在输入框前面，
+           也不该被免责声明隔开、掉到页面最底下。 -->
+      <div class="samples" id="samples"></div>
       <p class="disclaimer" id="disclaimer" dir="auto"></p>
     </footer>
   </div>
 </div>
-<script src="/app.js?v=1.7.42"></script>
+<script src="/app.js?v=1.7.43"></script>
 </body>
 </html>
