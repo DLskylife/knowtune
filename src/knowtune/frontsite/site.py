@@ -48,6 +48,72 @@ from .instcfg import default_copy
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
+
+def _build_localized_pack(answer: str, draft: str, question: str,
+                          citations: list[dict]) -> dict | None:
+    """把这一轮屏幕上会出现中文的每一处，一次过翻译模型，产出结构化译文包。
+
+    架构：翻译发生在**提问收尾**，不是在用户切语言那一刻。前端拿到答案时
+    译文已经备好落盘，之后切语言只是从本地记录里换文本渲染——零网络、零
+    等待、零状态机。旧架构是切语言时才现翻，撞上网关抖动就永远翻不完，
+    用户看到的就是"按钮亮着维语、内容还是中文"。
+
+    返回 None 表示这一轮没有中文要翻（本来就是维语答案）。字段与前端
+    paintAnswer / questionText / titleText / citText 的取值一一对应：
+      ug  → rec.ug（正文）        dug → 中文草稿的译文（见下）
+      qu  → rec.qu（用户问题）    tu  → chat.tu（会话标题）
+      cit[i].{doc_title,heading_path,preview}
+    """
+    try:
+        is_zh = lambda x: bool(
+            x and str(x).strip() and lang_mod.detect(str(x)) == "zh")
+        title = re.sub(r"\s+", " ", question).strip()[:40]
+
+        # 预览和前端 citText 一样截到 600 字，保证译文盖住显示的全部内容。
+        slots: list[tuple[str, str, str]] = []   # (分组, 键, 原文)
+        if is_zh(answer):
+            slots.append(("main", "ug", answer))
+        # 两段式翻译失败时，前端 done 分支会把屏幕上显示的正文退回中文草稿。
+        # 这时 rec.ug 必须对应草稿而不是 answer，否则切到维语拿到的是另一段
+        # 文字的译文，用户看到"切了语言但内容对不上"。草稿和正文一起翻，
+        # 缓存去重后几乎不增加成本。
+        if draft and draft.strip() and draft != answer and is_zh(draft):
+            slots.append(("main", "dug", draft))
+        if is_zh(question):
+            slots.append(("main", "qu", question.strip()))
+        if is_zh(title):
+            slots.append(("main", "tu", title))
+        for i, c in enumerate(citations):
+            for f in ("doc_title", "heading_path", "preview"):
+                v = c.get(f)
+                if not v:
+                    continue
+                s = str(v)[:600] if f == "preview" else str(v)
+                if is_zh(s):
+                    slots.append((f"cit{i}", f, s))
+        if not slots:
+            return None
+
+        uniq = list(dict.fromkeys(s for _, _, s in slots))
+        res = answer_localize_mod.localize_texts(uniq)
+        trans = dict(zip(uniq, res.get("translations") or []))
+        pack: dict = {"ug": "", "dug": "", "qu": "", "tu": "", "cit": {}}
+        for group, key, src in slots:
+            out = trans.get(src) or ""
+            if not out:
+                continue
+            if group == "main":
+                pack[key] = out
+            else:
+                pack["cit"].setdefault(group, {})[key] = out
+        # 没有任何一条翻成就别推空包——前端收到空包会误以为"翻过了"。
+        if not (pack["ug"] or pack["dug"] or pack["qu"] or pack["tu"]
+                or pack["cit"]):
+            return None
+        return pack
+    except Exception:
+        return None
+
 # 维吾尔语回答时，模型偶尔会偷懒吐中文（资料是中文的）。这句兜底指令放在
 # 用户问题后面再压一次，比只在系统提示里说一次的服从率高得多。
 _LANG_TAIL = {
@@ -923,33 +989,9 @@ def build_site(spec, state: Any) -> FastAPI:
             report = cite_mod.verify(answer, len(bundle.citations))
             citations = [asdict(c) for c in bundle.citations]
 
-            # 提问收尾即后台预译：把这一轮的中文文本翻好落进服务端缓存，
-            # 用户随后切维语时命中即返（毫秒级），不再对着一屏中文等 12～20 秒。
-            # "所有文字整体牵动"——清单必须覆盖切语言后屏幕上会出现的每一处中文：
-            # 正文、草稿、问题、标题，以及来源面板的文档标题 / 小节路径 / 预览原文。
-            # 来源三字段以前从没进过翻译链，切到维语后那一大段中文就是这么来的。
-            # 文本必须与前端稍后查询的逐字一致，否则缓存形同虚设：
-            # 问题用 trim 后的原文；标题用前端同样的 \s+→空格 + 截 40 字规则；
-            # 来源字段用 asdict 出来的原样值（前端拿同一份 citations 发查询）。
-            # 异步提交，不占流式时间；失败静默，前端补译链仍会兜底。
-            try:
-                _title = re.sub(r"\s+", " ", req.question).strip()[:40]
-                _warm_zh = [x for x in (answer, draft, req.question, _title)
-                            if x and x.strip() and lang_mod.detect(x) == "zh"]
-                # 来源只预热标题 / 小节路径（短，各一块），**不预热 preview 原文**：
-                # 预览是折叠面板里的证据摘录，动辄几百字，按行切成十几块 × 多条
-                # 引用，会把翻译器请求量放大一个数量级、撞云端限流，连正文都跟着
-                # 翻不出来（实测正文主 client 失败、退回空端点报 400）。
-                # 正文 / 问题 / 标题在列表前面，先切块先翻，绝不被来源挤掉。
-                for _c in citations:
-                    for _f in ("doc_title", "heading_path"):
-                        _v = _c.get(_f)
-                        if _v and str(_v).strip() and lang_mod.detect(str(_v)) == "zh":
-                            _warm_zh.append(str(_v))
-                if _warm_zh:
-                    answer_localize_mod.warm(list(dict.fromkeys(_warm_zh)))
-            except Exception:
-                pass
+            # 译文不再在这里后台预热：改由 done 之后的 localized 事件同步产出
+            # 并一次性推给前端（见下方）。预热与切语言请求撞车抢网关，是
+            # "切了语言却一直翻不完"的老病根，整条路径已退役。
             msg_id = None
             if session_id:
                 msg_id = _save(conn, session_id, req.question, answer, trace_id, citations)
@@ -974,6 +1016,16 @@ def build_site(spec, state: Any) -> FastAPI:
                 + (["generation_loop"] if looped else []),
                 "timings_ms": timings,
             })
+
+            # 答案已经上屏（done 已发出），趁 SSE 流还开着，把所有中文一次
+            # 翻好随 localized 推给前端。前端收到即写进本地会话记录，之后
+            # 切语言纯渲染、不再发任何请求。翻译结果同时落服务端缓存，别的
+            # 设备 / 刷新页面也能命中。失败静默：前端见到缺译文仍会按需补。
+            if answer_lang == "ug" or lang_mod.detect(answer) == "zh":
+                _pack = _build_localized_pack(
+                    answer, draft, req.question, citations)
+                if _pack:
+                    yield _sse("localized", _pack)
 
         def _stream_answer(msgs: list[dict], prov: str, want_lang: str):
             """维吾尔语回答时，用 assistant 前缀把模型往维语上"拽"一把。
