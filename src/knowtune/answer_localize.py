@@ -21,8 +21,11 @@ from typing import Any
 
 from . import translation_cache
 
-# 翻译模型在 250 字以上就开始漏译/回原文（实测 150/250 字过，294 字整条被
-# 质量闸门判废）。按行切成小段分别翻，既保住换行结构，也让多条能并发。
+# 翻译模型按行切成小段分别翻，既保住换行结构，也让多条能并发。
+# 维语译文约为中文的 5 倍长（语言特性，非模型失控），实测 100 字块译 542 字、
+# 150 字块译 767 字，单次网关调用 15~20 秒；块太小只会切出更多块、总耗时更长，
+# 块太大（300 字以上）则输出逼近 max_tokens 被截断判废、触发重试风暴。
+# 180 是实测的折中：长正文约 3~5 块，6 路并发 3 轮内完成。
 _CHUNK = 180
 
 # 单次翻译的块数上限：挡的是"一次请求无上限地打云端"这种失控，不是正常用量。
@@ -98,11 +101,27 @@ def localize_texts(texts: list[str], *, limit: int = 64) -> dict[str, Any]:
     if not clean:
         return {"translations": [], "error": ""}
 
+    # ① 批内去重：同一批 texts 里常有完全相同的句子——问题重复两遍、
+    #    同一个文档名在多条引用里出现五次（实测一轮 13 条里重复占 6 条）。
+    #    下面 _claim 用文本本身做 key 登记在飞：重复句第一条登记后，其余进
+    #    others 等同一个 Event，而那个 Event 要等本次调用翻译到 finally 才
+    #    set——于是在【同一次调用里自己等自己】，45 秒超时后 steal 夺回的
+    #    还是自己的牌，反复循环直到雪崩。这就是"切语言 180 秒不返回、正文
+    #    永远中文"真正的根因，和翻译器、网关都无关。
+    #    去重后只翻唯一文本，返回时按位置展开，重复句共用一份译文。
+    uniq: list[str] = []
+    uniq_seen: set[str] = set()
+    for t in clean:
+        if t not in uniq_seen:
+            uniq_seen.add(t)
+            uniq.append(t)
+
     # ① 先查缓存：预译、上次补译、别的会话翻过的，这里直接命中。
-    cached = translation_cache.get(clean)
-    todo = [t for t in clean if t.strip() and t not in cached]
+    cached = translation_cache.get(uniq)
+    todo = [t for t in uniq if t.strip() and t not in cached]
     if not todo:
-        return {"translations": [cached.get(t, "") for t in clean], "error": ""}
+        out = [cached.get(t, "") for t in uniq]
+        return {"translations": [out[uniq.index(t)] for t in clean], "error": ""}
 
     # ①' 同一句话只翻一次：提问收尾的后台预译和用户切语言的补译经常同时
     #     打到同一批文本上，两边都翻等于把云端请求量翻倍，冷启动从 25 秒拖到
@@ -125,11 +144,17 @@ def localize_texts(texts: list[str], *, limit: int = 64) -> dict[str, Any]:
                 mine.update(_steal(still))
             todo = [t for t in todo if t not in cached and t in mine]
         if not todo:
-            return {"translations": [cached.get(t, "") for t in clean],
-                    "error": ""}
-        return _translate(clean, cached, todo)
+            out = {t: cached.get(t, "") for t in uniq}
+            return {"translations": [out[t] for t in clean], "error": ""}
+        result = _translate(uniq, cached, todo)
     finally:
         _release(mine)          # 任何路径都要放行等在同一批文本上的另一路
+    # _translate 按 uniq 位置返回，展开回 clean 的原始位置（重复句共用译文）。
+    uniq_out = result["translations"]
+    if uniq_out:
+        pos = {t: i for i, t in enumerate(uniq)}
+        result["translations"] = [uniq_out[pos[t]] for t in clean]
+    return result
 
 
 def _translate(clean: list[str], cached: dict[str, str],
@@ -149,12 +174,20 @@ def _translate(clean: list[str], cached: dict[str, str],
 
     clients = list(getattr(tr, "clients", None) or [tr])
 
-    def one(text: str) -> tuple[str, str]:
+    def one(text: str, deadline: float | None = None) -> tuple[str, str]:
+        # 总时间预算：网关抖动时一次 complete 最长 20 秒，2 clients × 2 attempts
+        # 就是 80 秒/块，再叠加串行补漏的另一轮 160 秒——累计三分钟，用户切
+        # 语言就死等"整体切换中"。加预算后超时的块快速返回空、整条降级留原文，
+        # 让整页切换尽快收敛，而不是把所有人钉在转圈上。
         last = "没有可用翻译客户端"
         for client in clients:
+            if deadline is not None and time.time() >= deadline:
+                return "", "翻译超时（超出时间预算）"
             for attempt in range(2):
                 if attempt:
                     time.sleep(0.6)     # 云端限流是瞬时的，立刻重试大概率还撞
+                if deadline is not None and time.time() >= deadline:
+                    return "", "翻译超时（超出时间预算）"
                 try:
                     out = client.complete(
                         [{"role": "system", "content": _SYS},
@@ -200,8 +233,11 @@ def _translate(clean: list[str], cached: dict[str, str],
 
     # 并发度：正文一条长答案要切 3～6 块，串行翻要等 30 秒以上。6 路是实测
     # 云端还能稳住的档位（再高就开始成片 429，重试反而更慢）。
+    # 每块 25 秒预算：正常 15 秒返回，网关抖动时到点就降级，不拖垮整批。
+    _PER_JOB_BUDGET = 25.0
     with ThreadPoolExecutor(max_workers=min(6, len(jobs))) as pool:
-        pieces = list(pool.map(lambda job: one(job[1]), jobs))
+        pieces = list(pool.map(
+            lambda job: one(job[1], time.time() + _PER_JOB_BUDGET), jobs))
 
     done: list[str] = []
     for i in range(len(todo)):
@@ -214,9 +250,13 @@ def _translate(clean: list[str], cached: dict[str, str],
     # 补漏：并发翻的时候偶尔有一块撞 429，整条就被判废——用户看到的正是
     # "正文还是中文"。这里把失败的条**串行**再翻一遍（一次一块、留间隔），
     # 并发压力归零，成功率接近 100%。只补失败的，正常路径不多花一毫秒。
+    # 补漏整体预算 45 秒：正常无补漏时零开销；失败时也不允许再拖两分钟。
+    _PATCH_DEADLINE = time.time() + 45.0
     for i in range(len(todo)):
         if done[i] or i in truncated:
             continue
+        if time.time() >= _PATCH_DEADLINE:
+            break
         chunks = [text for idx, text in jobs if idx == i]
         if not chunks:
             continue
@@ -226,7 +266,7 @@ def _translate(clean: list[str], cached: dict[str, str],
             for attempt in range(2):
                 if attempt:
                     time.sleep(1.2)
-                out, _err = one(chunk)
+                out, _err = one(chunk, _PATCH_DEADLINE)
                 if out:
                     got = out
                     break

@@ -22,7 +22,7 @@
 
 /* 构建号：和 index.html 里那份必须一致，不一致说明浏览器拿的是旧 JS，
    页面加载完会强制换一次（见 index.html 里的自检脚本）。 */
-window.SITE_BUILD = "1.7.56";
+window.SITE_BUILD = "1.7.57";
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
@@ -2321,8 +2321,6 @@ async function askLocalize() {
     // 一处翻译全部落地后，整页一次重画——答案、来源、气泡、标题同时换。
     saveChats();
     repaintAll();
-    // 主内容切换完成后，来源预览原文走低优先级链后台补齐（不挡整体切换）。
-    askPreviewLocalize();
     if (failed) scheduleLocalizeRetry();
   } catch (err) {
     console.warn("[answer] localize", err);
@@ -2331,6 +2329,11 @@ async function askLocalize() {
   } finally {
     localizeBusy = false;
     if (tip && seq === localizeSeq) tip.textContent = oldTip;
+    // 来源预览补译**必须**在这里启动，不能只挂在上面的成功分支：
+    // 主包返回时若 seq 已被后续切换递增，2305 行会提前 return 跳过成功分支，
+    // 结果正文靠后端直答已维语、来源预览却永远停在中文（实测 90 秒零请求）。
+    // finally 无论成功 / 失败 / 切走都会走到，这里按当前语言判断即可。
+    if (uiLang === "ug") askPreviewLocalize();
   }
 }
 
