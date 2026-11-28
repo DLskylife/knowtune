@@ -22,7 +22,7 @@
 
 /* 构建号：和 index.html 里那份必须一致，不一致说明浏览器拿的是旧 JS，
    页面加载完会强制换一次（见 index.html 里的自检脚本）。 */
-window.SITE_BUILD = "1.7.57";
+window.SITE_BUILD = "1.7.58";
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
@@ -2144,6 +2144,7 @@ function titleText(c) {
 let localizeSeq = 0;
 let localizeBusy = false;
 let localizeBusyAt = 0;
+let localizeQueued = false;   // busy 期间又点了维语：释放后必须补跑一次，不能吞掉
 let localizeRetry = null;
 function scheduleLocalizeRetry() {
   if (localizeRetry) clearTimeout(localizeRetry);
@@ -2280,9 +2281,14 @@ function repaintSources() {
 
 async function askLocalize() {
   // 看门狗：一次请求卡死（网络断、服务重启）会把 busy 永远钉在 true，
-  // 之后每次切语言都"什么都不发生"——界面永远停在原文。超过 3 分钟强制放行。
-  if (localizeBusy && Date.now() - localizeBusyAt > 180000) localizeBusy = false;
-  if (uiLang !== "ug" || localizeBusy) return;
+  // 之后每次切语言都"什么都不发生"——界面永远停在原文。服务端翻译最坏
+  // 也就 70 秒（25s 并发 + 45s 补漏预算），90 秒还没回来就是真的挂了。
+  if (localizeBusy && Date.now() - localizeBusyAt > 90000) localizeBusy = false;
+  if (uiLang !== "ug") return;
+  // busy 期间又点了维语（往返切换就是这条路径）：记下来，finally 释放后补跑。
+  // 以前这里直接 return——前一次请求返回时 seq 已被切走递增、结果被丢弃，
+  // 而这一次又被吞，界面就永远停在"按钮亮着维语、内容却还是中文"。
+  if (localizeBusy) { localizeQueued = true; return; }
   const { texts, slots } = collectLocalizePack();
   // 主内容已经全齐时也要启动来源预览补译——它在折叠面板里，用户展开时
   // 该看到维语，不能因为主包为空就永远不补。
@@ -2295,10 +2301,15 @@ async function askLocalize() {
   const oldTip = tip ? tip.textContent : "";
   // 整包没回来之前挂"整体切换中"：用户看到的是明确状态，而不是翻一半的页面。
   if (tip) tip.textContent = t.switching;
+  // 本轮消费掉之前排的队。新一轮若又进来会重新置 true，不会丢。
+  localizeQueued = false;
+  // 浏览器侧兜底超时：服务端真假死时不能把 busy 钉住几分钟。
+  const ac = (typeof AbortController === "function") ? new AbortController() : null;
+  const timer = ac ? setTimeout(() => ac.abort(), 75000) : null;
   try {
     const res = await fetch("/api/answer/localize", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ texts }),
+      body: JSON.stringify({ texts }), signal: ac ? ac.signal : undefined,
     });
     if (!res.ok) throw new Error("HTTP " + res.status);
     const d = await res.json();
@@ -2327,13 +2338,20 @@ async function askLocalize() {
     slots.forEach((s) => { s.owner[s.fail] = true; s.owner[s.at] = Date.now(); });
     scheduleLocalizeRetry();
   } finally {
+    if (timer) clearTimeout(timer);
     localizeBusy = false;
     if (tip && seq === localizeSeq) tip.textContent = oldTip;
     // 来源预览补译**必须**在这里启动，不能只挂在上面的成功分支：
-    // 主包返回时若 seq 已被后续切换递增，2305 行会提前 return 跳过成功分支，
+    // 主包返回时若 seq 已被后续切换递增，会提前 return 跳过成功分支，
     // 结果正文靠后端直答已维语、来源预览却永远停在中文（实测 90 秒零请求）。
     // finally 无论成功 / 失败 / 切走都会走到，这里按当前语言判断即可。
     if (uiLang === "ug") askPreviewLocalize();
+    // 往返切换的关键：busy 期间又点过维语的那次诉求不能丢。
+    // 有排队就补跑一轮——此时 lock 已释放，仍缺译文的条目会重新收集。
+    if (localizeQueued && uiLang === "ug") {
+      localizeQueued = false;
+      setTimeout(() => askLocalize(), 0);
+    }
   }
 }
 

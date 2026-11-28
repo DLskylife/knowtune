@@ -231,13 +231,15 @@ def _translate(clean: list[str], cached: dict[str, str],
         elif cur:
             truncated.add(i)
 
-    # 并发度：正文一条长答案要切 3～6 块，串行翻要等 30 秒以上。6 路是实测
-    # 云端还能稳住的档位（再高就开始成片 429，重试反而更慢）。
-    # 每块 25 秒预算：正常 15 秒返回，网关抖动时到点就降级，不拖垮整批。
-    _PER_JOB_BUDGET = 25.0
-    with ThreadPoolExecutor(max_workers=min(6, len(jobs))) as pool:
+    # 并发度 + 整体预算。以前每块在被调度到时才起算 25 秒，排在后面的块
+    # 光等调度就要几十秒，十几块累计 95 秒还没返回——前端 75 秒就 abort 了，
+    # 用户看到的就是"切维语一直转圈、最后还是中文"。
+    # 现在所有块共享一个 60 秒 deadline：到点还没译出的整条降级留原文，
+    # 保证整批有上界。并发 6→10，实测网关扛得住，排队轮次少一半。
+    _BATCH_DEADLINE = time.time() + 60.0
+    with ThreadPoolExecutor(max_workers=min(10, len(jobs))) as pool:
         pieces = list(pool.map(
-            lambda job: one(job[1], time.time() + _PER_JOB_BUDGET), jobs))
+            lambda job: one(job[1], _BATCH_DEADLINE), jobs))
 
     done: list[str] = []
     for i in range(len(todo)):
@@ -250,8 +252,9 @@ def _translate(clean: list[str], cached: dict[str, str],
     # 补漏：并发翻的时候偶尔有一块撞 429，整条就被判废——用户看到的正是
     # "正文还是中文"。这里把失败的条**串行**再翻一遍（一次一块、留间隔），
     # 并发压力归零，成功率接近 100%。只补失败的，正常路径不多花一毫秒。
-    # 补漏整体预算 45 秒：正常无补漏时零开销；失败时也不允许再拖两分钟。
-    _PATCH_DEADLINE = time.time() + 45.0
+    # 补漏和并发阶段共用同一个 deadline，不是另起 45 秒——否则整批总时长
+    # 还是能冲到 100 秒以上，前端早就 abort 了。没译出的块留给前端重试链。
+    _PATCH_DEADLINE = _BATCH_DEADLINE
     for i in range(len(todo)):
         if done[i] or i in truncated:
             continue
