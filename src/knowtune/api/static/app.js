@@ -1,6 +1,6 @@
 /* 构建号：与 index.html 里那份一致，不一致说明浏览器拿到的是旧 JS，
    页面加载完会强制换一次（见 index.html 的自检脚本）。 */
-window.ADMIN_BUILD = "0.9.120";
+window.ADMIN_BUILD = "0.9.121";
 
 const $ = (id) => document.getElementById(id);
 
@@ -5137,11 +5137,11 @@ async function renderModels() {
         ${localModels.length ? `<button class="ghost-btn" id="modelsProbeLocal"
           title="真连一次：拉 /models，再让当前模型回一句话">测试联通</button>` : ""}
       </header>
-      <div class="svc-local-layout${scanOpen ? "" : " is-collapsed"}">
+      <div class="svc-local-layout">
         <div class="svc-local-main">
           ${localModels.length
             ? localTable(localList)
-            : `<p class="empty-tip">清单里还没有模型文件。扫描右边的 .gguf，点「＋ 加入」。</p>`}
+            : `<p class="empty-tip">清单里还没有模型文件。扫描下方的 .gguf，点「＋ 加入」。</p>`}
         </div>
         ${scanPanelHtml(d)}
       </div>
@@ -5384,35 +5384,6 @@ let scanDirs = (() => {
 })();
 let lastScan = null;   // 最近一次结果：增删目录后还能留在面板里回看
 
-/* 扫描区收没收起，记在这台机器的浏览器里。
- * 扫描是「往清单里添东西」时才做的事，平时看的是清单本身——所以允许收起。
- * 默认展开：第一次来的人得先看见"这台机器上有哪些 gguf"这扇门。 */
-const SCAN_OPEN_KEY = "knowtune.scanOpen";
-let scanOpen = (() => {
-  try { return localStorage.getItem(SCAN_OPEN_KEY) !== "0"; } catch (_) { return true; }
-})();
-
-function saveScanOpen() {
-  try { localStorage.setItem(SCAN_OPEN_KEY, scanOpen ? "1" : "0"); } catch (_) {}
-}
-
-/* 收起/展开只搬两个 class，不重画整页——重画会重新拉一次 /api/models，
- * 而这项操作跟后端一点关系都没有，闪一下纯属白花功夫。
- * 收起的箭头在面板里，主区的宽度却由外层栅格决定，所以两处都得改。 */
-function applyScanOpen() {
-  const panel = $("scanPanel");
-  if (!panel) return;
-  panel.classList.toggle("is-collapsed", !scanOpen);
-  const layout = panel.closest(".svc-local-layout");
-  if (layout) layout.classList.toggle("is-collapsed", !scanOpen);
-  const t = $("scanToggle");
-  if (t) {
-    t.textContent = scanOpen ? "▾" : "▸";
-    t.setAttribute("aria-expanded", scanOpen ? "true" : "false");
-    t.title = scanOpen ? "收起模型文件区" : "展开模型文件区";
-  }
-}
-
 /* 扫描本地 .gguf。扫出来的东西不进配置——「我看到有哪些」和「我要用哪些」
    是两件事，自动全加进去等于替用户做决定，还会把 30 个量化版本塞进下拉。 */
 
@@ -5460,12 +5431,8 @@ function scanPanelHtml(d) {
   // 左边，看着像第二个标题。环境结论单行省略，鼠标悬停看全文，这样窄窗口
   // 下按钮也不会被文字推走。
   //
-  // 最左那颗箭头是收起键：扫描是"要添东西"时才做的事，平时清单才是主角。
-  // 收起后整块塌成一行（名字 + 环境结论），主区顺势占满整行。
-  return `<section class="card scan-panel${scanOpen ? "" : " is-collapsed"}" id="scanPanel">
+  return `<section class="card scan-panel" id="scanPanel">
     <div class="scan-head">
-      <button class="scan-toggle" id="scanToggle" aria-expanded="${scanOpen ? "true" : "false"}"
-        title="${scanOpen ? "收起模型文件区" : "展开模型文件区"}">${scanOpen ? "▾" : "▸"}</button>
       <b>模型文件</b>
       <i class="dot ${env.available ? "ok" : "warn"}"></i>
       <span class="hint ell" title="${esc(envText)}">${esc(envText)}</span>
@@ -5526,15 +5493,6 @@ function scanResultHtml(r) {
 function bindScanPanel() {
   const panel = $("scanPanel");
   if (!panel) return;
-  const toggle = $("scanToggle");
-  if (toggle) {
-    toggle.onclick = () => {
-      scanOpen = !scanOpen;
-      saveScanOpen();
-      applyScanOpen();
-    };
-  }
-  applyScanOpen();
   const input = $("scanDirInput");
   if (!input) return;
   input.oninput = () => {

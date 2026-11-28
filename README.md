@@ -361,13 +361,13 @@ knowtune serve [--port 8013]           # 启动 Web UI
 
 **验证**：空态 / 对话态 / 深色 / 390px 窄屏四态截图 + 维语两态 + 预问诊两态，均无 pageerror、无横向溢出；中文「维医把人的气质分几类」5.8s / 7.1s 两次，引用正常、无「资料未展开」占位；四态探针落在 `tools/probe_site_ui.py`，预问诊探针在 `tools/probe_pv_ui.py`；pytest 35 passed；`verify_docs.py` ALL CHECKS PASSED。前台版本 `1.7.44`。
 
-### 0.9.120 · 模型页加系统资源读数
+### 0.9.121 · 模型页加系统资源读数
 
 **模型页最上面多一块「系统资源」：CPU / 内存 / 显存 / 磁盘四格**（2026-11-27）。原来这块信息散在两处——「模型文件」标题行那句 `llama-server 就绪 · RTX 3060 · 6G` 只报**总显存**，不报现在还剩多少；想知道内存或 CPU 剩多少只能开任务管理器。而"这个 7B 还起不起得来"恰恰只看一件事：**当前空闲显存**。现在四格并排，每格给当前用量 / 总量、一根占用条（≥85% 转黄）和一行明细：CPU 报逻辑/物理核，内存报可用与本进程 RSS，显存取 llama-server 的设备清单报空闲，磁盘报数据盘剩余。**每 5 秒采样一次，只在模型页轮询**，切走立刻停——不让一个看不见的面板反复打接口；标题行给采样时刻，点「⟳ 刷新」立即取一次。
 
 **后端是只读接口 `GET /api/system/resources`**：CPU 用 `psutil.cpu_percent(interval=0.1)` 主动采样，`interval=None` 的第一次调用恒返回 0.0，面板会显示一个假的"CPU 没在干活"；内存 / 磁盘走 psutil，磁盘取项目所在盘；GPU 直接复用 `localmodels.devices()`——它已缓存 60 秒，不能让 5 秒轮询反复起 `--list-devices` 子进程。psutil 在这个项目里是可选路径，拿不到就逐项返回 `null` 和一句 error，前端画破折号，不让整页 500。
 
-**顺手修掉上一轮自己的笔误**：侧栏汇总行写了 `color: var(--text-1)`，而这套主题的变量叫 `--text`，那个声明实际没生效，只是靠字重 600 看着亮一点。已改成 `--text`。构建号 `0.9.120`。
+**顺手修掉上一轮自己的笔误**：侧栏汇总行写了 `color: var(--text-1)`，而这套主题的变量叫 `--text`，那个声明实际没生效，只是靠字重 600 看着亮一点。已改成 `--text`。构建号 `0.9.121`。
 
 ### 0.9.119 · 侧栏底部加一行「整体就绪」
 
@@ -472,7 +472,7 @@ src/knowtune/            主项目
   api/app.py             FastAPI 装配入口：生命周期、中间件、注册 8 个路由模块
   api/routes/            94 个端点按资源域拆成 8 个模块
   api/common.py / state.py / coverage.py  分片上传 / 全局 AppState / 引用覆盖率
-  api/static/            后台前端：index.html / app.js / style.css，构建号 0.9.120
+  api/static/            后台前端：index.html / app.js / style.css，构建号 0.9.121
   frontsite/             instcfg / runner / site + static（前台前端）
   previsit/app.py        主项目装配层（LLM 适配器 + 参数面板）
 src/previsit/            预问诊独立实现（v0.4.0：提示词 + 模型的纯对话壳），零 knowtune 依赖

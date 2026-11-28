@@ -1390,81 +1390,12 @@ input[type=number].num::-webkit-outer-spin-button { -webkit-appearance: none; ma
   grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
   gap: 10px;
 }
-/* 本地一节排成「端点卡 + 模型文件」两栏。
+/* 本地一节上下堆叠：模型清单在上，模型文件扫描在下，各自通栏。
  *
- * 原来两者上下叠：本地往往只有一两个端点，一张 300px 的卡占着首列，右边
- * 五百多像素全空；下面的扫描区却是通栏大块，中间也空。一条竖着的空白把
- * 同一件事（这台机器上有什么、起没起、怎么加进来）劈成两半。
- *
- * 现在扫描区变窄栏贴到右边——「扫到 → 加入 → 卡片里多一个」这条因果在
- * 同一屏里连成一行。窗口窄到放不下就退回上下堆叠，顺序不变，那套通栏
- * 样式（扫描区原来那一版）原样生效，所以下面两栏的调整全部关在断点里，
- * 免得叠起来之后还留着窄栏那套两行控件。 */
+ * 两栏版（清单 + 380px 窄栏扫描）配了个折叠箭头，但窄栏里「开始扫描」、路径框、
+ * 扫描结果全被压成两行，展开收起都别扭。改成上下之后扫描区回到通栏，标题行和
+ * 添加行各占一排，控件按原来的宽度排布——一眼看完整块，不需要点开。 */
 .svc-local-main { min-width: 0; }
-@media (min-width: 1101px) {
-  .svc-local-layout {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 380px;
-    gap: 10px;
-    align-items: start;
-  }
-  .svc-local-layout .scan-panel { margin-top: 0; }
-  /* 收起之后右栏不存在了，栅格退回单列——留着 380px 的空槽比不收起还难看。 */
-  .svc-local-layout.is-collapsed { grid-template-columns: minmax(0, 1fr); }
-  .svc-local-layout.is-collapsed .scan-panel { margin-top: 10px; }
-  /* 窄栏里目录 chips 和扫描结果都得自己撑满，不能沿用通栏那套限宽 */
-  .svc-local-layout .scan-add,
-  .svc-local-layout .scan-empty { max-width: none; }
-  /* 通栏时「环境结论」和按钮抢同一行，结论单行省略就够；缩到 380px 的窄栏，
-     连同省略号只剩 "llama-server 就绪 · NVIDIA G…"，等于把"这台机器能不能起"
-     这句话删了一半。窄栏改成结论独占一行、按钮回到标题行右侧。 */
-  .svc-local-layout .scan-head { flex-wrap: wrap; row-gap: 2px; }
-  .svc-local-layout .scan-head > b { order: 1; }
-  .svc-local-layout .scan-head .dot { order: 1; }
-  .svc-local-layout .scan-head .primary-btn { order: 2; margin-left: auto; }
-  .svc-local-layout .scan-head .hint {
-    order: 3; flex: 1 1 100%;
-    white-space: normal; overflow: visible; text-overflow: clip;
-    line-height: 1.45;
-  }
-  /* 浏览… / 路径 / 添加 三样在 380px 里挤成一条会把输入框压到一百来像素，
-     占位文字变成"或粘贴路…"。窄栏改成两行：路径框独占一行，两颗按钮一左
-     一右跟在下面——左边选目录、右边确认加入，动作从哪来到哪去一眼能读。 */
-  .svc-local-layout .scan-add {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
-    gap: 8px;
-  }
-  .svc-local-layout .scan-add .scan-dir-input { grid-column: 1 / -1; order: -1; }
-  .svc-local-layout .scan-add #scanDirAdd { justify-self: end; }
-  /* 空态那个虚线槽是给通栏写的"这里会长出 chips"。窄栏里它紧跟输入框、
-     说的还是同一句提示，多一块虚线框只是把面板撑高。 */
-  .svc-local-layout .scan-empty { display: none; }
-  /* 结果行在 380px 里还是「圆点 + 名字 + 大小/量化 + 空隙 + 状态/按钮」一横条：
-     名字最先被压成 `Qwen2.5-7B-Instruct-Q…`，而名字正是认模型的那一项，截了
-     等于没列。窄栏改成两行——名字单独一行（过长可折），大小/量化落到名字
-     下面，状态和「＋ 加入」钉在右侧同一列。 */
-  .svc-local-layout .scan-panel .lm-row {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto;
-    grid-template-areas:
-      "dot name act"
-      ".   meta act";
-    align-items: center;
-    column-gap: 8px; row-gap: 3px;
-    padding: 8px 0;
-  }
-  .svc-local-layout .scan-panel .lm-row .dot { grid-area: dot; }
-  .svc-local-layout .scan-panel .lm-row > b {
-    grid-area: name;
-    white-space: normal; overflow: visible; text-overflow: clip;
-    overflow-wrap: anywhere;
-  }
-  .svc-local-layout .scan-panel .lm-row .lm-meta { grid-area: meta; font-size: 10.5px; }
-  .svc-local-layout .scan-panel .lm-row .sp { display: none; }
-  .svc-local-layout .scan-panel .lm-row > .mini,
-  .svc-local-layout .scan-panel .lm-row > .lm-state { grid-area: act; justify-self: end; }
-}
 .svc-card {
   padding: 12px var(--card-pad-x) var(--card-pad-y);
   display: flex; flex-direction: column; gap: 5px;
@@ -2192,29 +2123,6 @@ input[type=number].num::-webkit-outer-spin-button { -webkit-appearance: none; ma
    210px 还带着 UA 默认外观。环境结论改成单行省略（悬停看全文），窄窗口
    下按钮就不会被文字推走。 */
 .scan-panel { margin-top: 12px; }
-/* 收起键：一颗只有箭头的方钮，贴着「模型文件」左侧。扫描是"要添东西"时才
-   做的事，平时清单才是主角——允许把它折起来。 */
-.scan-toggle {
-  flex: none; width: 15px; height: 15px; padding: 0; margin-right: -3px;
-  display: inline-flex; align-items: center; justify-content: center;
-  background: none; border: 0; border-radius: 4px;
-  color: var(--text-2); font-size: 10.5px; line-height: 1;
-  cursor: pointer;
-}
-.scan-toggle:hover { background: var(--surface-2); color: var(--text); }
-.scan-panel.is-collapsed .scan-body { display: none; }
-/* 收起后整块塌成一行：结论恢复单行省略，"开始扫描"跟着收进去——没有目录
-   输入框露在外面，那颗按钮点了也没意义。 */
-.scan-panel.is-collapsed .scan-head { flex-wrap: nowrap; }
-.scan-panel.is-collapsed .scan-head > b { order: 0; }
-.scan-panel.is-collapsed .scan-head .dot { order: 0; }
-.scan-panel.is-collapsed .scan-head .primary-btn { display: none; }
-/* 窄栏里那条"结论独占一行"的规则特异性比 .scan-panel.is-collapsed 低，
-   不写这一条，收起后仍在 380px 之外重新折成两行。 */
-.svc-local-layout .scan-panel.is-collapsed .scan-head .hint {
-  order: 0; flex: 1 1 auto;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
 .scan-head { display: flex; align-items: center; gap: 8px; }
 .scan-head > b { font-size: 13px; white-space: nowrap; }
 .scan-head .hint {
