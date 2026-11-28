@@ -1,6 +1,6 @@
 /* 构建号：与 index.html 里那份一致，不一致说明浏览器拿到的是旧 JS，
    页面加载完会强制换一次（见 index.html 的自检脚本）。 */
-window.ADMIN_BUILD = "0.9.121";
+window.ADMIN_BUILD = "0.9.122";
 
 const $ = (id) => document.getElementById(id);
 
